@@ -18,7 +18,10 @@ final class PredictionCoordinator {
         self.monitor = monitor
         self.converter = converter
         engineTask = Task.detached(priority: .utility) {
-            guard let lexicon = try? PredictionLexicon.bundled() else { return nil }
+            guard let lexicon = try? PredictionLexicon.bundled() else {
+                RuntimeDiagnostics.record(.autoEngineUnavailable); return nil
+            }
+            RuntimeDiagnostics.record(.autoEngineReady)
             return PredictionEngine(lexicon: lexicon)
         }
     }
@@ -31,6 +34,7 @@ final class PredictionCoordinator {
     func submit(_ snapshot: PredictionSnapshot) {
         invalidate()
         if anchorSessionID != snapshot.sessionID {
+            RuntimeDiagnostics.record(.autoAnchorSessionChanged)
             anchorSessionID = snapshot.sessionID
             anchorFocus = nil
             caretAnchor = nil
@@ -42,14 +46,23 @@ final class PredictionCoordinator {
                       snapshot.isCurrent(processID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
                           revision: self.monitor.inputRevision, generation: self.monitor.predictionGeneration),
                       NSWorkspace.shared.frontmostApplication?.processIdentifier == snapshot.processID,
-                      !AutoSwitchPolicy.secureInputActive else { return }
-                guard let focus = CombinedShiftFocus.capture(processID: snapshot.processID),
-                      let selection = focus.initialSelection, selection.length == 0,
-                      snapshot.isCurrent(processID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
-                          revision: self.monitor.inputRevision, generation: self.monitor.predictionGeneration) else { return }
+                      !AutoSwitchPolicy.secureInputActive else {
+                    RuntimeDiagnostics.record(.autoAnchorStale); return
+                }
+                guard let focus = CombinedShiftFocus.capture(processID: snapshot.processID) else {
+                    RuntimeDiagnostics.record(.autoAnchorUnavailable); return
+                }
+                guard let selection = focus.initialSelection, selection.length == 0 else {
+                    RuntimeDiagnostics.record(.autoAnchorSelectionUnavailable); return
+                }
+                guard snapshot.isCurrent(processID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
+                          revision: self.monitor.inputRevision, generation: self.monitor.predictionGeneration) else {
+                    RuntimeDiagnostics.record(.autoAnchorStale); return
+                }
                 self.anchorFocus = focus
                 self.caretAnchor = PredictionCaretAnchor(caretUTF16Location: selection.location,
                     inputUTF16Offset: snapshot.cumulativeUTF16Offset)
+                RuntimeDiagnostics.record(.autoAnchorAccepted)
             }
         }
         let work = DispatchWorkItem { [weak self] in
@@ -75,38 +88,50 @@ final class PredictionCoordinator {
     }
 
     private func evaluate(_ snapshot: PredictionSnapshot) async {
-        guard isCurrent(snapshot), let engine = await engineTask.value,
-              isCurrent(snapshot),
-              let source = LayoutSwitcher.installedLayouts().first(where: {
+        guard isCurrent(snapshot) else { RuntimeDiagnostics.record(.autoEvaluationStale); return }
+        guard let engine = await engineTask.value else { RuntimeDiagnostics.record(.autoEngineUnavailable); return }
+        guard isCurrent(snapshot) else { RuntimeDiagnostics.record(.autoEvaluationStale); return }
+        guard let source = LayoutSwitcher.installedLayouts().first(where: {
                   LayoutSwitcher.sourceID($0) == snapshot.sourceLayoutID
               }), let language = LayoutSwitcher.languageCode(source),
               let pair = LayoutSwitcher.combinedShiftContext(sourceLayoutID: snapshot.sourceLayoutID),
               let opposite = LayoutSwitcher.installedLayouts().first(where: {
                   LayoutSwitcher.sourceID($0) == pair.targetLayoutID
               }), let oppositeLanguage = LayoutSwitcher.languageCode(opposite),
-              Set([String(language.prefix(2)), String(oppositeLanguage.prefix(2))]) == Set(["ru", "en"]) else { return }
+              Set([String(language.prefix(2)), String(oppositeLanguage.prefix(2))]) == Set(["ru", "en"]) else {
+            RuntimeDiagnostics.record(.autoMappingUnavailable); return
+        }
         let characterMapping = DynamicKeyMapping.buildMap(from: source, to: opposite)
-        guard !characterMapping.isEmpty else { return }
+        guard !characterMapping.isEmpty else { RuntimeDiagnostics.record(.autoMappingUnavailable); return }
         let alwaysConvertWords = SettingsManager.shared.alwaysConvertWordsSet
         let proposal = await Task.detached(priority: .userInitiated) {
             engine.evaluate(suffix: snapshot.suffix, sourceLanguage: language,
                 atBoundary: snapshot.atBoundary, precedingWords: snapshot.precedingWords,
                 alwaysConvertWords: alwaysConvertWords, characterMapping: characterMapping)
         }.value
-        guard isCurrent(snapshot), let proposal,
-              proposal.originalSuffix == snapshot.suffix,
-              !Self.containsDeniedChange(original: proposal.originalSuffix, replacement: proposal.replacementSuffix),
-              let target = LayoutSwitcher.installedLayouts().first(where: {
+        guard isCurrent(snapshot) else { RuntimeDiagnostics.record(.autoEvaluationStale); return }
+        guard let proposal else { RuntimeDiagnostics.record(.autoNoProposal); return }
+        RuntimeDiagnostics.record(.autoProposal)
+        guard proposal.originalSuffix == snapshot.suffix,
+              !Self.containsDeniedChange(original: proposal.originalSuffix, replacement: proposal.replacementSuffix) else {
+            RuntimeDiagnostics.record(.autoProposalRejected); return
+        }
+        guard let target = LayoutSwitcher.installedLayouts().first(where: {
                   [pair.sourceLayoutID, pair.targetLayoutID].contains(LayoutSwitcher.sourceID($0))
                       && LayoutSwitcher.languageCode($0)?.lowercased().hasPrefix(proposal.targetLanguage) == true
-              }), let originalFocus = anchorFocus,
-              PredictionFocusAnchorPolicy.permits(originalSession: anchorSessionID,
+              }) else { RuntimeDiagnostics.record(.autoTargetUnavailable); return }
+        guard let originalFocus = anchorFocus else { RuntimeDiagnostics.record(.autoFocusAnchorUnavailable); return }
+        guard PredictionFocusAnchorPolicy.permits(originalSession: anchorSessionID,
                   currentSession: snapshot.sessionID, capturedOriginalField: true,
-                  sameField: originalFocus.isCurrent()),
-              let caretAnchor, let currentSelection = originalFocus.selectionRange(),
-              caretAnchor.permits(location: currentSelection.location, selectionLength: currentSelection.length,
-                  cumulativeOffset: snapshot.cumulativeUTF16Offset),
-              isCurrent(snapshot) else { return }
+                  sameField: originalFocus.isCurrent()) else { RuntimeDiagnostics.record(.autoFocusMismatch); return }
+        guard let caretAnchor, let currentSelection = originalFocus.selectionRange() else {
+            RuntimeDiagnostics.record(.autoCaretUnavailable); return
+        }
+        guard caretAnchor.permits(location: currentSelection.location, selectionLength: currentSelection.length,
+                  cumulativeOffset: snapshot.cumulativeUTF16Offset) else {
+            RuntimeDiagnostics.record(.autoCaretMismatch); return
+        }
+        guard isCurrent(snapshot) else { RuntimeDiagnostics.record(.autoEvaluationStale); return }
         // Retain the first session's field identity; only its current collapsed
         // caret is refreshed. A same-PID different field is never a new baseline.
         let focus = CombinedShiftFocus(processID: originalFocus.processID, element: originalFocus.element,
@@ -121,7 +146,8 @@ final class PredictionCoordinator {
             })
         guard converter.replaceVerifiedSuffix(original: edit.original,
             replacement: edit.replacement, sourceLayoutID: snapshot.sourceLayoutID,
-            resultLayoutID: resultID, execution: execution) else { return }
+            resultLayoutID: resultID, execution: execution) else { RuntimeDiagnostics.record(.autoEditRefused); return }
+        RuntimeDiagnostics.record(.autoEditPosted)
         monitor.recordPredictionResult(original: proposal.originalSuffix,
             replacement: proposal.replacementSuffix, resultLayoutID: resultID)
         if LayoutSwitcher.currentLayoutID() != resultID { LayoutSwitcher.switchTo(layoutID: resultID) }

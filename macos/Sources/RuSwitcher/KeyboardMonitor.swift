@@ -342,6 +342,14 @@ final class KeyboardMonitor: @unchecked Sendable {
 
     /// No AX, dictionaries or text conversion on the event-tap path.
     private func recordPredictionKey(keyCode: UInt16, flags: CGEventFlags, renderedText: String?) {
+        if SettingsManager.shared.autoSwitchEnabled, SettingsManager.shared.autoConvert,
+           !AutoSwitchPolicy.secureInputActive,
+           flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskSecondaryFn]).isEmpty,
+           keyCode != KC.backspace, keyCode != KC.enter, keyCode != KC.tab,
+           !(keyCode >= KC.left && keyCode <= KC.up) {
+            RuntimeDiagnostics.record(.autoInputEligible)
+            RuntimeDiagnostics.record(renderedText?.isEmpty == false ? .autoUnicodePresent : .autoUnicodeMissing)
+        }
         guard SettingsManager.shared.autoSwitchEnabled, SettingsManager.shared.autoConvert,
               !AutoSwitchPolicy.secureInputActive,
               flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskSecondaryFn]).isEmpty,
@@ -354,6 +362,7 @@ final class KeyboardMonitor: @unchecked Sendable {
         predictionBuffer.append(renderedText, processID: pid)
         guard let snapshot = predictionBuffer.snapshot(sourceLayoutID: LayoutSwitcher.currentLayoutID(),
             inputRevision: inputRevision, generation: predictionGeneration) else { return }
+        RuntimeDiagnostics.record(.autoSnapshotSubmitted)
         MainActor.assumeIsolated { onPredictionInput?(snapshot) }
     }
 
@@ -465,7 +474,10 @@ final class KeyboardMonitor: @unchecked Sendable {
             reconvert: !keysTypedSinceConversion, inputRevision: inputRevision, frontProcessID: frontPID,
             focus: focus)
         if case .convert = action {
-            guard let first = combinedShiftFirstRequest, first.inputRevision == inputRevision else { return }
+            RuntimeDiagnostics.record(.doubleRecognized)
+            guard let first = combinedShiftFirstRequest, first.inputRevision == inputRevision else {
+                RuntimeDiagnostics.record(.doubleFirstSnapshotUnavailable); return
+            }
             request = CombinedShiftRequest(action: action, wordContext: first.wordContext,
                 wordKeys: first.wordKeys, prevWordKeys: first.prevWordKeys, lineKeys: first.lineKeys,
                 lineSourceLayoutID: first.lineSourceLayoutID, boundaryCount: first.boundaryCount,
@@ -483,7 +495,9 @@ final class KeyboardMonitor: @unchecked Sendable {
         // Correction validates the immutable first-tap field/revision again at its first edit.
         DispatchQueue.main.async { [weak self, request] in
             guard let self else { return }
-            guard request.inputRevision == self.inputRevision else { return }
+            guard request.inputRevision == self.inputRevision else {
+                RuntimeDiagnostics.record(.doubleRevisionChanged); return
+            }
             self.onCombinedShift?(request)
         }
     }

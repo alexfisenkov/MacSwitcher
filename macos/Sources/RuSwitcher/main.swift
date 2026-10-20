@@ -1,5 +1,7 @@
 import AppKit
 
+if let status = AXCapabilityDiagnostics.runIfRequested(arguments: CommandLine.arguments) { exit(status) }
+
 if CommandLine.arguments.contains("--self-test-resources") {
     // A packaged app must find its dictionary INSIDE the app, never through
     // SwiftPM's absolute build-directory fallback on the developer's machine.

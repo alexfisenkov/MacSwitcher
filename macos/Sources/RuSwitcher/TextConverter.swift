@@ -21,6 +21,7 @@ final class ClipboardRestoreSession {
     func permitsPaste() -> Bool { stillOwnsClipboard }
 
     func begin() -> Bool {
+        RuntimeDiagnostics.record(.clipboardBegin)
         if stillOwnsClipboard { return true } // rapid reconvert preserves the first snapshot
         discard()
         let count = pasteboard.changeCount
@@ -31,7 +32,7 @@ final class ClipboardRestoreSession {
             }
             return item
         }
-        guard pasteboard.changeCount == count else { return false }
+        guard pasteboard.changeCount == count else { RuntimeDiagnostics.record(.clipboardBeginRefused); return false }
         savedItems = snapshot
         ownedChangeCount = count
         return true
@@ -895,8 +896,13 @@ final class TextConverter {
                   CombinedShiftUnicode.payloadMatches(up, expected: units) else { return false }
             events.append(contentsOf: [down, up])
         }
-        guard execution.canReplaceBuffer(original: original) else { return false }
+        guard execution.isValid() else { RuntimeDiagnostics.record(.nativeInvalidExecution); return false }
+        guard execution.focus.hasOriginalSuffixBeforeCaret(original) else {
+            RuntimeDiagnostics.record(.nativeSuffixMismatch); return false
+        }
+        guard execution.isValid() else { RuntimeDiagnostics.record(.nativeInvalidExecution); return false }
         for event in events { event.postToPid(execution.focus.processID) }
+        RuntimeDiagnostics.record(.nativeEditPosted)
         return true
     }
 
@@ -934,13 +940,22 @@ final class TextConverter {
     @discardableResult
     private func pasteText(_ text: String, pasteboard: NSPasteboard, execution: CombinedShiftExecutionContext? = nil,
                            replacing original: String? = nil) -> Bool {
-        guard execution?.isValid() != false else { return false }
-        if let execution, let original, !execution.focus.selectedTextMatches(original) { return false }
-        guard clipboardSession.writeTemporaryText(text) else { return false }
-        guard clipboardSession.permitsPaste() else { return false }
-        guard operationKey(keyCode: KC.letterV, flags: .maskCommand, execution: execution) else { return false }
+        guard execution?.isValid() != false else { RuntimeDiagnostics.record(.pasteInvalidExecution); return false }
+        if let execution, let original, !execution.focus.selectedTextMatches(original) {
+            RuntimeDiagnostics.record(.pasteAXSelectionMismatch); return false
+        }
+        guard clipboardSession.writeTemporaryText(text) else {
+            RuntimeDiagnostics.record(.pasteClipboardWriteRefused); return false
+        }
+        RuntimeDiagnostics.record(.pasteClipboardWritten)
+        guard clipboardSession.permitsPaste() else { RuntimeDiagnostics.record(.pasteClipboardOwnershipLost); return false }
+        guard operationKey(keyCode: KC.letterV, flags: .maskCommand, execution: execution) else {
+            RuntimeDiagnostics.record(.pastePostRefused); return false
+        }
         usleep(150_000) // 150мс — дать приложению вставить текст и обновить курсор
-        return execution?.isValid() != false
+        let valid = execution?.isValid() != false
+        RuntimeDiagnostics.record(valid ? .pasteCompleted : .pasteInvalidAfterPost)
+        return valid
     }
 
     /// Canceling also invalidates already-enqueued work from an earlier transaction.
@@ -975,23 +990,35 @@ final class TextConverter {
     /// Копирует выделенный текст. Делает до 3 попыток (Cmd+C не всегда срабатывает с первого раза)
     private func tryCopy(_ pasteboard: NSPasteboard, execution: CombinedShiftExecutionContext? = nil) -> String? {
         for attempt in 0..<3 {
-            guard execution?.isValid() != false else { return nil }
+            guard execution?.isValid() != false else { RuntimeDiagnostics.record(.copyInvalidExecution); return nil }
             let focus = execution?.focus ?? NSWorkspace.shared.frontmostApplication.flatMap {
                 CombinedShiftFocus.capture(processID: $0.processIdentifier)
             }
-            guard let focus, focus.isCurrent(),
-                  let oldCount = clipboardSession.clearForCopy() else { return nil }
+            guard let focus else { RuntimeDiagnostics.record(.copyFocusUnavailable); return nil }
+            guard focus.isCurrent() else { RuntimeDiagnostics.record(.copyFocusChanged); return nil }
+            guard let oldCount = clipboardSession.clearForCopy() else {
+                RuntimeDiagnostics.record(.copyClipboardOwnershipLost); return nil
+            }
+            RuntimeDiagnostics.record(.copyClipboardPrepared)
 
-            guard operationKey(keyCode: KC.letterC, flags: .maskCommand, execution: execution) else { return nil }
+            guard operationKey(keyCode: KC.letterC, flags: .maskCommand, execution: execution) else {
+                RuntimeDiagnostics.record(.copyPostRefused); return nil
+            }
             usleep(attempt == 0 ? 80_000 : 120_000)
-            guard execution?.isValid() != false else { return nil }
+            guard execution?.isValid() != false else { RuntimeDiagnostics.record(.copyInvalidExecution); return nil }
 
             let copyCount = pasteboard.changeCount
+            RuntimeDiagnostics.record(copyCount != oldCount ? .copyChanged : .copyUnchanged)
             if copyCount != oldCount,
                let text = pasteboard.string(forType: .string),
                !text.isEmpty {
-                guard focus.isCurrent(), focus.selectedTextMatches(text), execution?.isValid() != false,
-                      clipboardSession.claimVerifiedCopy(changeCount: copyCount) else { return nil }
+                guard focus.isCurrent() else { RuntimeDiagnostics.record(.copyFocusChanged); return nil }
+                guard focus.selectedTextMatches(text) else { RuntimeDiagnostics.record(.copyAXSelectionMismatch); return nil }
+                guard execution?.isValid() != false else { RuntimeDiagnostics.record(.copyInvalidExecution); return nil }
+                guard clipboardSession.claimVerifiedCopy(changeCount: copyCount) else {
+                    RuntimeDiagnostics.record(.copyClaimRefused); return nil
+                }
+                RuntimeDiagnostics.record(.copyVerified)
                 return text
             }
             usleep(50_000) // пауза перед retry
@@ -1039,11 +1066,11 @@ final class TextConverter {
 
     /// Симулирует нажатие клавиши с маркером (чтобы наш monitor игнорировал)
     nonisolated private func simKey(keyCode: UInt16, flags: CGEventFlags, destinationProcessID: Int32? = nil) {
-        guard let source = makeSource() else { return }
+        guard let source = makeSource() else { RuntimeDiagnostics.record(.syntheticEventUnavailable); return }
 
         guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
               let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
-        else { return }
+        else { RuntimeDiagnostics.record(.syntheticEventUnavailable); return }
 
         keyDown.flags = flags
         keyUp.flags = flags
@@ -1054,6 +1081,10 @@ final class TextConverter {
         } else {
             keyDown.post(tap: .cghidEventTap)
             keyUp.post(tap: .cghidEventTap)
+        }
+        if flags.contains(.maskCommand) {
+            if keyCode == KC.letterC { RuntimeDiagnostics.record(.copyPosted) }
+            if keyCode == KC.letterV { RuntimeDiagnostics.record(.pastePosted) }
         }
     }
 }

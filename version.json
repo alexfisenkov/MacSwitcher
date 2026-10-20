@@ -1,8 +1,8 @@
 {
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.2",
   "short_version": "0.1.0",
-  "build": 1,
+  "build": 2,
   "channel": "alpha",
   "url": "https://github.com/alexfisenkov/MacSwitcher/releases",
-  "notes": "First public MacSwitcher alpha. Download and install releases manually."
+  "notes": "Runtime fixes and privacy-safe diagnostics for physical input and selection conversion."
 }

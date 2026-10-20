@@ -512,14 +512,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// One native handler owns switching and correction. The first tap is already visible;
     /// the second edits using the original source and selects the result's exact layout.
     private func handleCombinedShift(_ request: CombinedShiftRequest) {
-        guard SettingsManager.shared.combinedShiftEnabled, SettingsManager.shared.autoSwitchEnabled else { return }
+        let isDouble: Bool
+        if case .convert = request.action { isDouble = true; RuntimeDiagnostics.record(.doubleReceived) }
+        else { isDouble = false; RuntimeDiagnostics.record(.soloReceived) }
+        guard SettingsManager.shared.combinedShiftEnabled, SettingsManager.shared.autoSwitchEnabled else {
+            if isDouble { RuntimeDiagnostics.record(.doubleDisabled) }; return
+        }
         guard !AutoSwitchPolicy.secureInputActive else {
+            if isDouble { RuntimeDiagnostics.record(.doubleSecureInput) }
             keyboardMonitor.resetCombinedShift()
             notifySecureInputPaused()
             return
         }
         guard let currentPID = NSWorkspace.shared.frontmostApplication?.processIdentifier,
               request.frontProcessID > 0, request.frontProcessID == currentPID else {
+            if isDouble { RuntimeDiagnostics.record(.doubleWrongProcess) }
             keyboardMonitor.resetCombinedShift()
             return
         }
@@ -532,27 +539,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             updateStatusIcon()
             return  // preserve typed buffers and undo; this may still be the first half of a double
         case .convert(let direction):
-            guard request.inputRevision == keyboardMonitor.inputRevision else { return }
+            guard request.inputRevision == keyboardMonitor.inputRevision else {
+                RuntimeDiagnostics.record(.doubleRevisionChanged); return
+            }
             context = direction
         }
         // The controlled instance receives the real Shift gestures. Local source was already
         // selected on tap one; another generic toggle here would race that instance.
-        guard !AutoSwitchPolicy.shouldDeferToRemoteClient else { return }
-        guard let focus = request.focus, focus.processID == request.frontProcessID else { return }
+        guard !AutoSwitchPolicy.shouldDeferToRemoteClient else { RuntimeDiagnostics.record(.doubleRemoteDeferred); return }
+        guard let focus = request.focus, focus.processID == request.frontProcessID else {
+            RuntimeDiagnostics.record(.doubleMissingFocus); return
+        }
         let execution = CombinedShiftExecutionContext(focus: focus, inputRevision: request.inputRevision,
             currentInputRevision: { [weak self] in self?.keyboardMonitor.inputRevision ?? UInt64.max })
-        guard execution.isValid() else { return }
+        guard execution.isValid() else { RuntimeDiagnostics.record(.doubleInvalidExecution); return }
 
         let succeeded: Bool
         if request.reconvert {
-            guard textConverter.hasReconversionState else { return }
+            guard textConverter.hasReconversionState else { RuntimeDiagnostics.record(.doubleNoReconversionState); return }
             succeeded = SpotlightAX.isActive()
                 ? textConverter.convertSpotlight(context: context, restorePrevious: true, execution: execution)
                 : textConverter.reconvert(context: context, execution: execution)
         } else {
-            guard let wordContext = request.wordContext else { return }
+            guard let wordContext = request.wordContext else { RuntimeDiagnostics.record(.doubleMissingWordContext); return }
             let hasBuffer = !request.wordKeys.isEmpty || (!request.prevWordKeys.isEmpty && request.boundaryCount > 0)
-            guard hasBuffer || textConverter.hasFocusedTextSelection() else { return }
+            guard hasBuffer || textConverter.hasFocusedTextSelection() else {
+                RuntimeDiagnostics.record(.doubleNoBufferOrSelection); return
+            }
             if SpotlightAX.isActive() {
                 succeeded = textConverter.convertSpotlight(context: wordContext, execution: execution)
             } else if SettingsManager.shared.convertWholeLine {
@@ -573,7 +586,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     boundaryCount: request.boundaryCount, context: wordContext, execution: execution)
             }
         }
-        guard succeeded else { return }  // empty/no-op doubles never issue a second toggle
+        guard succeeded else { RuntimeDiagnostics.record(.doubleFailed); return }  // empty/no-op doubles never issue a second toggle
+        RuntimeDiagnostics.record(.doubleSucceeded)
         keyboardMonitor.markConverted()
         let resultID = textConverter.lastResultLayoutID ?? context.targetLayoutID
         if LayoutSwitcher.currentLayoutID() != resultID { LayoutSwitcher.switchTo(layoutID: resultID) }
