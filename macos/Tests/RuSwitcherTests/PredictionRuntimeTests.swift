@@ -67,6 +67,31 @@ final class PredictionRuntimeTests: XCTestCase {
         XCTAssertNil(PredictionSuffixEdit(original: "MacSwitcher", replacement: "MacSwitcher"))
     }
 
+    func testEventLinkedCaretRejectsJumpToIdenticalSuffixInSameField() {
+        let anchor = PredictionCaretAnchor(caretUTF16Location: 101, inputUTF16Offset: 1)
+        XCTAssertTrue(anchor.permits(location: 106, selectionLength: 0, cumulativeOffset: 6))
+        // The text can be identical at another occurrence; its caret still differs.
+        XCTAssertFalse(anchor.permits(location: 506, selectionLength: 0, cumulativeOffset: 6))
+        XCTAssertFalse(anchor.permits(location: 106, selectionLength: 2, cumulativeOffset: 6))
+        let overflow = PredictionCaretAnchor(caretUTF16Location: Int.max, inputUTF16Offset: 0)
+        XCTAssertNil(overflow.expectedLocation(for: 1))
+    }
+
+    func testCumulativeCaretOffsetSurvivesWindowTruncationAndAdjustsForUnicodeEdit() {
+        var buffer = PredictionInputBuffer()
+        for _ in 0..<100 { buffer.append("word ", processID: 123) }
+        XCTAssertLessThanOrEqual(buffer.text.count, PredictionInputBuffer.maximumCharacters)
+        XCTAssertEqual(buffer.cumulativeUTF16Offset, 500)
+        buffer.append("f привет", processID: 123)
+        XCTAssertEqual(buffer.cumulativeUTF16Offset, 508)
+        XCTAssertTrue(buffer.replaceSuffix(original: "f привет", replacement: "😀 привет"))
+        XCTAssertEqual(buffer.cumulativeUTF16Offset, 509) // emoji occupies two UTF16 units
+        let anchor = PredictionCaretAnchor(caretUTF16Location: 11, inputUTF16Offset: 1)
+        XCTAssertEqual(anchor.expectedLocation(for: buffer.cumulativeUTF16Offset), 519)
+        buffer.reset()
+        XCTAssertEqual(buffer.cumulativeUTF16Offset, 0)
+    }
+
     func testWindowIsBoundedAndSuffixReplacementMustMatchExactly() throws {
         var buffer = PredictionInputBuffer()
         for _ in 0..<100 { buffer.append("someword ", processID: 123) }

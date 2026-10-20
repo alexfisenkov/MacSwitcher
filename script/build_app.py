@@ -121,6 +121,9 @@ def main(argv=None):
             elif document.is_file() and document.name.startswith(("LICENSE", "COPYING")):
                 shutil.copy2(document, dictionary_licenses / document.name)
         (contents / "Info.plist").write_bytes(plistlib.dumps(info, sort_keys=False))
+        # Finder metadata/resource forks are not sealed application resources.
+        # copy2 and a synchronized workspace may carry them into the staged app.
+        run(["/usr/bin/xattr", "-cr", str(staged)])
         identity = "-" if args.ad_hoc else args.identity
         command = ["/usr/bin/codesign", "--force", "--sign", identity]
         if args.ad_hoc:
@@ -137,6 +140,8 @@ def main(argv=None):
             os.rename(output, backup)
             print("Previous build preserved:", backup)
         os.rename(staged, output)
+        run(["/usr/bin/xattr", "-cr", str(output)])
+        run(["/usr/bin/codesign", "--verify", "--strict", "--deep", str(output)])
     print(json.dumps({"app": str(output), "bundle_id": BUNDLE_ID,
                       "version": info["MacSwitcherReleaseVersion"], "source_revision": revision,
                       "source_dirty": dirty, "signing": "ad-hoc-development" if args.ad_hoc else "Developer ID"}))

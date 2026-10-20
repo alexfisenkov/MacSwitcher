@@ -21,7 +21,8 @@ struct PredictionEngine: Sendable {
     private static let literalPunctuation: Set<Character> = [",", ".", "!", "?", ";", ":", ")"]
 
     func evaluate(suffix: String, sourceLanguage: String, atBoundary: Bool = false,
-                  precedingWords: [String] = [], alwaysConvertWords: Set<String> = []) -> PredictionProposal? {
+                  precedingWords: [String] = [], alwaysConvertWords: Set<String> = [],
+                  characterMapping: [Character: Character]? = nil) -> PredictionProposal? {
         let source = String(sourceLanguage.lowercased().prefix(2))
         guard source == "ru" || source == "en", !suffix.isEmpty, suffix.count <= 512,
               !suffix.contains(where: { $0.isNewline || $0 == "\t" }) else { return nil }
@@ -32,7 +33,7 @@ struct PredictionEngine: Sendable {
         let target = source == "en" ? "ru" : "en"
         let corrected = correction(for: current, source: source, target: target,
                                    atBoundary: atBoundary || suffix.last?.isWhitespace == true,
-                                   alwaysConvertWords: alwaysConvertWords)
+                                   alwaysConvertWords: alwaysConvertWords, characterMapping: characterMapping)
         let resultingWord = corrected ?? current
 
         // A closed single f stays unresolved until the following token provides strong
@@ -43,7 +44,10 @@ struct PredictionEngine: Sendable {
             let earlier = words.dropLast(2).map { String(suffix[$0]) }
             let cues = (precedingWords + earlier).suffix(3)
             let technical = cues.contains { Self.technicalContext.contains(contextKey($0)) }
-            if previous == "f", !technical, strongRussianContext(resultingWord) {
+            let letterMatchesLayout = characterMapping.map {
+                source == "en" ? $0["f"] == "а" : $0["а"] == "f"
+            } ?? true
+            if previous == "f", !technical, letterMatchesLayout, strongRussianContext(resultingWord) {
                 let result = String(suffix[..<previousRange.lowerBound]) + "а"
                     + String(suffix[previousRange.upperBound..<currentRange.lowerBound]) + resultingWord
                     + String(suffix[currentRange.upperBound...])
@@ -60,13 +64,13 @@ struct PredictionEngine: Sendable {
     }
 
     private func correction(for word: String, source: String, target: String, atBoundary: Bool,
-                            alwaysConvertWords: Set<String>) -> String? {
+                            alwaysConvertWords: Set<String>, characterMapping: [Character: Character]?) -> String? {
         guard !protectedToken(word) else { return nil }
         let stripped = stripTrailingPunctuation(word)
-        let mapped = map(word, source: source)
+        guard let mapped = map(word, source: source, characterMapping: characterMapping) else { return nil }
         let candidates: [(core: String, suffix: String)] = stripped.suffix.isEmpty
             ? [(mapped, "")]
-            : [(mapped, ""), (map(stripped.core, source: source), stripped.suffix)]
+            : [(mapped, ""), (map(stripped.core, source: source, characterMapping: characterMapping) ?? "", stripped.suffix)]
         // Owner-maintained exceptions are explicit target forms. Restrict them to
         // boundaries so a short forced word cannot corrupt a longer word's prefix.
         if atBoundary, !alwaysConvertWords.isEmpty {
@@ -134,9 +138,19 @@ struct PredictionEngine: Sendable {
         return word.allSatisfy({ $0.isLetter || $0 == "-" }) && !word.contains("--")
     }
 
-    private func map(_ word: String, source: String) -> String {
-        let mapping = source == "en" ? KeyMapping.enToRu : KeyMapping.ruToEn
-        return String(word.map { mapping[$0] ?? $0 })
+    private func map(_ word: String, source: String, characterMapping: [Character: Character]?) -> String? {
+        let mapping = characterMapping ?? (source == "en" ? KeyMapping.enToRu : KeyMapping.ruToEn)
+        var output = ""
+        for character in word {
+            if let mapped = mapping[character] { output.append(mapped) }
+            else {
+                // An explicit source/target map must account for every source letter.
+                // Never silently substitute QWERTY for another selected English layout.
+                if characterMapping != nil && character.isLetter { return nil }
+                output.append(character)  // literal hyphens and unmapped punctuation
+            }
+        }
+        return output
     }
 
     private func stripTrailingPunctuation(_ word: String) -> (core: String, suffix: String) {

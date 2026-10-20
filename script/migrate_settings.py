@@ -54,6 +54,23 @@ def read_domain(domain):
     return value
 
 
+def require_target_stopped():
+    result = subprocess.run(["/bin/ps", "-axo", "comm="], check=True, capture_output=True, text=True)
+    for command in result.stdout.splitlines():
+        path = command.strip()
+        if "/Contents/MacOS/" not in path:
+            continue
+        app, _, _ = path.rpartition("/Contents/MacOS/")
+        try:
+            info = plistlib.loads((Path(app) / "Contents/Info.plist").read_bytes())
+        except (OSError, ValueError, plistlib.InvalidFileException):
+            if Path(app).name.startswith("MacSwitcher"):
+                raise RuntimeError("Cannot establish whether MacSwitcher is stopped")
+            continue
+        if info.get("CFBundleIdentifier") == TARGET:
+            raise RuntimeError("Quit MacSwitcher before applying settings migration")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true", help="Back up destination, then import selected settings")
@@ -72,6 +89,7 @@ def main(argv=None):
     if not additions:
         print(json.dumps({"status": "unchanged", "reason": "No new allowlisted settings"}))
         return
+    require_target_stopped()
     directory = args.backup_dir.expanduser().resolve()
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(directory, 0o700)
@@ -84,6 +102,7 @@ def main(argv=None):
             plistlib.dump(value, stream)
     if read_domain(TARGET) != target:
         raise RuntimeError("Destination preferences changed during migration; nothing imported")
+    require_target_stopped()
     subprocess.run(["/usr/bin/defaults", "import", TARGET, str(merged_file)], check=True, capture_output=True)
     actual = read_domain(TARGET)
     if any(actual.get(key) != value for key, value in additions.items()):

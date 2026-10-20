@@ -12,7 +12,9 @@ jobs:
       - name: Publication invariants
         run: python3 script/check_public.py
       - name: Native regressions
-        run: swift test --package-path macos -j 4
+        run: |
+          swift script/prepare_ci_layouts.swift
+          swift test --package-path macos -j 4
       - name: Product tooling
         run: python3 -m unittest discover -s script -p 'test_*.py' -v
       - name: Packaged resources

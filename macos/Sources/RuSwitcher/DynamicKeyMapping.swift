@@ -316,6 +316,16 @@ enum DynamicKeyMapping {
 
         var original = "", converted = ""
         for k in keys {
+            // Predictive correction adopts rendered characters, and subsequent
+            // physical keys extend that same word. Decode each record by its own
+            // representation; synthetic keyCode 0 is never a physical 'a'/'ф'.
+            if let character = k.char {
+                let rendered = String(character)
+                original.append(character)
+                converted += context.map { convertBidirectional(rendered, context: $0) }
+                    ?? KeyMapping.convert(rendered)
+                continue
+            }
             if context != nil, isDeadKey(k.keyCode, layoutData: sourceData, shift: k.shift, caps: k.caps) { return nil }
             guard let sc = translateKeycode(k.keyCode, layoutData: sourceData, shift: k.shift, caps: k.caps),
                   let tc = translateKeycode(k.keyCode, layoutData: targetData, shift: k.shift, caps: k.caps) else {

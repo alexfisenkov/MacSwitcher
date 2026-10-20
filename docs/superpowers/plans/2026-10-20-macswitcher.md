@@ -14,16 +14,20 @@
 ## Задачи и доказательства
 
 - [x] Создать самостоятельный root, AGENTS и экспорт native-кода без приватной Git-истории.
-- [ ] Импортировать pinned частоты до 200k словоформ каждого языка; сверить hashes/лицензию.
-- [ ] Engine: `evaluate(suffix:sourceLanguage:atBoundary:precedingWords:)` возвращает точное
+- [x] Импортировать pinned частоты до 200k словоформ каждого языка; hashes/лицензия сверены.
+- [x] Engine: `evaluate(suffix:sourceLanguage:atBoundary:precedingWords:)` возвращает точное
   предложение. Регрессии: `ghbdtn`, `levf.`, `xnj-nj`, `f привет`; отказы для
   `f(x)`, `press f`, API, MacSwitcher, email, URL, валидного English.
-- [ ] Runtime: invalidate pending edit после нового ввода/навигации/фокуса;
+- [x] Runtime: invalidate pending edit после нового ввода/навигации/фокуса;
   проверять PID/поле/caret/revision/exact suffix; тесты stale/focus/cancel.
-- [ ] Product: своё имя/ID/icon/updater, dry-run migration, подписанная сборка
+- [x] Product: своё имя/ID/icon/updater, dry-run migration, подписанная сборка
   с source SHA, проверка ресурсов внутри bundle вне исходного дерева.
-- [ ] Public gate: secret/path scan, независимый code/risk/skeptic review,
-  исправления, fresh swift test/build, GitHub publication/read-back.
+- [x] Локальные регрессии: 71 Swift-тест; clipboard ownership, mixed TypedKey,
+  event-linked caret и фактические карты раскладок включены в набор.
+- [x] Public gate: secret/path scan, независимый review и подтверждённые исправления.
+- [ ] Финальный выпуск: fresh test/build/CI, GitHub publication/read-back.
+  Доказательства финального SHA — в GitHub Actions и metadata подписанного bundle;
+  до их получения этот пункт остаётся открытым.
 - [ ] Runtime/physical acceptance отмечать отдельно от unit/build; незакрытое — roadmap.
 
 ## На что смотреть при review

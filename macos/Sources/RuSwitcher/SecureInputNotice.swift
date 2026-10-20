@@ -95,7 +95,9 @@ final class SecureInputNotice {
     private func hide() {
         hideTimer?.invalidate(); hideTimer = nil
         NSAnimationContext.runAnimationGroup({ $0.duration = 0.2; panel.animator().alphaValue = 0 },
-                                             completionHandler: { [weak self] in self?.panel.orderOut(nil) })
+                                             completionHandler: { [weak self] in
+                                                 Task { @MainActor in self?.panel.orderOut(nil) }
+                                             })
     }
 
     private func positionTopCenter(height h: CGFloat) {

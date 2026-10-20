@@ -5,6 +5,8 @@ from pathlib import Path
 import plistlib
 import tempfile
 import unittest
+from unittest.mock import patch
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -17,6 +19,16 @@ def load(name):
 
 
 class ProductTests(unittest.TestCase):
+    def test_migration_refuses_renamed_running_bundle_by_identity(self):
+        migration = load("migrate_settings")
+        with tempfile.TemporaryDirectory() as directory:
+            app = Path(directory) / "MacSwitcher Alpha.app"
+            (app / "Contents").mkdir(parents=True)
+            (app / "Contents/Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": migration.TARGET}))
+            commands = SimpleNamespace(stdout=str(app / "Contents/MacOS/RuSwitcher") + "\n")
+            with patch.object(migration.subprocess, "run", return_value=commands):
+                with self.assertRaisesRegex(RuntimeError, "Quit MacSwitcher"):
+                    migration.require_target_stopped()
     def test_metadata_has_own_identity_and_no_source_path(self):
         build = load("build_app")
         info = build.metadata(ROOT, "a" * 40, False)

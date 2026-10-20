@@ -239,31 +239,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let alert = NSAlert()
         alert.alertStyle = .informational
         alert.messageText = L10n.wizardPermissionsResetTitle
-        alert.informativeText = L10n.wizardPermissionsResetText
+        alert.informativeText = L10n.languageCode == "ru"
+            ? "macOS отозвала одно из разрешений MacSwitcher. Проверьте Accessibility и Input Monitoring в Системных настройках. Действующие разрешения сохраняются."
+            : "macOS revoked a MacSwitcher permission. Check Accessibility and Input Monitoring in System Settings. Existing permissions are preserved."
         alert.addButton(withTitle: "OK")
         alert.runModal()
 
-        // Сбрасываем старые записи через tccutil
-        resetPermissions()
-
-        // Запрашиваем заново
-        showStep_Accessibility()
-    }
-
-    /// Сбрасывает старые записи разрешений для нашего bundle ID
-    private func resetPermissions() {
-        let bundleID = Bundle.main.bundleIdentifier ?? "com.MacSwitcher на GitHub"
-        rslog("Resetting TCC entries for \(bundleID)")
-
-        for service in ["Accessibility", "ListenEvent"] {
-            let reset = Process()
-            reset.launchPath = "/usr/bin/tccutil"
-            reset.arguments = ["reset", service, bundleID]
-            try? reset.run()
-            reset.waitUntilExit()
-        }
-
-        rslog("TCC entries reset done")
+        // Request only what is missing; never delete a working TCC grant.
+        if AXIsProcessTrusted() { showStep_InputMonitoring() }
+        else { showStep_Accessibility() }
     }
 
     private func showStep_Accessibility() {
@@ -647,6 +631,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             rebuildMenu()  // синхронизировать галочку «Автоматическая конверсия» в меню
             rslog("User enabled auto-convert at onboarding")
         } else {
+            settings.autoConvert = false
+            predictionCoordinator.invalidate()
+            keyboardMonitor.resetPredictionContext()
+            rebuildMenu()
             rslog("User declined auto-convert at onboarding")
         }
     }

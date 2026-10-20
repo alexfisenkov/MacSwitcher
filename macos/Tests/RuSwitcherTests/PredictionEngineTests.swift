@@ -30,6 +30,36 @@ final class PredictionEngineTests: XCTestCase {
         XCTAssertNil(engine().evaluate(suffix: "ghb", sourceLanguage: "en"))
     }
 
+    func testExplicitNonQWERTYMappingDeterminesActualReplacement() throws {
+        let rendered = "hpinuv"
+        let custom: [Character: Character] = ["h": "п", "p": "р", "i": "и", "n": "в", "u": "е", "v": "т"]
+        XCTAssertNil(engine().evaluate(suffix: rendered, sourceLanguage: "en"))
+        let proposal = try XCTUnwrap(engine().evaluate(suffix: rendered, sourceLanguage: "en", characterMapping: custom))
+        XCTAssertEqual(proposal.originalSuffix, rendered)
+        XCTAssertEqual(proposal.replacementSuffix, "привет")
+        XCTAssertEqual(engine().evaluate(suffix: rendered + "! ", sourceLanguage: "en", atBoundary: true,
+                                         characterMapping: custom)?.replacementSuffix, "привет! ")
+    }
+
+    func testExplicitIncompleteOrEmptyMappingFailsClosedIncludingOverrides() {
+        let partial: [Character: Character] = ["h": "п", "p": "р", "i": "и", "n": "в", "u": "е"]
+        XCTAssertNil(engine().evaluate(suffix: "hpinuv", sourceLanguage: "en", characterMapping: partial))
+        XCTAssertNil(engine().evaluate(suffix: "hpinuv", sourceLanguage: "en", atBoundary: true,
+                                       alwaysConvertWords: ["привеv"], characterMapping: partial))
+        XCTAssertNil(engine().evaluate(suffix: "ghbdtn", sourceLanguage: "en", characterMapping: [:]))
+        XCTAssertNil(engine().evaluate(suffix: "f ", sourceLanguage: "en", atBoundary: true,
+                                       alwaysConvertWords: ["а"], characterMapping: ["f": "и"]))
+    }
+
+    func testExplicitLayoutMappingMustConfirmDeferredFMeansRussianA() {
+        XCTAssertNil(engine().evaluate(suffix: "f привет", sourceLanguage: "en", characterMapping: ["f": "и"]))
+        XCTAssertNil(engine().evaluate(suffix: "f привет", sourceLanguage: "ru", characterMapping: ["а": "x"]))
+        XCTAssertEqual(engine().evaluate(suffix: "f привет", sourceLanguage: "en", characterMapping: ["f": "а"])?.replacementSuffix,
+                       "а привет")
+        XCTAssertEqual(engine().evaluate(suffix: "f привет", sourceLanguage: "ru", characterMapping: ["а": "f"])?.replacementSuffix,
+                       "а привет")
+    }
+
     func testEnglishDirectionAndTitleCase() throws {
         XCTAssertEqual(engine().evaluate(suffix: "руддщ", sourceLanguage: "ru")?.replacementSuffix, "hello")
         XCTAssertEqual(engine().evaluate(suffix: "Ghbdtn", sourceLanguage: "en-US")?.replacementSuffix, "Привет")

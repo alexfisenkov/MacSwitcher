@@ -2,13 +2,87 @@ import AppKit
 import ApplicationServices
 import CoreGraphics
 
+/// A restore is permitted only while the clipboard still has the exact version
+/// last written by this transaction. User copies always supersede our snapshot.
+@MainActor
+final class ClipboardRestoreSession {
+    private let pasteboard: NSPasteboard
+    private var savedItems: [NSPasteboardItem]?
+    private var ownedChangeCount: Int?
+    var hasSnapshot: Bool { savedItems != nil }
+
+    init(pasteboard: NSPasteboard) { self.pasteboard = pasteboard }
+
+    private var stillOwnsClipboard: Bool {
+        guard let ownedChangeCount else { return false }
+        return savedItems != nil && pasteboard.changeCount == ownedChangeCount
+    }
+
+    func permitsPaste() -> Bool { stillOwnsClipboard }
+
+    func begin() -> Bool {
+        if stillOwnsClipboard { return true } // rapid reconvert preserves the first snapshot
+        discard()
+        let count = pasteboard.changeCount
+        let snapshot = (pasteboard.pasteboardItems ?? []).map { oldItem in
+            let item = NSPasteboardItem()
+            for type in oldItem.types {
+                if let data = oldItem.data(forType: type) { item.setData(data, forType: type) }
+            }
+            return item
+        }
+        guard pasteboard.changeCount == count else { return false }
+        savedItems = snapshot
+        ownedChangeCount = count
+        return true
+    }
+
+    func clearForCopy() -> Int? {
+        guard stillOwnsClipboard else { discard(); return nil }
+        let count = pasteboard.clearContents()
+        ownedChangeCount = count
+        guard pasteboard.changeCount == count else { discard(); return nil }
+        return count
+    }
+
+    /// The caller must verify that the copied text matches the original AX
+    /// selection before claiming an asynchronous Cmd+C write as ours.
+    func claimVerifiedCopy(changeCount: Int) -> Bool {
+        guard savedItems != nil, let previous = ownedChangeCount,
+              changeCount != previous, pasteboard.changeCount == changeCount else { return false }
+        ownedChangeCount = changeCount
+        return true
+    }
+
+    func writeTemporaryText(_ text: String) -> Bool {
+        guard let count = clearForCopy(), pasteboard.setString(text, forType: .string),
+              pasteboard.changeCount == count else { return false }
+        return true
+    }
+
+    @discardableResult
+    func restoreIfOwned() -> Bool {
+        defer { discard() }
+        guard stillOwnsClipboard, let savedItems else { return false }
+        let count = pasteboard.clearContents()
+        // NSPasteboard has no compare-and-swap; check again immediately before
+        // writing, as well as before clearing, and never adopt an unknown version.
+        guard pasteboard.changeCount == count else { return false }
+        if !savedItems.isEmpty { return pasteboard.writeObjects(savedItems) }
+        return true
+    }
+
+    private func discard() { savedItems = nil; ownedChangeCount = nil }
+}
+
 /// Конвертация текста между раскладками
 @MainActor
 final class TextConverter {
     private var lastConvertedCount = 0
     private var lastBoundaryCount = 0
-    private var savedClipboardItems: [NSPasteboardItem]?
+    private lazy var clipboardSession = ClipboardRestoreSession(pasteboard: .general)
     private var clipboardRestoreWork: DispatchWorkItem?
+    private var clipboardRestoreGeneration: UInt64 = 0
     private var isConverting = false
     /// Очередь для инжекта нажатий буферного движка — чтобы usleep не блокировал
     /// main-поток, на котором висит event tap (иначе тап голодает → лаги/потери нажатий).
@@ -375,7 +449,7 @@ final class TextConverter {
         caseWord = nil   // выделение сбрасывает буферный цикл
         let pasteboard = NSPasteboard.general
         cancelClipboardRestore()
-        if savedClipboardItems == nil { savedClipboardItems = snapshotPasteboard(pasteboard) }
+        guard clipboardSession.begin() else { return false }
         isConverting = true
         var ok = false
         defer { if !ok { restoreClipboardNow() }; isConverting = false }
@@ -384,7 +458,7 @@ final class TextConverter {
               text.contains(where: { $0.isLetter }) else { return false }
         let changed = TextConverter.nextCaseFromCurrent(text)
         guard changed != text else { return false }
-        pasteText(changed, pasteboard: pasteboard)
+        guard pasteText(changed, pasteboard: pasteboard) else { return false }
         // Скептик #29: НЕ выставляем reconvert-состояние (lastConverted/lastConvertedCount) — смена
         // регистра не должна попадать в путь реконверта (см. clearState() в onCaseHotkey).
         ok = true
@@ -453,12 +527,10 @@ final class TextConverter {
         lastWasBuffer = false
         let pasteboard = NSPasteboard.general
         cancelClipboardRestore()
-        // issue #16 (skeptic): НЕ пере-снимаем буфер, если восстановление уже отложено —
-        // иначе реконверт за <2с снял бы уже КОНВЕРТИРОВАННЫЙ текст и потерял оригинал
-        // пользователя навсегда. savedClipboardItems непусто ровно пока висит отложенный
-        // restore (нилится в его work-item), так что это надёжный признак «есть что вернуть».
-        if savedClipboardItems == nil {
-            savedClipboardItems = snapshotPasteboard(pasteboard)
+        guard clipboardSession.begin() else {
+            lastWasBuffer = previousBufferMode
+            isConverting = false
+            return false
         }
         var conversionSucceeded = false
         defer {
@@ -590,9 +662,8 @@ final class TextConverter {
         }
         let pasteboard = NSPasteboard.general
         cancelClipboardRestore()
-        // Скептик 3.2.0: не перезаписываем сохранённый буфер при повторной конверсии в окне
-        // восстановления (2с) — иначе «оригиналом» стал бы промежуточный конвертированный текст.
-        if savedClipboardItems == nil { savedClipboardItems = snapshotPasteboard(pasteboard) }
+        // Retain the original only while we still own its temporary replacement.
+        guard clipboardSession.begin() else { lastWasBuffer = previousBufferMode; return false }
 
         var conversionSucceeded = false
         defer {
@@ -728,12 +799,11 @@ final class TextConverter {
         let pasteboard = NSPasteboard.general
         // Отменяем отложенное восстановление clipboard — мы ещё работаем
         cancelClipboardRestore()
-        // Скептик 3.2.0: если восстановление уже отработало (snapshot пуст), снимаем свежий —
-        // иначе финальный scheduleClipboardRestore очистил бы буфер пользователя.
-        if savedClipboardItems == nil { savedClipboardItems = snapshotPasteboard(pasteboard) }
+        // A new user copy starts a fresh restore transaction, even during reconvert.
+        guard clipboardSession.begin() else { return false }
 
         var conversionSucceeded = false
-        defer { if execution != nil && !conversionSucceeded { restoreClipboardNow() } }
+        defer { if !conversionSucceeded { restoreClipboardNow() } }
 
         guard moveLeft(lastBoundaryCount, execution: execution) else { return false }
 
@@ -866,89 +936,62 @@ final class TextConverter {
                            replacing original: String? = nil) -> Bool {
         guard execution?.isValid() != false else { return false }
         if let execution, let original, !execution.focus.selectedTextMatches(original) { return false }
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
+        guard clipboardSession.writeTemporaryText(text) else { return false }
+        guard clipboardSession.permitsPaste() else { return false }
         guard operationKey(keyCode: KC.letterV, flags: .maskCommand, execution: execution) else { return false }
         usleep(150_000) // 150мс — дать приложению вставить текст и обновить курсор
         return execution?.isValid() != false
     }
 
-    /// Отменяет отложенное восстановление clipboard
+    /// Canceling also invalidates already-enqueued work from an earlier transaction.
     private func cancelClipboardRestore() {
+        clipboardRestoreGeneration &+= 1
         clipboardRestoreWork?.cancel()
         clipboardRestoreWork = nil
     }
 
-    /// Немедленно возвращает буфер обмена пользователю (для путей-неудач).
     private func restoreClipboardNow() {
         cancelClipboardRestore()
-        guard let saved = savedClipboardItems else { return }
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        if !saved.isEmpty { pasteboard.writeObjects(saved) }
-        savedClipboardItems = nil
+        clipboardSession.restoreIfOwned()
     }
 
-    /// Сбрасывает отложенное восстановление немедленно — вызывается перед
-    /// завершением приложения, чтобы не потерять буфер в 2-секундном окне.
+    /// Quit/update follows the same ownership check as an ordinary timer.
     func flushPendingClipboardRestore() {
-        guard clipboardRestoreWork != nil else { return }
         restoreClipboardNow()
     }
 
-    /// Планирует восстановление clipboard через 2 секунды
-    /// (если за это время придёт reconvert — отменится и перепланируется)
     private func scheduleClipboardRestore() {
         cancelClipboardRestore()
-        let saved = self.savedClipboardItems
+        guard clipboardSession.hasSnapshot else { return }
+        let generation = clipboardRestoreGeneration
         let work = DispatchWorkItem { [weak self] in
-            let pasteboard = NSPasteboard.general
-            pasteboard.clearContents()
-            if let saved, !saved.isEmpty {
-                pasteboard.writeObjects(saved)
-            }
-            self?.savedClipboardItems = nil
-            rslog("clipboard restored (\(saved?.count ?? 0) items)")
+            guard let self, self.clipboardRestoreGeneration == generation else { return }
+            self.restoreClipboardNow()
         }
         clipboardRestoreWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: work)
-    }
-
-    /// Делает глубокую копию всех pasteboard items (со всеми типами данных).
-    /// Это нужно потому, что NSPasteboardItem становится невалидным после
-    /// pasteboard.clearContents() — поэтому копируем data по каждому типу
-    /// в новые NSPasteboardItem.
-    private func snapshotPasteboard(_ pb: NSPasteboard) -> [NSPasteboardItem] {
-        guard let items = pb.pasteboardItems else { return [] }
-        return items.map { oldItem in
-            let newItem = NSPasteboardItem()
-            for type in oldItem.types {
-                if let data = oldItem.data(forType: type) {
-                    newItem.setData(data, forType: type)
-                }
-            }
-            return newItem
-        }
     }
 
     /// Копирует выделенный текст. Делает до 3 попыток (Cmd+C не всегда срабатывает с первого раза)
     private func tryCopy(_ pasteboard: NSPasteboard, execution: CombinedShiftExecutionContext? = nil) -> String? {
         for attempt in 0..<3 {
             guard execution?.isValid() != false else { return nil }
-            // Очищаем буфер перед копированием — гарантирует что changeCount изменится
-            pasteboard.clearContents()
-            let oldCount = pasteboard.changeCount
+            let focus = execution?.focus ?? NSWorkspace.shared.frontmostApplication.flatMap {
+                CombinedShiftFocus.capture(processID: $0.processIdentifier)
+            }
+            guard let focus, focus.isCurrent(),
+                  let oldCount = clipboardSession.clearForCopy() else { return nil }
 
             guard operationKey(keyCode: KC.letterC, flags: .maskCommand, execution: execution) else { return nil }
             usleep(attempt == 0 ? 80_000 : 120_000)
             guard execution?.isValid() != false else { return nil }
 
-            if pasteboard.changeCount != oldCount,
+            let copyCount = pasteboard.changeCount
+            if copyCount != oldCount,
                let text = pasteboard.string(forType: .string),
                !text.isEmpty {
-                if let execution {
-                    guard execution.focus.selectedTextMatches(text), execution.isValid() else { return nil }
-                }
+                guard focus.isCurrent(), focus.selectedTextMatches(text), execution?.isValid() != false,
+                      clipboardSession.claimVerifiedCopy(changeCount: copyCount) else { return nil }
                 return text
             }
             usleep(50_000) // пауза перед retry

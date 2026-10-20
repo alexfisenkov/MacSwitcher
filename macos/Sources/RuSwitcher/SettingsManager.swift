@@ -110,9 +110,8 @@ final class SettingsManager: @unchecked Sendable {
         set { defaults.set(newValue, forKey: Keys.checkUpdatesEnabled) }
     }
 
-    /// Канал бета-версий: когда включён, авто-проверка обновлений также смотрит фид
-    /// пред-релизов (version-beta.json) и предлагает более свежую бету. По умолчанию
-    /// ВЫКЛ — обычные пользователи получают только стабильные релизы.
+    /// Include prereleases from our GitHub Releases list. Alpha builds default
+    /// to this channel; stable builds default to stable-only updates.
     var betaChannelEnabled: Bool {
         get { defaults.object(forKey: Keys.betaChannelEnabled) as? Bool
             ?? (Bundle.main.object(forInfoDictionaryKey: "MacSwitcherChannel") as? String == "alpha") }
@@ -211,9 +210,9 @@ final class SettingsManager: @unchecked Sendable {
 
     /// Автоматическая конвертация «на лету» (детект неправильной раскладки на границе
     /// слова). Отдельный флаг от autoSwitchEnabled (тот гейтит РУЧНОЙ триггер).
-    /// MacSwitcher enables local automatic correction by default; explicit opt-out persists.
+    /// Fresh installs wait for the onboarding choice; explicit preferences persist.
     var autoConvert: Bool {
-        get { defaults.object(forKey: Keys.autoConvert) as? Bool ?? true }
+        get { defaults.object(forKey: Keys.autoConvert) as? Bool ?? false }
         set { defaults.set(newValue, forKey: Keys.autoConvert) }
     }
 

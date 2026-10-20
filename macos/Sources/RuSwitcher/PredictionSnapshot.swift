@@ -10,6 +10,7 @@ struct PredictionSnapshot: Sendable, Equatable {
     let inputRevision: UInt64
     let generation: UInt64
     let sessionID: UInt64
+    let cumulativeUTF16Offset: Int
     let atBoundary: Bool
 
     func isCurrent(processID: Int32?, revision: UInt64, generation: UInt64) -> Bool {
@@ -25,8 +26,11 @@ struct PredictionInputBuffer: Sendable {
     private(set) var text = ""
     private(set) var processID: Int32?
     private(set) var sessionID: UInt64 = 0
+    private(set) var cumulativeUTF16Offset = 0
 
-    mutating func reset() { text = ""; processID = nil; sessionID &+= 1 }
+    mutating func reset() {
+        text = ""; processID = nil; sessionID &+= 1; cumulativeUTF16Offset = 0
+    }
 
     mutating func append(_ characters: String, processID: Int32) {
         guard processID > 0, !characters.isEmpty,
@@ -34,6 +38,9 @@ struct PredictionInputBuffer: Sendable {
             reset(); return
         }
         if self.processID != processID { reset() }
+        let (offset, overflow) = cumulativeUTF16Offset.addingReportingOverflow(characters.utf16.count)
+        guard !overflow else { reset(); return }
+        cumulativeUTF16Offset = offset
         self.processID = processID
         text.append(characters)
         if text.count > Self.maximumCharacters {
@@ -47,7 +54,12 @@ struct PredictionInputBuffer: Sendable {
 
     mutating func replaceSuffix(original: String, replacement: String) -> Bool {
         guard !original.isEmpty, text.hasSuffix(original),
-              replacement.count <= Self.maximumCharacters else { return false }
+              replacement.count <= Self.maximumCharacters,
+              cumulativeUTF16Offset >= original.utf16.count else { return false }
+        let (offset, overflow) = (cumulativeUTF16Offset - original.utf16.count)
+            .addingReportingOverflow(replacement.utf16.count)
+        guard !overflow else { reset(); return false }
+        cumulativeUTF16Offset = offset
         text.removeLast(original.count)
         text.append(replacement)
         if text.count > Self.maximumCharacters { text = String(text.suffix(Self.maximumCharacters)) }
@@ -72,6 +84,7 @@ struct PredictionInputBuffer: Sendable {
             sourceLayoutID: sourceLayoutID, processID: processID,
             inputRevision: inputRevision, generation: generation,
             sessionID: sessionID,
+            cumulativeUTF16Offset: cumulativeUTF16Offset,
             atBoundary: text.last?.isWhitespace == true)
     }
 }
@@ -80,6 +93,25 @@ enum PredictionFocusAnchorPolicy {
     static func permits(originalSession: UInt64?, currentSession: UInt64,
                         capturedOriginalField: Bool, sameField: Bool) -> Bool {
         originalSession == currentSession && capturedOriginalField && sameField
+    }
+}
+
+/// Event-linked caret arithmetic detects a programmatic jump to another identical
+/// occurrence in the same field without reading AX for every character.
+struct PredictionCaretAnchor: Sendable {
+    let caretUTF16Location: Int
+    let inputUTF16Offset: Int
+
+    func expectedLocation(for cumulativeOffset: Int) -> Int? {
+        guard caretUTF16Location >= 0, inputUTF16Offset >= 0, cumulativeOffset >= 0 else { return nil }
+        let (delta, differenceOverflow) = cumulativeOffset.subtractingReportingOverflow(inputUTF16Offset)
+        let (location, locationOverflow) = caretUTF16Location.addingReportingOverflow(delta)
+        guard !differenceOverflow, !locationOverflow, location >= 0 else { return nil }
+        return location
+    }
+
+    func permits(location: Int, selectionLength: Int, cumulativeOffset: Int) -> Bool {
+        selectionLength == 0 && expectedLocation(for: cumulativeOffset) == location
     }
 }
 
