@@ -1,0 +1,23 @@
+name: Final verification
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publication invariants
+        run: python3 script/check_public.py
+      - name: Native regressions
+        run: swift test --package-path macos -j 4
+      - name: Product tooling
+        run: python3 -m unittest discover -s script -p 'test_*.py' -v
+      - name: Packaged resources
+        run: |
+          python3 script/build_app.py --ad-hoc
+          .сборки/MacSwitcher.app/Contents/MacOS/RuSwitcher --self-test-resources
+      - name: Whitespace
+        run: git diff --check

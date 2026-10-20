@@ -1,0 +1,8 @@
+{
+  "version": "0.1.0-alpha.1",
+  "short_version": "0.1.0",
+  "build": 1,
+  "channel": "alpha",
+  "url": "https://github.com/alexfisenkov/MacSwitcher/releases",
+  "notes": "First public MacSwitcher alpha. Download and install releases manually."
+}
