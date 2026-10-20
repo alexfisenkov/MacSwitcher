@@ -25,9 +25,12 @@
 - [x] Локальные регрессии: 71 Swift-тест; clipboard ownership, mixed TypedKey,
   event-linked caret и фактические карты раскладок включены в набор.
 - [x] Public gate: secret/path scan, независимый review и подтверждённые исправления.
-- [ ] Финальный выпуск: fresh test/build/CI, GitHub publication/read-back.
-  Доказательства финального SHA — в GitHub Actions и metadata подписанного bundle;
-  до их получения этот пункт остаётся открытым.
+- [x] Финальная проверка исходной alpha: fresh test/build/CI,
+  GitHub publication/read-back. Код выпуска: `ca0cc3ad3bf7d08e6c0147b7aceb439d08ff7ce2`.
+  [CI](https://github.com/alexfisenkov/MacSwitcher/actions/runs/39453779299):
+  71 Swift, 6 Python, packaged resources — PASS. Подписанный ARM64 bundle
+  соответствует этому SHA. Бинарный публичный выпуск удерживается до notarization
+  и живой приёмки; [состояние](../../releases/0.1.0-alpha.1.md).
 - [ ] Runtime/physical acceptance отмечать отдельно от unit/build; незакрытое — roadmap.
 
 ## На что смотреть при review
