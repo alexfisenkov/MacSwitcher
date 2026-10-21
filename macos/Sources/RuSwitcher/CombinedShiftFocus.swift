@@ -68,16 +68,17 @@ struct CombinedShiftFocus: @unchecked Sendable {
         self.initialSelection = initialSelection
     }
 
-    static func capture(processID: Int32) -> CombinedShiftFocus? {
+    static func capture(processID: Int32, timeout: Float = 0.05, includeSelection: Bool = true) -> CombinedShiftFocus? {
         let app = AXUIElementCreateApplication(processID)
-        AXUIElementSetMessagingTimeout(app, 0.05)
+        AXUIElementSetMessagingTimeout(app, timeout)
         var raw: AnyObject?
         guard AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &raw) == .success,
               let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() else { return nil }
         let element = raw as! AXUIElement
-        AXUIElementSetMessagingTimeout(element, 0.05)
+        AXUIElementSetMessagingTimeout(element, timeout)
         let focus = CombinedShiftFocus(processID: processID, element: element)
-        return CombinedShiftFocus(processID: processID, element: element, initialSelection: focus.selectionRange())
+        return CombinedShiftFocus(processID: processID, element: element,
+            initialSelection: includeSelection ? focus.selectionRange() : nil)
     }
 
     func isCurrent() -> Bool {
@@ -161,7 +162,7 @@ struct CombinedShiftFocus: @unchecked Sendable {
             currentSelection: range, observedSuffix: observed)
     }
 
-    func text(in range: CFRange) -> String? {
+    func text(in range: CFRange, allowValueFallback: Bool = true) -> String? {
         guard !AutoSwitchPolicy.secureInputActive else { return nil }
         var requestedRange = range
         var raw: AnyObject?
@@ -169,6 +170,7 @@ struct CombinedShiftFocus: @unchecked Sendable {
            AXUIElementCopyParameterizedAttributeValue(element, kAXStringForRangeParameterizedAttribute as CFString,
                                                        value, &raw) == .success,
            let text = raw as? String { return text }
+        guard allowValueFallback else { return nil }
         raw = nil
         guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &raw) == .success,
               let value = raw as? String else { return nil }
@@ -184,12 +186,12 @@ struct CombinedShiftExecutionContext {
     let inputRevision: UInt64
     let currentInputRevision: () -> UInt64
 
-    func validationFailure() -> CombinedShiftExecutionFailure? {
+    func validationFailure(timeout: Float = 0.05) -> CombinedShiftExecutionFailure? {
         guard inputRevision == currentInputRevision() else { return .revisionChanged }
         guard focus.processID > 0,
               NSWorkspace.shared.frontmostApplication?.processIdentifier == focus.processID else { return .wrongProcess }
         guard !AutoSwitchPolicy.secureInputActive else { return .secureInput }
-        guard let current = CombinedShiftFocus.capture(processID: focus.processID) else { return .focusUnavailable }
+        guard let current = CombinedShiftFocus.capture(processID: focus.processID, timeout: timeout, includeSelection: false) else { return .focusUnavailable }
         guard CFEqual(focus.element, current.element) else { return .focusChanged }
         // AX calls are synchronous and may take time; repeat inexpensive checks
         // immediately before allowing a caller to edit.
@@ -199,8 +201,8 @@ struct CombinedShiftExecutionContext {
         return nil
     }
 
-    func isValid() -> Bool {
-        guard let failure = validationFailure() else { return true }
+    func isValid(timeout: Float = 0.05) -> Bool {
+        guard let failure = validationFailure(timeout: timeout) else { return true }
         switch failure {
         case .revisionChanged: RuntimeDiagnostics.record(.executionRevisionChanged)
         case .wrongProcess: RuntimeDiagnostics.record(.executionWrongProcess)

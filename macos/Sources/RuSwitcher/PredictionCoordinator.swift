@@ -35,6 +35,12 @@ final class PredictionCoordinator {
 
     func submit(_ snapshot: PredictionSnapshot) {
         invalidate()
+        let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let route = AutomaticEditorPolicy.route(bundleID: bundleID, suffix: snapshot.suffix, sourceID: snapshot.sourceLayoutID)
+        guard route != .blocked, !AutoSwitchPolicy.isDeniedApp(bundleID) || route == .nativeCanary else {
+            anchorSessionID = nil; anchorFocus = nil; pendingCaretAnchor = nil
+            return // blocked editors must not incur a synchronous AX capture
+        }
         if anchorSessionID != snapshot.sessionID {
             RuntimeDiagnostics.record(.autoAnchorSessionChanged)
             anchorSessionID = snapshot.sessionID
@@ -93,9 +99,12 @@ final class PredictionCoordinator {
             monitor.resetPredictionContext()
             return false
         }
+        let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let route = AutomaticEditorPolicy.route(bundleID: bundleID, suffix: snapshot.suffix, sourceID: snapshot.sourceLayoutID)
+        guard route != .blocked else { RuntimeDiagnostics.record(.nativeAutoBlocked); return false }
         return !Task.isCancelled && SettingsManager.shared.autoSwitchEnabled && SettingsManager.shared.autoConvert
             && !AutoSwitchPolicy.shouldDeferToRemoteClient
-            && !AutoSwitchPolicy.isDeniedApp(NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+            && (!AutoSwitchPolicy.isDeniedApp(bundleID) || route == .nativeCanary)
             && snapshot.sessionID == monitor.predictionSessionID
             && snapshot.isCurrent(processID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
                 revision: monitor.inputRevision, generation: monitor.predictionGeneration)
@@ -167,9 +176,13 @@ final class PredictionCoordinator {
                 guard let monitor, monitor.predictionGeneration == snapshot.generation else { return UInt64.max }
                 return monitor.inputRevision
             })
+        let inputGateGeneration = monitor.nativeInputGateGeneration
         guard converter.replaceVerifiedSuffix(original: edit.original,
             replacement: edit.replacement, sourceLayoutID: snapshot.sourceLayoutID,
-            resultLayoutID: resultID, execution: execution) else { RuntimeDiagnostics.record(.autoEditRefused); return }
+            resultLayoutID: resultID, execution: execution,
+            inputBarrierIsActive: { [weak monitor] in
+                monitor?.nativeInputBarrierIsActive == true && monitor?.nativeInputGateGeneration == inputGateGeneration
+            }) else { RuntimeDiagnostics.record(.autoEditRefused); return }
         RuntimeDiagnostics.record(.autoEditPosted)
         monitor.recordPredictionResult(original: proposal.originalSuffix,
             replacement: proposal.replacementSuffix, resultLayoutID: resultID)

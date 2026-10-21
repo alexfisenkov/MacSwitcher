@@ -164,6 +164,11 @@ final class KeyboardMonitor: @unchecked Sendable {
     private var predictionSourceLayoutID: String?
     var predictionSessionID: UInt64 { predictionBuffer.sessionID }
     private(set) var predictionGeneration: UInt64 = 0
+    private var nativeInputGateConfigured = false
+    private(set) var nativeInputGateGeneration: UInt64 = 0
+    var nativeInputBarrierIsActive: Bool {
+        nativeInputGateConfigured && eventTap.map { CGEvent.tapIsEnabled(tap: $0) } == true
+    }
     var onPredictionInput: (@MainActor (PredictionSnapshot) -> Void)?
     var onPredictionInvalidated: (@MainActor () -> Void)?
     /// issue #10: любой ввод/клик пользователя — чтобы спрятать флаг у каретки во время печати.
@@ -225,6 +230,7 @@ final class KeyboardMonitor: @unchecked Sendable {
         rslog("Attempting to create event tap... (trigger=\(SettingsManager.shared.triggerKey) switch=\(SettingsManager.shared.switchHotkey.isEmpty ? "off" : SettingsManager.shared.switchHotkey) capsLock=\(triggerConfig.isCapsLock))")
         let mask: CGEventMask =
             (1 << CGEventType.keyDown.rawValue)
+            | (1 << CGEventType.keyUp.rawValue)
             | (1 << CGEventType.flagsChanged.rawValue)
             | (1 << CGEventType.leftMouseDown.rawValue)
             | (1 << CGEventType.rightMouseDown.rawValue)
@@ -233,7 +239,11 @@ final class KeyboardMonitor: @unchecked Sendable {
 
         // Caps Lock требует активного tap (consume), чтобы подавить переключение
         // регистра. Для модификаторов оставляем listenOnly — не вмешиваемся в ввод.
-        let options: CGEventTapOptions = triggerConfig.isCapsLock ? .defaultTap : .listenOnly
+        // The experimental native writer is opt-in and confined to synthetic
+        // fixtures. Normal Shift behavior keeps its previous passive tap.
+        let wantsNativeGate = CommandLine.arguments.contains("--diagnostic-native-canary")
+            && CommandLine.arguments.contains("--diagnostic-panel")
+        let options: CGEventTapOptions = triggerConfig.isCapsLock || wantsNativeGate ? .defaultTap : .listenOnly
 
         // Режим удалённого стола: session-уровень видит проброшенные Screen Sharing
         // нажатия (они инжектятся через CGEventPost, а HID-tap их не видит).
@@ -254,6 +264,8 @@ final class KeyboardMonitor: @unchecked Sendable {
         }
 
         eventTap = tap
+        nativeInputGateGeneration &+= 1
+        nativeInputGateConfigured = options == .defaultTap
         runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
@@ -267,6 +279,8 @@ final class KeyboardMonitor: @unchecked Sendable {
     }
 
     func stop() {
+        nativeInputGateConfigured = false
+        nativeInputGateGeneration &+= 1
         interruptCombinedShift()
         predictionBuffer.reset()
         predictionSourceLayoutID = nil
@@ -282,6 +296,11 @@ final class KeyboardMonitor: @unchecked Sendable {
         }
         eventTap = nil
         runLoopSource = nil
+    }
+
+    fileprivate func nativeGateWasInterrupted() {
+        nativeInputGateGeneration &+= 1
+        interruptCombinedShift()
     }
 
     /// Перезапускает tap с актуальным конфигом триггера. Нужен при смене настройки —
@@ -941,7 +960,7 @@ private func keyboardCallback(
     if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
         if let userInfo {
             let monitor = Unmanaged<KeyboardMonitor>.fromOpaque(userInfo).takeUnretainedValue()
-            monitor.interruptCombinedShift()
+            monitor.nativeGateWasInterrupted()
             if let tap = monitor.eventTap {
                 CGEvent.tapEnable(tap: tap, enable: true)
             }

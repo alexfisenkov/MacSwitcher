@@ -30,6 +30,8 @@ enum RuntimeDiagnosticEvent: String, CaseIterable, Sendable {
     case harnessSelectionStarted, harnessSelectionPassed, harnessSelectionFailed
     case harnessAutoStarted, harnessAutoPassed, harnessAutoFailed
     case autoWorkStarted, sourceNotificationPreserved, sourceNotificationInvalidated
+    case harnessNativeStarted, harnessNativePassed, harnessNativeFailed
+    case nativeAutoBlocked, nativeAutoInsertPosted, nativeAutoRemovalPosted, nativeAutoVerified, nativeAutoUncertain
 
     var logOnce: Bool { rawValue.hasPrefix("auto") || rawValue.hasPrefix("native") }
 }
@@ -78,6 +80,11 @@ enum AXCapabilityDiagnostics {
         let app = AXUIElementCreateApplication(target.processIdentifier)
         AXUIElementSetMessagingTimeout(app, 0.25)
         var result: [String: Any] = ["pid": target.processIdentifier]
+        result["targetIsFrontmost"] = NSWorkspace.shared.frontmostApplication?.processIdentifier == target.processIdentifier
+        // Chromium can initialize its native AX bridge on this read-only query.
+        // Do not enable undocumented app accessibility modes or change TCC.
+        var appRole: AnyObject?
+        result["applicationRoleError"] = AXUIElementCopyAttributeValue(app, kAXRoleAttribute as CFString, &appRole).rawValue
         if enable {
             result["enableAccessibilityError"] = AXUIElementSetAttributeValue(app,
                 "AXManualAccessibility" as CFString, kCFBooleanTrue).rawValue
@@ -85,7 +92,22 @@ enum AXCapabilityDiagnostics {
         var focused: AnyObject?
         let error = AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &focused)
         result["focusError"] = error.rawValue
-        guard error == .success, let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() else {
+        if error != .success {
+            focused = nil
+            let system = AXUIElementCreateSystemWide()
+            AXUIElementSetMessagingTimeout(system, 0.25)
+            var global: AnyObject?
+            let globalError = AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &global)
+            result["systemFocusError"] = globalError.rawValue
+            if globalError == .success, let global, CFGetTypeID(global) == AXUIElementGetTypeID() {
+                var pid: pid_t = 0
+                if AXUIElementGetPid(global as! AXUIElement, &pid) == .success, pid == target.processIdentifier {
+                    focused = global
+                    result["focusOrigin"] = "systemWide"
+                }
+            }
+        }
+        guard let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() else {
             result["focusAvailable"] = false; return result
         }
         result["focusAvailable"] = true
@@ -117,7 +139,9 @@ enum AXCapabilityDiagnostics {
         let whitelist: Set<String> = [kAXStringForRangeParameterizedAttribute,
             kAXBoundsForRangeParameterizedAttribute, "AXStringForTextMarkerRange",
             "AXAttributedStringForTextMarkerRange", "AXTextMarkerRangeForUIElement",
-            "AXTextMarkerForIndex", "AXIndexForTextMarker"]
+            "AXTextMarkerForIndex", "AXIndexForTextMarker", "AXTextOperation",
+            "AXStartTextMarkerForTextMarkerRange", "AXEndTextMarkerForTextMarkerRange",
+            "AXPreviousTextMarkerForTextMarker", "AXTextMarkerRangeForUnorderedTextMarkers"]
         result["parameterizedAttributesError"] = namesError.rawValue
         result["parameterizedAttributes"] = ((names as? [String]) ?? []).filter { whitelist.contains($0) }.sorted()
         return result

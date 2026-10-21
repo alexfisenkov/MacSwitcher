@@ -1,8 +1,8 @@
 {
-  "version": "0.1.0-alpha.3",
+  "version": "0.1.0-alpha.4",
   "short_version": "0.1.0",
-  "build": 3,
+  "build": 4,
   "channel": "alpha",
   "url": "https://github.com/alexfisenkov/MacSwitcher/releases",
-  "notes": "Preserve current prediction across delayed acknowledgements of the same input source; retain cancellation for genuine source changes."
+  "notes": "Block unsafe automatic AX selection in Codex. Native insert-first replacement remains a one-shot synthetic experiment, disabled in normal mode."
 }

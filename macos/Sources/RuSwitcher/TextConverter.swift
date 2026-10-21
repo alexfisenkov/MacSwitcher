@@ -196,6 +196,14 @@ final class TextConverter {
         let replacement: String
         let layoutContext: CombinedShiftContext?
         let predictionLayouts: (source: String, target: String)?
+        let requiresExplicitSelection: Bool
+        init(focus: CombinedShiftFocus, original: CombinedShiftSelectionSnapshot, replacement: String,
+             layoutContext: CombinedShiftContext?, predictionLayouts: (source: String, target: String)?,
+             requiresExplicitSelection: Bool = false) {
+            self.focus = focus; self.original = original; self.replacement = replacement
+            self.layoutContext = layoutContext; self.predictionLayouts = predictionLayouts
+            self.requiresExplicitSelection = requiresExplicitSelection
+        }
     }
     // Kept separately from confirmed history. clearState intentionally does not
     // erase an ambiguous write's source. Only an explicit matching-field manual
@@ -226,7 +234,21 @@ final class TextConverter {
     /// The only automatic edit entry point. It cannot fall back to clipboard,
     /// a global key queue or deletion based solely on a remembered character count.
     func replaceVerifiedSuffix(original: String, replacement: String, sourceLayoutID: String,
-                               resultLayoutID: String, execution: CombinedShiftExecutionContext) -> Bool {
+                               resultLayoutID: String, execution: CombinedShiftExecutionContext,
+                               inputBarrierIsActive: (() -> Bool)? = nil, forceNativeFixture: Bool = false) -> Bool {
+        let appID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let route = AutomaticEditorPolicy.route(bundleID: appID, suffix: original, sourceID: sourceLayoutID)
+        guard route != .blocked else { RuntimeDiagnostics.record(.nativeAutoBlocked); return false }
+        let usesNative = forceNativeFixture || route == .nativeCanary
+        if usesNative {
+            AXUIElementSetMessagingTimeout(execution.focus.element, 0.003)
+            defer { AXUIElementSetMessagingTimeout(execution.focus.element, 0.05) }
+            guard execution.isValid(timeout: 0.003), original == "ghbd", replacement == "прив", sourceLayoutID == "com.apple.keylayout.US",
+                  AutomaticEditorPolicy.fieldMatchesFixture(execution.focus),
+                  CommandLine.arguments.contains("--diagnostic-native-canary"),
+                  (!forceNativeFixture || (appID == "com.apple.TextEdit" && CommandLine.arguments.contains("--diagnostic-panel")))
+            else { RuntimeDiagnostics.record(.nativeAutoBlocked); return false }
+        }
         guard !hasUnconfirmedAXEdit(in: execution.focus),
               unconfirmedAXEdits.count < Self.maximumUnconfirmedFields else {
             RuntimeDiagnostics.record(.unconfirmedEditBlocked); return false
@@ -242,8 +264,28 @@ final class TextConverter {
         }
         isConverting = true
         defer { isConverting = false }
-        let result = replaceAXRange(original: snapshot, replacement: replacement,
-            expectedSelection: caret, execution: execution)
+        let result: CombinedShiftAXEditResult
+        if usesNative {
+            guard let inputBarrierIsActive, inputBarrierIsActive(),
+                  (route != .nativeCanary || AutomaticEditorPolicy.claimCanary()) else { return false }
+            let native = NativeAutoEventTransport.execute(original: original, replacement: replacement,
+                start: snapshot.range.location, execution: execution, inputBarrierIsActive: inputBarrierIsActive)
+            switch native {
+            case .refused: return false
+            case .uncertain(let candidate):
+                retainUnconfirmed(UnconfirmedAXEdit(focus: execution.focus, original: snapshot,
+                    replacement: candidate, layoutContext: nil, predictionLayouts: (sourceLayoutID, resultLayoutID),
+                    requiresExplicitSelection: true))
+                RuntimeDiagnostics.record(.nativeAutoUncertain)
+                return false
+            case .confirmed:
+                RuntimeDiagnostics.record(.nativeAutoVerified)
+                result = .confirmed
+            }
+        } else {
+            result = replaceAXRange(original: snapshot, replacement: replacement,
+                expectedSelection: caret, execution: execution)
+        }
         guard result == .confirmed else {
             if result == .unknown {
                 retainUnconfirmed(UnconfirmedAXEdit(focus: execution.focus, original: snapshot,
@@ -255,7 +297,7 @@ final class TextConverter {
         lastOriginal = original
         lastConverted = replacement
         lastWasBuffer = true
-        lastWasAXEdit = true
+        lastWasAXEdit = !usesNative
         lastConvertedCount = 0
         lastBoundaryCount = 0
         lastLayoutContext = nil
@@ -419,7 +461,12 @@ final class TextConverter {
 
     private func replaceAXRange(original: CombinedShiftSelectionSnapshot, replacement: String,
                                 expectedSelection: CFRange, execution: CombinedShiftExecutionContext) -> CombinedShiftAXEditResult {
-        CombinedShiftSuffixEditor.replace(original: original, replacement: replacement,
+        if NSRunningApplication(processIdentifier: execution.focus.processID)?.bundleIdentifier == AutomaticEditorPolicy.codexBundleID,
+           (expectedSelection.location != original.range.location || expectedSelection.length != original.range.length) {
+            RuntimeDiagnostics.record(.nativeAutoBlocked)
+            return .refused // never request a delayed programmatic selection in Codex
+        }
+        return CombinedShiftSuffixEditor.replace(original: original, replacement: replacement,
             expectedSelection: expectedSelection,
             access: CombinedShiftSuffixAccess(isValid: { execution.isValid() },
                 selectionRange: { execution.focus.selectionRange() },
@@ -453,13 +500,15 @@ final class TextConverter {
               pending.focus.processID == execution.focus.processID,
               CFEqual(pending.focus.element, execution.focus.element), execution.isValid(),
               let current = execution.focus.selectionRange() else { return false }
+        guard !pending.requiresExplicitSelection || current.length > 0 else { return false }
         let resultRange = CFRange(location: pending.original.range.location, length: pending.replacement.utf16.count)
         let observed = execution.focus.text(in: resultRange)
         guard let result = pending.original.resultSnapshot(replacement: pending.replacement,
             selection: current, observedText: observed) else {
             // A read-back of the exact unchanged source resolves a refused write,
             // but this gesture itself never follows it with another mutation.
-            if pending.original.resultSnapshot(replacement: pending.original.text, selection: current,
+            if !pending.requiresExplicitSelection,
+                pending.original.resultSnapshot(replacement: pending.original.text, selection: current,
                 observedText: execution.focus.text(in: pending.original.range)) != nil,
                 execution.isValid() { removeUnconfirmed(in: execution.focus) }
             return false
@@ -472,7 +521,8 @@ final class TextConverter {
             if outcome == .unknown {
                 retainUnconfirmed(UnconfirmedAXEdit(focus: execution.focus, original: result,
                     replacement: pending.original.text, layoutContext: pending.layoutContext?.reversed,
-                    predictionLayouts: pending.predictionLayouts.map { ($0.target, $0.source) }))
+                    predictionLayouts: pending.predictionLayouts.map { ($0.target, $0.source) },
+                    requiresExplicitSelection: pending.requiresExplicitSelection))
             }
             return false
         }
