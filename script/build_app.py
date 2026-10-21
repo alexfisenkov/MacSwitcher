@@ -96,7 +96,10 @@ def main(argv=None):
     if not executable.is_file():
         raise RuntimeError("SwiftPM executable was not produced")
     output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=".macswitcher-build-", dir=output.parent) as temporary:
+    # Sign in the system temporary directory: synchronized folders can attach
+    # Finder metadata between xattr and codesign, making that check racy.
+    # The project and final build output stay in their configured locations.
+    with tempfile.TemporaryDirectory(prefix="macswitcher-build-") as temporary:
         staged = Path(temporary) / "MacSwitcher.app"
         contents = staged / "Contents"
         (contents / "MacOS").mkdir(parents=True)
@@ -142,7 +145,7 @@ def main(argv=None):
             backup = output.with_name("MacSwitcher.previous-" + stamp + "-" + uuid.uuid4().hex[:8] + ".app")
             os.rename(output, backup)
             print("Previous build preserved:", backup)
-        os.rename(staged, output)
+        shutil.move(str(staged), str(output))
         run(["/usr/bin/xattr", "-cr", str(output)])
         run(["/usr/bin/codesign", "--verify", "--strict", "--deep", str(output)])
     print(json.dumps({"app": str(output), "bundle_id": BUNDLE_ID,
