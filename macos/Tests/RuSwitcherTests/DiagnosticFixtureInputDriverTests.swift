@@ -108,19 +108,39 @@ final class DiagnosticFixtureInputDriverTests: XCTestCase {
     func testFocusRequiresSameFrontmostProcessAndExactFrontWindow() {
         XCTAssertTrue(DiagnosticFixtureFocus.matches(expectedPID: 42, expectedWindowID: 77,
             frontmostPID: 42, frontWindowPID: 42, frontWindowID: 77))
-        for (pid, owner, window): (Int32?, Int32?, UInt32?) in [
-            (43, 42, 77), (42, 43, 77), (42, 42, 78), (nil, 42, 77),
-            (42, nil, 77), (42, 42, nil)
+        XCTAssertNil(DiagnosticFixtureFocus.failure(expectedPID: 42, expectedWindowID: 77,
+            frontmostPID: 42, frontWindowPID: 42, frontWindowID: 77))
+        for (pid, owner, window, expected): (Int32?, Int32?, UInt32?, DiagnosticFixtureFocusFailure) in [
+            (43, 42, 77, .foregroundProcess), (42, 43, 77, .frontWindowOwner),
+            (42, 42, 78, .frontWindowIdentity), (nil, 42, 77, .foregroundProcess),
+            (42, nil, 77, .frontWindowUnavailable), (42, 42, nil, .frontWindowUnavailable)
         ] {
             XCTAssertFalse(DiagnosticFixtureFocus.matches(expectedPID: 42, expectedWindowID: 77,
                 frontmostPID: pid, frontWindowPID: owner, frontWindowID: window))
+            XCTAssertEqual(DiagnosticFixtureFocus.failure(expectedPID: 42, expectedWindowID: 77,
+                frontmostPID: pid, frontWindowPID: owner, frontWindowID: window), expected)
         }
+    }
+
+    func testFixtureIdentityFailurePrecedesOtherFocusMismatches() {
+        XCTAssertEqual(DiagnosticFixtureFocus.failure(expectedPID: 42, expectedWindowID: 77,
+            fixtureIdentityMatches: false, frontmostPID: 43, frontWindowPID: nil, frontWindowID: nil),
+            .fixtureIdentity)
+    }
+
+    func testForegroundFailurePrecedesUnavailableFrontWindow() {
+        XCTAssertEqual(DiagnosticFixtureFocus.failure(expectedPID: 42, expectedWindowID: 77,
+            frontmostPID: 43, frontWindowPID: nil, frontWindowID: nil), .foregroundProcess)
     }
 
     func testMissingExpectedProcessOrWindowCannotAuthorizeGlobalPosting() {
         XCTAssertFalse(DiagnosticFixtureFocus.matches(expectedPID: 0, expectedWindowID: 77,
             frontmostPID: 0, frontWindowPID: 0, frontWindowID: 77))
+        XCTAssertEqual(DiagnosticFixtureFocus.failure(expectedPID: 0, expectedWindowID: 77,
+            frontmostPID: 0, frontWindowPID: 0, frontWindowID: 77), .fixtureIdentity)
         XCTAssertFalse(DiagnosticFixtureFocus.matches(expectedPID: 42, expectedWindowID: 0,
             frontmostPID: 42, frontWindowPID: 42, frontWindowID: 0))
+        XCTAssertEqual(DiagnosticFixtureFocus.failure(expectedPID: 42, expectedWindowID: 0,
+            frontmostPID: 42, frontWindowPID: 42, frontWindowID: 0), .frontWindowIdentity)
     }
 }

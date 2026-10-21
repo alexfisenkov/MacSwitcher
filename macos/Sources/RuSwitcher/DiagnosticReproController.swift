@@ -79,7 +79,8 @@ final class DiagnosticReproController: NSObject {
         driver.run(plan: plan) { [weak self] report in
             guard let self else { return }
             self.running = false
-            self.status.stringValue = "Synthetic pipeline \(report.plan.rawValue): \(report.outcome.rawValue), \(report.postedEvents) events. Inspect both fields/source. This is not physical HID acceptance."
+            let focusDetail = report.focusFailure.map { " Focus failure: \($0.rawValue)." } ?? ""
+            self.status.stringValue = "Synthetic pipeline \(report.plan.rawValue): \(report.outcome.rawValue), \(report.postedEvents) events. Inspect both fields/source. This is not physical HID acceptance." + focusDetail
             // Keep the fixture frontmost so its final selection/source can be
             // independently observed without another focus transition.
         }

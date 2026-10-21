@@ -103,11 +103,25 @@ enum DiagnosticFixturePlan: String, CaseIterable, Sendable {
     }
 }
 
+enum DiagnosticFixtureFocusFailure: String, Equatable, Sendable {
+    case fixtureIdentity, foregroundProcess, frontWindowUnavailable, frontWindowOwner, frontWindowIdentity
+}
+
 enum DiagnosticFixtureFocus {
     static func matches(expectedPID: Int32, expectedWindowID: UInt32, frontmostPID: Int32?,
                         frontWindowPID: Int32?, frontWindowID: UInt32?) -> Bool {
-        expectedPID > 0 && expectedWindowID > 0 && frontmostPID == expectedPID
-            && frontWindowPID == expectedPID && frontWindowID == expectedWindowID
+        failure(expectedPID: expectedPID, expectedWindowID: expectedWindowID, frontmostPID: frontmostPID,
+                frontWindowPID: frontWindowPID, frontWindowID: frontWindowID) == nil
+    }
+
+    static func failure(expectedPID: Int32, expectedWindowID: UInt32, fixtureIdentityMatches: Bool = true,
+                        frontmostPID: Int32?, frontWindowPID: Int32?, frontWindowID: UInt32?) -> DiagnosticFixtureFocusFailure? {
+        guard fixtureIdentityMatches, expectedPID > 0 else { return .fixtureIdentity }
+        guard frontmostPID == expectedPID else { return .foregroundProcess }
+        guard let frontWindowPID, let frontWindowID else { return .frontWindowUnavailable }
+        guard frontWindowPID == expectedPID else { return .frontWindowOwner }
+        guard expectedWindowID > 0, frontWindowID == expectedWindowID else { return .frontWindowIdentity }
+        return nil
     }
 }
 
@@ -120,6 +134,15 @@ struct DiagnosticFixtureReport: Sendable {
     let plan: DiagnosticFixturePlan
     let outcome: DiagnosticFixtureOutcome
     let postedEvents: Int
+    let focusFailure: DiagnosticFixtureFocusFailure?
+
+    init(plan: DiagnosticFixturePlan, outcome: DiagnosticFixtureOutcome, postedEvents: Int,
+         focusFailure: DiagnosticFixtureFocusFailure? = nil) {
+        self.plan = plan
+        self.outcome = outcome
+        self.postedEvents = postedEvents
+        self.focusFailure = focusFailure
+    }
 }
 
 @MainActor
@@ -198,6 +221,7 @@ private final class DiagnosticFixtureWorker: @unchecked Sendable {
     private let completion: @Sendable (DiagnosticFixtureReport) -> Void
     private let lock = NSLock()
     private var cancelled = false
+    private var firstFocusFailure: DiagnosticFixtureFocusFailure?
 
     init(plan: DiagnosticFixturePlan, processID: Int32, processEvent: @escaping @Sendable (CGEvent) -> Bool,
          completion: @escaping @Sendable (DiagnosticFixtureReport) -> Void) {
@@ -240,7 +264,8 @@ private final class DiagnosticFixtureWorker: @unchecked Sendable {
                     count += 1
                 } else { outcome = .eventUnavailable }
             }
-            completion(DiagnosticFixtureReport(plan: plan, outcome: outcome, postedEvents: count))
+            completion(DiagnosticFixtureReport(plan: plan, outcome: outcome, postedEvents: count,
+                                               focusFailure: firstFocusFailure))
         }
         guard let windowID = waitForReadyWindow() else {
             outcome = isCancelled ? .cancelled : .fixtureUnavailable
@@ -299,10 +324,14 @@ private final class DiagnosticFixtureWorker: @unchecked Sendable {
     }
 
     private func hasExpectedFocus(windowID: UInt32) -> Bool {
-        guard isKnownFixture(), let front = frontWindow() else { return false }
-        return DiagnosticFixtureFocus.matches(expectedPID: processID, expectedWindowID: windowID,
-            frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
-            frontWindowPID: front.pid, frontWindowID: front.id)
+        let knownFixture = isKnownFixture()
+        let foreground = knownFixture ? NSWorkspace.shared.frontmostApplication?.processIdentifier : nil
+        let front = knownFixture && foreground == processID ? frontWindow() : nil
+        let failure = DiagnosticFixtureFocus.failure(expectedPID: processID, expectedWindowID: windowID,
+            fixtureIdentityMatches: knownFixture, frontmostPID: foreground,
+            frontWindowPID: front?.pid, frontWindowID: front?.id)
+        if firstFocusFailure == nil { firstFocusFailure = failure }
+        return failure == nil
     }
 
     private func frontWindow() -> (pid: Int32, id: UInt32)? {
