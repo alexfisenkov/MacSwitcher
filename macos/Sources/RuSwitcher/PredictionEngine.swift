@@ -18,6 +18,23 @@ struct PredictionEngine: Sendable {
         "нажми", "нажмите", "клавиша", "клавишу", "клавиши", "клавишей", "буква", "букву",
         "буквы", "символ", "символа", "символом", "функция", "функцию", "переменная", "витамин"
     ]
+    private enum EvaluationRefusal: Error { case unavailableLexicon }
+    private static let domainContext: Set<String> = [
+        "сайт", "сайта", "сайте", "домен", "домена", "домене", "ссылка", "ссылке", "адрес", "адресу",
+        "хост", "хосте", "domain", "url", "website", "site", "host", "hostname", "link", "visit", "browse"
+    ]
+    private static let peopleModifiers: Set<String> = [
+        "эти", "все", "наши", "другие", "многие", "некоторые", "добрые", "хорошие", "новые", "молодые"
+    ]
+    // Conservative project policy, not an exhaustive IANA registry. All two-letter
+    // final labels are protected separately, including country-code-like labels.
+    private static let protectedHostnameSuffixes: Set<String> = [
+        "com", "org", "net", "edu", "gov", "mil", "int", "info", "biz", "name", "mobi", "online", "site",
+        "app", "dev", "tech", "shop", "store", "cloud", "website", "xyz", "pro", "one", "top", "club", "live",
+        "news", "world", "design", "space", "blog", "wiki", "video", "social", "email", "work", "agency",
+        "digital", "studio", "today", "travel", "support", "solutions", "systems", "network", "company",
+        "center", "zone", "link", "click", "tools", "pages", "рф", "xn--p1ai"
+    ]
     private static let literalPunctuation: Set<Character> = [",", ".", "!", "?", ";", ":", ")"]
 
     func evaluate(suffix: String, sourceLanguage: String, atBoundary: Bool = false,
@@ -31,9 +48,16 @@ struct PredictionEngine: Sendable {
         guard let currentRange = words.last else { return nil }
         let current = String(suffix[currentRange])
         let target = source == "en" ? "ru" : "en"
-        let corrected = correction(for: current, source: source, target: target,
-                                   atBoundary: atBoundary || suffix.last?.isWhitespace == true,
-                                   alwaysConvertWords: alwaysConvertWords, characterMapping: characterMapping)
+        let domainCues = (precedingWords + words.dropLast().map { String(suffix[$0]) }).suffix(3)
+        let hasDomainContext = domainCues.contains { Self.domainContext.contains(contextKey($0)) }
+        let hasPeopleCollocation = domainCues.last.map { Self.peopleModifiers.contains(contextKey($0)) } ?? false
+        let corrected: String?
+        do {
+            corrected = try correction(for: current, source: source, target: target,
+                atBoundary: atBoundary || suffix.last?.isWhitespace == true,
+                alwaysConvertWords: alwaysConvertWords, characterMapping: characterMapping,
+                hasDomainContext: hasDomainContext, hasPeopleCollocation: hasPeopleCollocation)
+        } catch { return nil }
         let resultingWord = corrected ?? current
 
         // A closed single f stays unresolved until the following token provides strong
@@ -64,31 +88,62 @@ struct PredictionEngine: Sendable {
     }
 
     private func correction(for word: String, source: String, target: String, atBoundary: Bool,
-                            alwaysConvertWords: Set<String>, characterMapping: [Character: Character]?) -> String? {
-        guard !protectedToken(word) else { return nil }
+                            alwaysConvertWords: Set<String>, characterMapping: [Character: Character]?,
+                            hasDomainContext: Bool, hasPeopleCollocation: Bool) throws -> String? {
         let stripped = stripTrailingPunctuation(word)
         guard let mapped = map(word, source: source, characterMapping: characterMapping) else { return nil }
         let candidates: [(core: String, suffix: String)] = stripped.suffix.isEmpty
             ? [(mapped, "")]
             : [(mapped, ""), (map(stripped.core, source: source, characterMapping: characterMapping) ?? "", stripped.suffix)]
-        // Owner-maintained exceptions are explicit target forms. Restrict them to
-        // boundaries so a short forced word cannot corrupt a longer word's prefix.
-        if atBoundary, !alwaysConvertWords.isEmpty {
-            for candidate in candidates where lexicalToken(candidate.core) {
-                if alwaysConvertWords.contains(candidate.core.lowercased()), candidate.core + candidate.suffix != word {
-                    return candidate.core + candidate.suffix
-                }
-            }
+        let forced = atBoundary ? candidates.first {
+            lexicalToken($0.core) && alwaysConvertWords.contains($0.core.lowercased())
+                && $0.core + $0.suffix != word
+        } : nil
+        // Mixed-case known brands can be recovered exactly (СрфеПЗЕ → ChatGPT).
+        // ALLCAPS acronyms still require a separate explicit owner boundary force.
+        let knownTarget = candidates.contains { lexicon.isProtectedTerm($0.core, language: target) }
+        let protectedHostname = hasProtectedHostnameShape(stripped.core)
+        let exactRussianDotEvidence = source == "en" && !hasDomainContext && candidates.contains {
+            lexicalToken($0.core)
+                && (!protectedHostname || (hasPeopleCollocation && $0.core.lowercased() == "люди"))
+                && (lexicon.frequency(of: $0.core, language: "ru") >= 50_000
+                    || lexicon.isProtectedTerm($0.core, language: "ru"))
         }
+        guard !protectedToken(word, allowKnownTargetCase: knownTarget || forced != nil,
+                              allowAllCaps: forced != nil, allowMappedInteriorDot: exactRussianDotEvidence) else { return nil }
+        // Owner exceptions remain bounded target forms and cannot bypass addresses,
+        // numbers, mixed scripts, paths or other structural technical protections.
+        if let forced { return forced.core + forced.suffix }
+        if lexicon.isProtectedTerm(stripped.core, language: source) { return nil }
         guard word.count >= 2 else { return nil }
-        // A recognized source word, including rare entries and sentence punctuation,
-        // always wins over an automatic guess. An explicit owner override above wins.
+        // Trigger entries remain strong source evidence. The much noisier full
+        // corpus is checked separately and must not freeze typos such as rfr.
         if lexicon.frequency(of: word, language: source) > 0
             || lexicon.frequency(of: stripped.core, language: source) > 0 { return nil }
+        guard let fullWordFrequency = lexicon.fullFrequency(of: word, language: source),
+              let fullCoreFrequency = stripped.suffix.isEmpty ? fullWordFrequency
+                : lexicon.fullFrequency(of: stripped.core, language: source) else {
+            throw EvaluationRefusal.unavailableLexicon
+        }
+        let rareSourceFrequency = max(fullWordFrequency, fullCoreFrequency)
         for candidate in candidates {
             guard lexicalToken(candidate.core), candidate.core.count >= 2 else { continue }
             let sourcePrefix = lexicon.prefixEvidence(for: stripped.core, language: source)
             let frequency = lexicon.frequency(of: candidate.core, language: target)
+            if rareSourceFrequency > 0 {
+                // Full tails contain names, misspellings, acronyms and subtitle noise.
+                // Only a very strong exact target may beat a low-frequency collision;
+                // target prefixes or an unweighted curated spelling cannot do so.
+                let minimum = atBoundary ? 50_000 : 100_000
+                guard rareSourceFrequency <= (atBoundary ? 50 : 10),
+                      frequency >= minimum, frequency / rareSourceFrequency >= 10_000 else { continue }
+                if !atBoundary && candidate.core.filter(\.isLetter).count < 4 { continue }
+            }
+            if rareSourceFrequency == 0, lexicon.isProtectedTerm(candidate.core, language: target),
+               candidate.core.filter(\.isLetter).count >= (atBoundary ? 3 : 4),
+               sourcePrefix.maximumFrequency <= 50 {
+                return candidate.core + candidate.suffix
+            }
             if atBoundary {
                 if frequency >= 500 { return candidate.core + candidate.suffix }
                 continue
@@ -116,21 +171,34 @@ struct PredictionEngine: Sendable {
         return core.count >= 4 && prefix.maximumFrequency >= 20_000 && prefix.completions > 0
     }
 
-    private func protectedToken(_ word: String) -> Bool {
+    private func protectedToken(_ word: String, allowKnownTargetCase: Bool = false,
+                                allowAllCaps: Bool = false, allowMappedInteriorDot: Bool = false) -> Bool {
         guard !word.isEmpty, word.count <= 96 else { return true }
         if word.contains(where: { $0.isNumber || "@_/:\\=+(){}<>#".contains($0) }) { return true }
         let letters = word.filter(\.isLetter)
         guard !letters.isEmpty else { return true }
-        if letters.count > 1 && letters == letters.uppercased() { return true }
-        if word.dropFirst().contains(where: \.isUppercase) { return true }
+        if !allowAllCaps, letters.count > 1 && letters == letters.uppercased() { return true }
+        if !allowKnownTargetCase, word.dropFirst().contains(where: \.isUppercase) { return true }
         let hasLatin = letters.contains(where: Self.isLatin)
         let hasCyrillic = letters.contains(where: Self.isCyrillic)
         if hasLatin && hasCyrillic { return true }
-        // A dot followed by letters inside a Latin token is URL/hostname-like. A final
-        // dot stays eligible: on QWERTY that physical key is Russian ю (levf. → думаю).
-        if hasLatin, let dot = word.firstIndex(of: "."), word.index(after: dot) < word.endIndex,
+        // Interior dots default to hostname protection. Exact Russian evidence may
+        // permit a layout correction; protected suffixes also need a narrow positive
+        // collocation, and a domain cue always keeps protection.
+        // A final dot remains eligible for Russian ю (levf. → думаю).
+        if hasLatin, !allowMappedInteriorDot, let dot = word.firstIndex(of: "."), word.index(after: dot) < word.endIndex,
            word[word.index(after: dot)...].contains(where: \.isLetter) { return true }
         return false
+    }
+
+    private func hasProtectedHostnameShape(_ word: String) -> Bool {
+        let labels = word.lowercased().split(separator: ".", omittingEmptySubsequences: false)
+        guard labels.count >= 2, labels.allSatisfy({ label in
+            !label.isEmpty && label.first != "-" && label.last != "-"
+                && label.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" })
+        }), let ending = labels.last else { return false }
+        return (ending.count == 2 && ending.allSatisfy(\.isLetter))
+            || Self.protectedHostnameSuffixes.contains(String(ending))
     }
 
     private func lexicalToken(_ word: String) -> Bool {

@@ -14,11 +14,12 @@ final class DiagnosticReproController: NSObject {
     private var running = false
     private var runningAuto = false
     private var automaticApplications = 0
+    private var fixtureDriver: DiagnosticFixtureInputDriver?
 
     init(monitor: KeyboardMonitor, converter: TextConverter) {
         self.monitor = monitor
         self.converter = converter
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 250),
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 340),
                           styleMask: [.titled, .closable], backing: .buffered, defer: false)
         super.init()
         window.title = "MacSwitcher — Internal Integration Test"
@@ -37,6 +38,17 @@ final class DiagnosticReproController: NSObject {
         window.contentView?.addSubview(auto)
         window.contentView?.addSubview(native)
         window.contentView?.addSubview(arm)
+        let fixturePlans: [(String, DiagnosticFixturePlan)] = [
+            ("Fixture: fast", .fast), ("Fixture: continue", .continuation),
+            ("Fixture: Tab", .tab), ("Fixture: double Shift", .doubleShift),
+            ("Fixture: two singles", .twoSingles)
+        ]
+        for (offset, entry) in fixturePlans.enumerated() {
+            let button = NSButton(title: entry.0, target: self, action: #selector(runOwnedFixture(_:)))
+            button.identifier = NSUserInterfaceItemIdentifier(entry.1.rawValue)
+            button.frame = NSRect(x: 20 + (offset % 3) * 195, y: 292 - (offset / 3) * 37, width: 190, height: 32)
+            window.contentView?.addSubview(button)
+        }
         window.contentView?.addSubview(status)
         window.center()
     }
@@ -50,8 +62,31 @@ final class DiagnosticReproController: NSObject {
         if runningAuto { automaticApplications += 1 }
     }
 
+    @objc private func runOwnedFixture(_ sender: NSButton) {
+        guard !running, fixtureDriver?.isRunning != true,
+              CommandLine.arguments.contains("--diagnostic-native-canary"),
+              monitor.nativeInputTransportAvailable,
+              let raw = sender.identifier?.rawValue,
+              let plan = DiagnosticFixturePlan(rawValue: raw),
+              let processor = monitor.makeDiagnosticFixtureEventProcessor() else { return }
+        running = true
+        monitor.resetCombinedShift()
+        monitor.resetPredictionContext()
+        converter.clearState()
+        status.stringValue = "Posting fixed synthetic fixture plan: \(plan.rawValue). Prepare Fixture A and US first."
+        let driver = DiagnosticFixtureInputDriver(processEvent: processor)
+        fixtureDriver = driver
+        driver.run(plan: plan) { [weak self] report in
+            guard let self else { return }
+            self.running = false
+            self.status.stringValue = "Synthetic pipeline \(report.plan.rawValue): \(report.outcome.rawValue), \(report.postedEvents) events. Inspect both fields/source. This is not physical HID acceptance."
+            // Keep the fixture frontmost so its final selection/source can be
+            // independently observed without another focus transition.
+        }
+    }
+
     @objc private func armCodexCanary() {
-        guard !running, monitor.nativeInputBarrierIsActive, AutomaticEditorPolicy.armCanary() else {
+        guard !running, monitor.nativeInputTransportAvailable, AutomaticEditorPolicy.armCanary() else {
             status.stringValue = "Not armed. Both diagnostic flags and an active tap are required; a claimed attempt cannot be armed again."
             return
         }
@@ -77,10 +112,19 @@ final class DiagnosticReproController: NSObject {
             let execution = CombinedShiftExecutionContext(focus: focus, inputRevision: self.monitor.inputRevision,
                 currentInputRevision: { [weak monitor = self.monitor] in monitor?.inputRevision ?? UInt64.max })
             LayoutSwitcher.switchTo(layoutID: context.targetLayoutID)
-            let success = await self.converter.convertSelection(context: context, execution: execution)
+            guard let lease = self.monitor.beginNativeInputTransaction(processID: focus.processID) else {
+                self.finish(false, automatic: false, reason: "Native input fence unavailable.")
+                return
+            }
+            var replayLayoutID: String?
+            defer { self.monitor.finishNativeInputTransaction(lease, replayLayoutID: replayLayoutID) }
+            let success = self.converter.convertSelection(context: context, execution: execution,
+                inputBarrierIsActive: { self.monitor.nativeInputTransactionIsCurrent(lease) })
             if success {
                 self.monitor.markConverted()
-                if let result = self.converter.lastResultLayoutID { LayoutSwitcher.switchTo(layoutID: result) }
+                if let result = self.converter.lastResultLayoutID, LayoutSwitcher.switchTo(layoutID: result) {
+                    replayLayoutID = result
+                }
             }
             self.finish(success && self.readValue(focus.element) == "привет", automatic: false)
         }
@@ -138,7 +182,7 @@ final class DiagnosticReproController: NSObject {
     @objc private func testNative() {
         guard !running else { return }
         guard CommandLine.arguments.contains("--diagnostic-native-canary"),
-              monitor.nativeInputBarrierIsActive else {
+              monitor.nativeInputTransportAvailable else {
             finishNative(false, reason: "Active native input gate unavailable. Relaunch with --diagnostic-panel --diagnostic-native-canary.")
             return
         }
@@ -165,22 +209,28 @@ final class DiagnosticReproController: NSObject {
             self.converter.clearState()
             let execution = CombinedShiftExecutionContext(focus: focus, inputRevision: self.monitor.inputRevision,
                 currentInputRevision: { [weak monitor = self.monitor] in monitor?.inputRevision ?? UInt64.max })
-            guard self.monitor.nativeInputBarrierIsActive,
-                  execution.isValid(), self.readValue(focus.element) == "ghbd" else {
+            guard let lease = self.monitor.beginNativeInputTransaction(processID: focus.processID) else {
                 self.finishNative(false, reason: "Test field or native input gate changed before the transaction.")
                 return
             }
-            let gateGeneration = self.monitor.nativeInputGateGeneration
+            var replayLayoutID: String?
+            defer { self.monitor.finishNativeInputTransaction(lease, replayLayoutID: replayLayoutID) }
+            guard execution.isValid(), self.readValue(focus.element) == "ghbd" else {
+                self.finishNative(false, reason: "Test field changed before the transaction.")
+                return
+            }
             let success = self.converter.replaceVerifiedSuffix(original: "ghbd", replacement: "прив",
                 sourceLayoutID: context.sourceLayoutID, resultLayoutID: context.targetLayoutID,
                 execution: execution,
                 inputBarrierIsActive: { [weak monitor = self.monitor] in
-                    monitor?.nativeInputBarrierIsActive == true && monitor?.nativeInputGateGeneration == gateGeneration
+                    monitor?.nativeInputTransactionIsCurrent(lease) == true
                 },
                 forceNativeFixture: true)
             if success {
                 self.monitor.markConverted()
-                if let result = self.converter.lastResultLayoutID { LayoutSwitcher.switchTo(layoutID: result) }
+                if let result = self.converter.lastResultLayoutID, LayoutSwitcher.switchTo(layoutID: result) {
+                    replayLayoutID = result
+                }
             }
             let finalRange = focus.selectionRange()
             self.finishNative(success && self.readValue(focus.element) == "прив"

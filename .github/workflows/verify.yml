@@ -17,9 +17,10 @@ jobs:
           swift test --package-path macos -j 4
       - name: Product tooling
         run: python3 -m unittest discover -s script -p 'test_*.py' -v
-      - name: Packaged resources
+      - name: Packaged resources and synthetic prediction benchmark
         run: |
           python3 script/build_app.py --ad-hoc
           .сборки/MacSwitcher.app/Contents/MacOS/RuSwitcher --self-test-resources
+          .сборки/MacSwitcher.app/Contents/MacOS/RuSwitcher --benchmark-prediction
       - name: Whitespace
         run: git diff --check

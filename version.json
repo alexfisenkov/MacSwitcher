@@ -1,8 +1,9 @@
 {
-  "version": "0.1.0-alpha.5",
+  "version": "0.1.0-alpha.6",
   "short_version": "0.1.0",
-  "build": 5,
+  "build": 6,
   "channel": "alpha",
   "url": "https://github.com/alexfisenkov/MacSwitcher/releases",
-  "notes": "Bounded read-only retry for unavailable native focus, with explicit AX failure diagnostics. Ordinary Codex autocorrection remains disabled pending broader acceptance."
+  "notes": "Candidate: acknowledged bounded native edits, observed input-source commits, 180 ms double Shift, and expanded licensed offline lexicons. Ordinary Codex rollout remains pending live acceptance.",
+  "native_backend_accepted": false
 }

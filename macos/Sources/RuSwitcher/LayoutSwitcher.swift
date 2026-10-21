@@ -77,11 +77,17 @@ enum LayoutSwitcher {
     }
 
     /// Переключает на конкретную раскладку по точному ID
-    static func switchTo(layoutID: String) {
+    @discardableResult
+    static func switchTo(layoutID: String) -> Bool {
+        switchToWithConfirmation(layoutID: layoutID) == .confirmed
+    }
+
+    static func switchToWithConfirmation(layoutID: String) -> LayoutSelectionCommit.Outcome {
         let sources = installedLayouts()
         if let target = sources.first(where: { sourceID($0) == layoutID }) {
-            select(target)
+            return selectWithConfirmation(target)
         }
+        return .refused
     }
 
     /// issue #19: выбирает источник, вызывая TISEnableInputSource ТОЛЬКО если он
@@ -89,14 +95,21 @@ enum LayoutSwitcher {
     /// enable уже включённого источника даёт системный запрос безопасности на КАЖДОЕ
     /// переключение. Наш `installedLayouts()` через TISCreateInputSourceList(_, false)
     /// и так отдаёт только включённые источники, так что обычно enable не нужен вовсе.
-    private static func select(_ source: TISInputSource) {
+    @discardableResult
+    private static func select(_ source: TISInputSource) -> Bool {
+        selectWithConfirmation(source) == .confirmed
+    }
+
+    private static func selectWithConfirmation(_ source: TISInputSource) -> LayoutSelectionCommit.Outcome {
         let requestedID = sourceID(source)
-        if !requestedID.isEmpty && currentLayoutID() == requestedID { return }
-        if let ptr = TISGetInputSourceProperty(source, kTISPropertyInputSourceIsEnabled),
-           Unmanaged<CFBoolean>.fromOpaque(ptr).takeUnretainedValue() != kCFBooleanTrue {
-            TISEnableInputSource(source)
-        }
-        TISSelectInputSource(source)
+        return LayoutSelectionCommit.requestAndObserve(targetID: requestedID,
+            currentID: currentLayoutID, request: {
+                if let ptr = TISGetInputSourceProperty(source, kTISPropertyInputSourceIsEnabled),
+                   Unmanaged<CFBoolean>.fromOpaque(ptr).takeUnretainedValue() != kCFBooleanTrue,
+                   TISEnableInputSource(source) != noErr { return false }
+                return TISSelectInputSource(source) == noErr
+            }, now: { ProcessInfo.processInfo.systemUptime },
+            pause: { usleep(useconds_t($0 * 1_000_000)) })
     }
 
     /// Все установленные раскладки (кэш; инвалидация по уведомлению TIS)

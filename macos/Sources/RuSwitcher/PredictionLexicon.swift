@@ -66,8 +66,13 @@ struct PredictionLexicon: Sendable {
     }
 
     private let indexes: [String: LanguageIndex]
+    private let fullLexicon: FullFrequencyLexicon
+    private let protectedTerms: ProtectedTerms
 
-    init(wordsByLanguage: [String: [String: Int]]) {
+    init(wordsByLanguage: [String: [String: Int]],
+         fullWordsByLanguage: [String: [String: Int]] = [:],
+         protectedTermsByLanguage: [String: Set<String>] = [:],
+         fullLexicon: FullFrequencyLexicon? = nil) {
         var grouped: [String: [String: Int]] = [:]
         for (language, words) in wordsByLanguage {
             let code = Self.languageCode(language)
@@ -77,6 +82,15 @@ struct PredictionLexicon: Sendable {
             } else { grouped[code] = words }
         }
         indexes = grouped.mapValues { LanguageIndex(words: $0) }
+        self.fullLexicon = fullLexicon ?? FullFrequencyLexicon(wordsByLanguage: fullWordsByLanguage)
+        protectedTerms = ProtectedTerms(termsByLanguage: protectedTermsByLanguage)
+    }
+
+    private init(indexes: [String: LanguageIndex], fullLexicon: FullFrequencyLexicon,
+                 protectedTerms: ProtectedTerms) {
+        self.indexes = indexes
+        self.fullLexicon = fullLexicon
+        self.protectedTerms = protectedTerms
     }
 
     init(tsvByLanguage: [String: String]) throws {
@@ -108,10 +122,35 @@ struct PredictionLexicon: Sendable {
             }
             contents[language] = try String(contentsOf: url, encoding: .utf8)
         }
-        return try PredictionLexicon(tsvByLanguage: contents)
+        var fullURLs: [String: URL] = [:]
+        for language in ["ru", "en"] {
+            guard let url = bundle.url(forResource: language + "-full", withExtension: "sqlite") else {
+                throw LoadError.missingResource(language + "-full")
+            }
+            fullURLs[language] = url
+        }
+        guard let termsURL = bundle.url(forResource: "protected-terms", withExtension: "tsv") else {
+            throw LoadError.missingResource("protected-terms")
+        }
+        let triggerLexicon = try PredictionLexicon(tsvByLanguage: contents)
+        return try PredictionLexicon(indexes: triggerLexicon.indexes,
+                                     fullLexicon: FullFrequencyLexicon(urlsByLanguage: fullURLs),
+                                     protectedTerms: ProtectedTerms(tsv: String(contentsOf: termsURL, encoding: .utf8)))
     }
 
+    /// Counts are separate: full corpus includes trigger entries, so do not sum them.
     var wordCounts: [String: Int] { indexes.mapValues { $0.frequencies.count } }
+    var fullWordCounts: [String: Int] { fullLexicon.wordCounts }
+    var protectedTermCounts: [String: Int] { protectedTerms.wordCounts }
+
+    /// nil is an unavailable exact database read; zero is a known missing word.
+    func fullFrequency(of word: String, language: String) -> Int? {
+        fullLexicon.frequency(of: word, language: language)
+    }
+
+    func isProtectedTerm(_ word: String, language: String) -> Bool {
+        protectedTerms.contains(word, language: language)
+    }
 
     func frequency(of word: String, language: String) -> Int {
         indexes[Self.languageCode(language)]?.frequencies[Self.normalize(word)] ?? 0
@@ -121,6 +160,6 @@ struct PredictionLexicon: Sendable {
         indexes[Self.languageCode(language)]?.prefixEvidence(Self.normalize(prefix)) ?? .empty
     }
 
-    private static func normalize(_ word: String) -> String { word.lowercased().precomposedStringWithCanonicalMapping }
-    private static func languageCode(_ value: String) -> String { String(value.lowercased().prefix(2)) }
+    static func normalize(_ word: String) -> String { word.lowercased().precomposedStringWithCanonicalMapping }
+    static func languageCode(_ value: String) -> String { String(value.lowercased().prefix(2)) }
 }

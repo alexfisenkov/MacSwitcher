@@ -122,7 +122,11 @@ struct TriggerConfig {
 
 final class KeyboardMonitor: @unchecked Sendable {
     fileprivate var eventTap: CFMachPort?
-    private var runLoopSource: CFRunLoopSource?
+    private var eventTapHost: KeyboardEventTapHost?
+    fileprivate var inputFence = InputEventFence()
+    private var sourceTransitions = InputSourceTransitionTracker()
+    private var nativeTransactionStart: (lease: InputEventFence.Lease, timestamp: UInt64)?
+    fileprivate var pendingCombinedShiftConversion: CombinedShiftRequest?
     private var combinedFocusObserver: NSObjectProtocol?
 
     /// Длина текущего набираемого слова
@@ -165,9 +169,52 @@ final class KeyboardMonitor: @unchecked Sendable {
     var predictionSessionID: UInt64 { predictionBuffer.sessionID }
     private(set) var predictionGeneration: UInt64 = 0
     private var nativeInputGateConfigured = false
-    private(set) var nativeInputGateGeneration: UInt64 = 0
+    var nativeInputGateGeneration: UInt64 { inputFence.generation }
+    var nativeInputTransportAvailable: Bool {
+        nativeInputGateConfigured && inputFence.isAvailable
+            && eventTap.map { CGEvent.tapIsEnabled(tap: $0) } == true
+    }
     var nativeInputBarrierIsActive: Bool {
-        nativeInputGateConfigured && eventTap.map { CGEvent.tapIsEnabled(tap: $0) } == true
+        nativeInputTransportAvailable && inputFence.hasActiveLease
+    }
+    var nativeFenceNeedsRecovery: Bool { eventTap != nil && !inputFence.isAvailable }
+
+    @MainActor
+    func makeDiagnosticFixtureEventProcessor() -> (@Sendable (CGEvent) -> Bool)? {
+        guard diagnosticFixtureFlagsEnabled(), nativeInputTransportAvailable else { return nil }
+        let fence = inputFence
+        return { [weak self] event in
+            guard !Thread.isMainThread, let self, diagnosticFixtureEventIsAdmitted(event) else { return false }
+            return processKeyboardInput(type: event.type, event: event, monitor: self,
+                                        fence: fence, diagnosticFixture: true) != nil
+        }
+    }
+    func beginNativeInputTransaction(processID: Int32) -> InputEventFence.Lease? {
+        guard nativeInputTransportAvailable, !sourceTransitions.hasPending else { return nil }
+        let startedAt = DispatchTime.now().uptimeNanoseconds
+        guard let lease = inputFence.begin(processID: processID, maximumDuration: 0.250) else { return nil }
+        nativeTransactionStart = (lease, startedAt)
+        return lease
+    }
+    func finishNativeInputTransaction(_ lease: InputEventFence.Lease, replayLayoutID: String?) {
+        if let start = nativeTransactionStart, start.lease == lease {
+            sourceTransitions.recordCompletedWindow(start: start.timestamp,
+                end: DispatchTime.now().uptimeNanoseconds)
+            nativeTransactionStart = nil
+        }
+        inputFence.finish(lease, replayLayoutID: replayLayoutID)
+    }
+    func noteUnconfirmedInputSource(_ targetID: String, requestedAt: UInt64) {
+        sourceTransitions.noteUnconfirmed(targetID: targetID, startingAt: requestedAt)
+    }
+    fileprivate func inputSourceNeedsRefresh(eventTimestamp: UInt64) -> Bool {
+        sourceTransitions.needsRefresh(eventTimestamp: eventTimestamp)
+    }
+    fileprivate func observeInputSource(_ sourceID: String) {
+        sourceTransitions.observe(sourceID: sourceID, at: DispatchTime.now().uptimeNanoseconds)
+    }
+    func nativeInputTransactionIsCurrent(_ lease: InputEventFence.Lease) -> Bool {
+        nativeInputTransportAvailable && inputFence.isCurrent(lease)
     }
     var onPredictionInput: (@MainActor (PredictionSnapshot) -> Void)?
     var onPredictionInvalidated: (@MainActor () -> Void)?
@@ -211,6 +258,7 @@ final class KeyboardMonitor: @unchecked Sendable {
         onAltTap: @escaping () -> Void,
         onAltReconvert: @escaping () -> Void
     ) -> Bool {
+        if eventTapHost != nil || eventTap != nil { stop() }
         self.onAltTap = onAltTap
         self.onAltReconvert = onAltReconvert
 
@@ -235,15 +283,20 @@ final class KeyboardMonitor: @unchecked Sendable {
             | (1 << CGEventType.leftMouseDown.rawValue)
             | (1 << CGEventType.rightMouseDown.rawValue)
             | (1 << CGEventType.otherMouseDown.rawValue)
+            | (1 << CGEventType.leftMouseUp.rawValue)
+            | (1 << CGEventType.rightMouseUp.rawValue)
+            | (1 << CGEventType.otherMouseUp.rawValue)
+            | (1 << CGEventType.leftMouseDragged.rawValue)
+            | (1 << CGEventType.rightMouseDragged.rawValue)
+            | (1 << CGEventType.otherMouseDragged.rawValue)
             | (1 << CGEventType.scrollWheel.rawValue)
 
-        // Caps Lock требует активного tap (consume), чтобы подавить переключение
-        // регистра. Для модификаторов оставляем listenOnly — не вмешиваемся в ввод.
-        // The experimental native writer is opt-in and confined to synthetic
-        // fixtures. Normal Shift behavior keeps its previous passive tap.
+        // A native transaction holds complete keyboard/mouse pairs on the
+        // independent tap runloop while the target confirms each edit step.
         let wantsNativeGate = CommandLine.arguments.contains("--diagnostic-native-canary")
             && CommandLine.arguments.contains("--diagnostic-panel")
-        let options: CGEventTapOptions = triggerConfig.isCapsLock || wantsNativeGate ? .defaultTap : .listenOnly
+        let options: CGEventTapOptions = triggerConfig.isCapsLock || wantsNativeGate || combinedShiftEnabled
+            || SettingsManager.shared.autoConvert ? .defaultTap : .listenOnly
 
         // Режим удалённого стола: session-уровень видит проброшенные Screen Sharing
         // нажатия (они инжектятся через CGEventPost, а HID-tap их не видит).
@@ -251,24 +304,20 @@ final class KeyboardMonitor: @unchecked Sendable {
             SettingsManager.shared.remoteDesktopMode ? .cgSessionEventTap : .cghidEventTap
         rslog("Tap location: \(SettingsManager.shared.remoteDesktopMode ? "session (remote desktop)" : "hid")")
 
-        guard let tap = CGEvent.tapCreate(
-            tap: tapLocation,
-            place: .tailAppendEventTap,
-            options: options,
-            eventsOfInterest: mask,
-            callback: keyboardCallback,
-            userInfo: Unmanaged.passUnretained(self).toOpaque()
-        ) else {
+        inputFence = InputEventFence()
+        let fence = inputFence
+        guard let host = KeyboardEventTapHost.start(location: tapLocation, options: options, mask: mask,
+            handler: { [weak self] _, type, event in
+                guard let self else { return Unmanaged.passUnretained(event) }
+                return keyboardCallback(type: type, event: event, monitor: self, fence: fence)
+            }) else {
             rslog("FAILED to create event tap - no permission")
             return false
         }
 
-        eventTap = tap
-        nativeInputGateGeneration &+= 1
+        eventTapHost = host
+        eventTap = host.tap
         nativeInputGateConfigured = options == .defaultTap
-        runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
 
         combinedFocusObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
@@ -280,7 +329,7 @@ final class KeyboardMonitor: @unchecked Sendable {
 
     func stop() {
         nativeInputGateConfigured = false
-        nativeInputGateGeneration &+= 1
+        inputFence.interrupt()
         interruptCombinedShift()
         predictionBuffer.reset()
         predictionSourceLayoutID = nil
@@ -288,19 +337,15 @@ final class KeyboardMonitor: @unchecked Sendable {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
             combinedFocusObserver = nil
         }
-        if let tap = eventTap {
-            CGEvent.tapEnable(tap: tap, enable: false)
-        }
-        if let source = runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
-        }
+        eventTapHost?.stop()
+        eventTapHost = nil
         eventTap = nil
-        runLoopSource = nil
     }
 
     fileprivate func nativeGateWasInterrupted() {
-        nativeInputGateGeneration &+= 1
+        inputFence.interrupt()
         interruptCombinedShift()
+        resetPredictionContext()
     }
 
     /// Перезапускает tap с актуальным конфигом триггера. Нужен при смене настройки —
@@ -333,6 +378,7 @@ final class KeyboardMonitor: @unchecked Sendable {
     /// наш обработчик клавиш, поэтому буфер строки декодировался бы старой раскладкой. Сбрасываем
     /// его (только строку — словный буфер трогаем как раньше).
     func resetLineBuffer(sourceLayoutID: String = LayoutSwitcher.currentLayoutID()) {
+        observeInputSource(sourceLayoutID)
         lineKeys = []
         lineSourceID = nil
         // TIS delivers source-change notifications after the source is already
@@ -375,7 +421,8 @@ final class KeyboardMonitor: @unchecked Sendable {
 
     /// Dictionary/scoring stay off the tap. The first event of a new session
     /// performs one bounded original-field capture before deferred prediction.
-    private func recordPredictionKey(keyCode: UInt16, flags: CGEventFlags, renderedText: String?) {
+    private func recordPredictionKey(keyCode: UInt16, flags: CGEventFlags, renderedText: String?,
+                                     renderedSourceLayoutID: String?) {
         if SettingsManager.shared.autoSwitchEnabled, SettingsManager.shared.autoConvert,
            !AutoSwitchPolicy.secureInputActive,
            flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskSecondaryFn]).isEmpty,
@@ -393,7 +440,8 @@ final class KeyboardMonitor: @unchecked Sendable {
               let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else {
             predictionBuffer.reset(); predictionSourceLayoutID = nil; return
         }
-        recordPredictionText(renderedText, processID: pid, sourceLayoutID: LayoutSwitcher.currentLayoutID())
+        recordPredictionText(renderedText, processID: pid,
+            sourceLayoutID: renderedSourceLayoutID ?? LayoutSwitcher.currentLayoutID())
     }
 
     /// Shared input boundary: receives the actual event text and its observed
@@ -469,6 +517,7 @@ final class KeyboardMonitor: @unchecked Sendable {
 
     /// Cancellation is also used for scrolling, tap recovery, pause/resume, and stale focus.
     fileprivate func interruptCombinedShift() {
+        pendingCombinedShiftConversion = nil
         invalidatePrediction()
         combinedShiftGesture.interrupt()
         combinedShiftProcessID = nil
@@ -483,8 +532,8 @@ final class KeyboardMonitor: @unchecked Sendable {
         keysTypedSinceConversion = true
     }
 
-    private func rememberTypedSource() {
-        let id = LayoutSwitcher.currentLayoutID()
+    private func rememberTypedSource(_ renderedSourceLayoutID: String?) {
+        let id = renderedSourceLayoutID ?? LayoutSwitcher.currentLayoutID()
         if currentWordLength == 0 { currentWordSourceID = id }
         else if currentWordSourceID != id { currentWordSourceID = nil }  // mixed-source word is unsafe to retype
         if lineKeys.isEmpty { lineSourceID = id }
@@ -547,26 +596,34 @@ final class KeyboardMonitor: @unchecked Sendable {
             combinedShiftFirstRequest = request
         }
         if case .switchLayout = action {
-            // This tap source is installed on the main CFRunLoop. Deliver the accepted solo
-            // NOW, before a following character can advance inputRevision and swallow it.
+            // Event handling is synchronously handed to main. Deliver the solo
+            // before another character can advance revision and swallow it.
             MainActor.assumeIsolated { onCombinedShift?(request) }
             return
         }
         // Correction validates the immutable first-tap field/revision again at its first edit.
-        DispatchQueue.main.async { [weak self, request] in
-            guard let self else { return }
-            guard request.inputRevision == self.inputRevision else {
-                RuntimeDiagnostics.record(.doubleRevisionChanged); return
-            }
-            self.onCombinedShift?(request)
+        // Retire this non-text release's forwarding reservation before starting
+        // conversion, and handle it before the tap thread admits another event.
+        // The OS-owned release returns after the synchronous conversion handoff.
+        pendingCombinedShiftConversion = request
+    }
+
+    @MainActor
+    fileprivate func deliverPendingCombinedShiftConversion(after fence: InputEventFence) {
+        guard inputFence === fence, let request = pendingCombinedShiftConversion else { return }
+        pendingCombinedShiftConversion = nil
+        guard request.inputRevision == inputRevision else {
+            RuntimeDiagnostics.record(.doubleRevisionChanged); return
         }
+        onCombinedShift?(request)
     }
 
     fileprivate func handleKeyDown(keyCode: UInt16, flags: CGEventFlags, char: Character? = nil,
-                                   renderedText: String? = nil) {
+                                   renderedText: String? = nil, renderedSourceLayoutID: String? = nil) {
         interruptCombinedShift()
         // Submit after existing buffer mutation. Structural/reset branches clear it.
-        defer { recordPredictionKey(keyCode: keyCode, flags: flags, renderedText: renderedText) }
+        defer { recordPredictionKey(keyCode: keyCode, flags: flags, renderedText: renderedText,
+            renderedSourceLayoutID: renderedSourceLayoutID) }
         triggerArmed = false
         switchArmed = false   // issue #14: клавиша между модификаторами = шорткат, не хоткей
         caseArmed = false; caseLastTapTime = nil   // issue #29
@@ -586,7 +643,7 @@ final class KeyboardMonitor: @unchecked Sendable {
             // Локальный аналог этого guard — ниже, на ветке модификаторов (PR #13).
             let modifiers = flags.intersection([.maskCommand, .maskControl, .maskAlternate])
             if !modifiers.isEmpty { fullReset(); return }
-            if let ch = char { handleForwardedChar(ch) }
+            if let ch = char { handleForwardedChar(ch, renderedSourceLayoutID: renderedSourceLayoutID) }
             return
         }
 
@@ -644,7 +701,7 @@ final class KeyboardMonitor: @unchecked Sendable {
         }
 
         if KeyMapping.keycodeToEN[keyCode] != nil {
-            rememberTypedSource()
+            rememberTypedSource(renderedSourceLayoutID)
             let tk = TypedKey(keyCode: keyCode, shift: flags.contains(.maskShift), caps: flags.contains(.maskAlphaShift))
             currentWordKeys.append(tk)
             lineKeys.append(tk)   // #24: буква в буфер строки
@@ -663,7 +720,7 @@ final class KeyboardMonitor: @unchecked Sendable {
     /// Обработка символа, проброшенного через удалённый стол (keyCode 0 + юникод).
     /// Работаем по самому символу: пробел — граница слова, backspace — откат,
     /// буква — кладём реальный символ в буфер (конверсия пойдёт по нему, см. convertKeys).
-    private func handleForwardedChar(_ ch: Character) {
+    private func handleForwardedChar(_ ch: Character, renderedSourceLayoutID: String?) {
         // Пробел — граница слова (как локальный keyCode space)
         if ch == " " {
             if currentWordLength > 0 {
@@ -699,7 +756,7 @@ final class KeyboardMonitor: @unchecked Sendable {
         }
         // Буква — кладём реальный символ (keyCode 0 = «проброшено»). shift несём из регистра.
         if ch.isLetter {
-            rememberTypedSource()
+            rememberTypedSource(renderedSourceLayoutID)
             let tk = TypedKey(keyCode: 0, shift: ch.isUppercase, caps: false, char: ch)
             currentWordKeys.append(tk)
             lineKeys.append(tk)   // #24
@@ -952,32 +1009,93 @@ final class KeyboardMonitor: @unchecked Sendable {
 // MARK: - C Callback
 
 private func keyboardCallback(
-    proxy: CGEventTapProxy,
     type: CGEventType,
     event: CGEvent,
-    userInfo: UnsafeMutableRawPointer?
+    monitor: KeyboardMonitor,
+    fence: InputEventFence
 ) -> Unmanaged<CGEvent>? {
     if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-        if let userInfo {
-            let monitor = Unmanaged<KeyboardMonitor>.fromOpaque(userInfo).takeUnretainedValue()
+        fence.interrupt()
+        DispatchQueue.main.async { [weak monitor] in
+            guard let monitor, monitor.inputFence === fence else { return }
             monitor.nativeGateWasInterrupted()
-            if let tap = monitor.eventTap {
-                CGEvent.tapEnable(tap: tap, enable: true)
-            }
+            if let tap = monitor.eventTap { CGEvent.tapEnable(tap: tap, enable: true) }
         }
-        return Unmanaged.passRetained(event)
+        return Unmanaged.passUnretained(event)
     }
 
     // Игнорируем собственные симулированные события по маркеру
-    if event.getIntegerValueField(.eventSourceUserData) == kRuSwitcherEventMarker {
-        return Unmanaged.passRetained(event)
+    let marker = event.getIntegerValueField(.eventSourceUserData)
+    if marker == kRuSwitcherEventMarker || marker == diagnosticFixtureEventMarker {
+        return Unmanaged.passUnretained(event)
     }
 
-    guard let userInfo else {
-        return Unmanaged.passRetained(event)
-    }
+    return processKeyboardInput(type: type, event: event, monitor: monitor, fence: fence)
+}
 
-    let monitor = Unmanaged<KeyboardMonitor>.fromOpaque(userInfo).takeUnretainedValue()
+private func diagnosticFixtureFlagsEnabled() -> Bool {
+    CommandLine.arguments.contains("--diagnostic-panel")
+        && CommandLine.arguments.contains("--diagnostic-native-canary")
+}
+
+private func diagnosticFixtureEventIsAdmitted(_ event: CGEvent) -> Bool {
+    guard diagnosticFixtureFlagsEnabled(),
+          event.getIntegerValueField(.eventSourceUserData) == diagnosticFixtureEventMarker,
+          let pid = Int32(exactly: event.getIntegerValueField(.eventTargetUnixProcessID)),
+          diagnosticFixtureProcessIsKnown(pid),
+          NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return false }
+    let code = event.getIntegerValueField(.keyboardEventKeycode)
+    if event.type == .flagsChanged {
+        return (code == 56 || code == 60) && event.flags.subtracting(.maskShift).isEmpty
+    }
+    return (event.type == .keyDown || event.type == .keyUp)
+        && [5, 4, 11, 2, 17, 45, 48, 7].contains(code) && event.flags.isEmpty
+}
+
+private func processKeyboardInput(type: CGEventType, event: CGEvent, monitor: KeyboardMonitor,
+                                  fence: InputEventFence, diagnosticFixture: Bool = false) -> Unmanaged<CGEvent>? {
+    let admission = fence.enterPhysicalEvent(eventTimestamp: event.timestamp)
+    let handoff = KeyboardCallbackEvent(event)
+    let forwarded: (event: Unmanaged<CGEvent>?, needsConversion: Bool) = DispatchQueue.main.sync {
+        let event = handoff.event
+        guard monitor.inputFence === fence else {
+            return (diagnosticFixture ? nil : Unmanaged.passUnretained(event), false)
+        }
+        if diagnosticFixture,
+           (!monitor.nativeInputTransportAvailable || !diagnosticFixtureEventIsAdmitted(event)) {
+            return (nil, false)
+        }
+        if admission.wasHeld { RuntimeDiagnostics.record(.nativeFenceHeldInput) }
+        if admission.interrupted { RuntimeDiagnostics.record(.nativeFenceInterrupted) }
+        var renderedSourceLayoutID: String?
+        if admission.needsSourceRefresh || monitor.inputSourceNeedsRefresh(eventTimestamp: event.timestamp) {
+            let observedSource = LayoutSwitcher.currentLayoutID()
+            monitor.observeInputSource(observedSource)
+            if type == .keyDown, !SettingsManager.shared.remoteDesktopMode {
+                renderedSourceLayoutID = HeldKeyReplay.refreshUsingObservedSource(event,
+                    observeSource: { observedSource })
+            }
+        }
+        let result = keyboardEventOnMain(type: type, event: event, monitor: monitor,
+            renderedSourceLayoutID: renderedSourceLayoutID)
+        return (result, monitor.pendingCombinedShiftConversion != nil)
+    }
+    fence.leavePhysicalEvent()
+    if forwarded.needsConversion {
+        DispatchQueue.main.sync { monitor.deliverPendingCombinedShiftConversion(after: fence) }
+    }
+    return forwarded.event
+}
+
+/// The tap thread waits synchronously for main and never touches the event during
+/// that handoff. The OS retains it until the original callback returns.
+private final class KeyboardCallbackEvent: @unchecked Sendable {
+    let event: CGEvent
+    init(_ event: CGEvent) { self.event = event }
+}
+
+private func keyboardEventOnMain(type: CGEventType, event: CGEvent,
+                                 monitor: KeyboardMonitor, renderedSourceLayoutID: String?) -> Unmanaged<CGEvent>? {
 
     if type == .keyDown {
         let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
@@ -985,7 +1103,7 @@ private func keyboardCallback(
         // Удалёнка: игнорируем авто-повтор клавиш — латентность Screen Sharing рождает
         // ложные повторы (тот самый «фффффф»), засоряющие буфер конверсии.
         if event.getIntegerValueField(.keyboardEventAutorepeat) != 0, remote {
-            return Unmanaged.passRetained(event)
+            return Unmanaged.passUnretained(event)
         }
         // Удалёнка: Screen Sharing пробрасывает символы как keyCode 0 + юникод-payload.
         // Читаем сам символ — без него буфер забивается keyCode 0 (= один символ → «фффффф»).
@@ -1009,17 +1127,19 @@ private func keyboardCallback(
         // A truncated/composed payload is left to the application and never guessed.
         let rendered = length > 0 && length < units.count
             ? String(decoding: units.prefix(length), as: UTF16.self) : nil
-        monitor.handleKeyDown(keyCode: keyCode, flags: event.flags, char: forwardedChar, renderedText: rendered)
+        monitor.handleKeyDown(keyCode: keyCode, flags: event.flags, char: forwardedChar,
+            renderedText: rendered, renderedSourceLayoutID: renderedSourceLayoutID)
     } else if type == .flagsChanged {
         let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
         if monitor.handleFlagsChanged(flags: event.flags, keyCode: keyCode, timestamp: event.timestamp) {
             return nil  // съедаем Caps Lock, чтобы не переключался регистр
         }
-    } else if type == .leftMouseDown || type == .rightMouseDown || type == .otherMouseDown {
+    } else if type == .leftMouseDown || type == .rightMouseDown || type == .otherMouseDown
+        || type == .leftMouseDragged || type == .rightMouseDragged || type == .otherMouseDragged {
         monitor.resetBuffersOnClick()
     } else if type == .scrollWheel {
         monitor.resetBuffersOnClick()
     }
 
-    return Unmanaged.passRetained(event)
+    return Unmanaged.passUnretained(event)
 }

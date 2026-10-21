@@ -103,6 +103,7 @@ final class PredictionCoordinator {
         let route = AutomaticEditorPolicy.route(bundleID: bundleID, suffix: snapshot.suffix, sourceID: snapshot.sourceLayoutID)
         guard route != .blocked else { RuntimeDiagnostics.record(.nativeAutoBlocked); return false }
         return !Task.isCancelled && SettingsManager.shared.autoSwitchEnabled && SettingsManager.shared.autoConvert
+            && snapshot.sourceLayoutID == LayoutSwitcher.currentLayoutID()
             && !AutoSwitchPolicy.shouldDeferToRemoteClient
             && (!AutoSwitchPolicy.isDeniedApp(bundleID) || route == .nativeCanary)
             && snapshot.sessionID == monitor.predictionSessionID
@@ -176,17 +177,43 @@ final class PredictionCoordinator {
                 guard let monitor, monitor.predictionGeneration == snapshot.generation else { return UInt64.max }
                 return monitor.inputRevision
             })
-        let inputGateGeneration = monitor.nativeInputGateGeneration
+        guard let lease = monitor.beginNativeInputTransaction(processID: snapshot.processID) else {
+            RuntimeDiagnostics.record(.nativeFenceUnavailable); return
+        }
+        var replayLayoutID: String?
+        defer { monitor.finishNativeInputTransaction(lease, replayLayoutID: replayLayoutID) }
         guard converter.replaceVerifiedSuffix(original: edit.original,
             replacement: edit.replacement, sourceLayoutID: snapshot.sourceLayoutID,
             resultLayoutID: resultID, execution: execution,
             inputBarrierIsActive: { [weak monitor] in
-                monitor?.nativeInputBarrierIsActive == true && monitor?.nativeInputGateGeneration == inputGateGeneration
+                monitor?.nativeInputTransactionIsCurrent(lease) == true
             }) else { RuntimeDiagnostics.record(.autoEditRefused); return }
-        RuntimeDiagnostics.record(.autoEditPosted)
+        RuntimeDiagnostics.record(.autoTextConfirmed)
+        guard monitor.nativeInputTransactionIsCurrent(lease) else {
+            monitor.resetPredictionContext()
+            RuntimeDiagnostics.record(.autoSourceFailed)
+            return
+        }
+        let sourceRequestedAt = DispatchTime.now().uptimeNanoseconds
+        let sourceOutcome = LayoutSwitcher.switchToWithConfirmation(layoutID: resultID)
+        guard sourceOutcome == .confirmed else {
+            if sourceOutcome == .unconfirmed {
+                monitor.noteUnconfirmedInputSource(resultID, requestedAt: sourceRequestedAt)
+            }
+            monitor.resetPredictionContext()
+            RuntimeDiagnostics.record(sourceOutcome == .unconfirmed ? .autoSourceUnconfirmed : .autoSourceFailed)
+            return
+        }
+        guard monitor.nativeInputTransactionIsCurrent(lease) else {
+            monitor.resetPredictionContext()
+            RuntimeDiagnostics.record(.autoSourceFailed)
+            return
+        }
+        replayLayoutID = resultID
+        RuntimeDiagnostics.record(.autoSourceConfirmed)
         monitor.recordPredictionResult(original: proposal.originalSuffix,
             replacement: proposal.replacementSuffix, resultLayoutID: resultID)
-        if LayoutSwitcher.currentLayoutID() != resultID { LayoutSwitcher.switchTo(layoutID: resultID) }
+        RuntimeDiagnostics.record(.autoEditPosted)
         let changedWord = zip(proposal.originalSuffix.split(whereSeparator: \.isWhitespace),
                               proposal.replacementSuffix.split(whereSeparator: \.isWhitespace))
             .first(where: { $0 != $1 }).map { String($0.0) } ?? edit.original

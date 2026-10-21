@@ -8,6 +8,7 @@ final class SettingsManager: @unchecked Sendable {
 
     private let defaults: UserDefaults
     private let combinedShiftDefault: Bool
+    private let nativeRolloutAccepted: Bool
 
     private enum Keys {
         static let autoSwitch = "com.ruswitcher.autoSwitch"
@@ -34,6 +35,7 @@ final class SettingsManager: @unchecked Sendable {
         static let caseDoubleTap = "com.ruswitcher.caseDoubleTap"
         static let caseRightOnly = "com.ruswitcher.caseRightOnly"
         static let autoConvert = "com.ruswitcher.autoConvert"
+        static let nativeAutoEnabled = "com.macswitcher.nativeAutoEnabled"
         static let smartConversion = "com.ruswitcher.smartConversion"
         static let convertByText = "com.ruswitcher.convertByText"
         static let convertWholeLine = "com.ruswitcher.convertWholeLine"
@@ -53,9 +55,11 @@ final class SettingsManager: @unchecked Sendable {
         static let alwaysConvertWords = "com.ruswitcher.alwaysConvertWords"
     }
 
-    init(defaults: UserDefaults, combinedShiftDefault: Bool = Bundle.main.object(forInfoDictionaryKey: "LocalCombinedShiftDefault") as? Bool ?? true) {
+    init(defaults: UserDefaults, combinedShiftDefault: Bool = Bundle.main.object(forInfoDictionaryKey: "LocalCombinedShiftDefault") as? Bool ?? true,
+         nativeRolloutAccepted: Bool = Bundle.main.object(forInfoDictionaryKey: "MacSwitcherNativeBackendAccepted") as? Bool ?? false) {
         self.defaults = defaults
         self.combinedShiftDefault = combinedShiftDefault
+        self.nativeRolloutAccepted = nativeRolloutAccepted
     }
 
     // MARK: - Properties
@@ -213,7 +217,17 @@ final class SettingsManager: @unchecked Sendable {
     /// Fresh installs wait for the onboarding choice; explicit preferences persist.
     var autoConvert: Bool {
         get { defaults.object(forKey: Keys.autoConvert) as? Bool ?? false }
-        set { defaults.set(newValue, forKey: Keys.autoConvert) }
+        set {
+            defaults.set(newValue, forKey: Keys.autoConvert)
+            if newValue && nativeRolloutAccepted { nativeAutoEnabled = true }
+        }
+    }
+
+    /// Existing installations enter the new backend only after explicit rollout.
+    /// The ordinary auto-convert choice enables it for a new installation.
+    var nativeAutoEnabled: Bool {
+        get { defaults.bool(forKey: Keys.nativeAutoEnabled) }
+        set { defaults.set(newValue, forKey: Keys.nativeAutoEnabled) }
     }
 
     /// issue #22 (вариант B): умная по-словная конверсия выделения — флипаем только слова не в

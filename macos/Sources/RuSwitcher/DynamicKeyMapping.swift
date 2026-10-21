@@ -27,9 +27,10 @@ enum DynamicKeyMapping {
     // MARK: - Public API
 
     /// Получить символ для keycode в конкретной раскладке
-    static func characterForKeycode(_ keycode: UInt16, layout: TISInputSource) -> Character? {
+    static func characterForKeycode(_ keycode: UInt16, layout: TISInputSource,
+                                    shift: Bool = false, caps: Bool = false) -> Character? {
         guard let layoutData = layoutDataForSource(layout) else { return nil }
-        return translateKeycode(keycode, layoutData: layoutData, shift: false)
+        return translateKeycode(keycode, layoutData: layoutData, shift: shift, caps: caps)
     }
 
     /// Проверяет, является ли keycode "буквой" в любой из двух раскладок

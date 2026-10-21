@@ -1,0 +1,4560 @@
+{
+  "schema": 1,
+  "provenance": "Project-authored public synthetic examples; no user text, contacts, private dictionary or external evaluation dataset.",
+  "authoring": "Core regression pairs are literal. Other wrong-layout inputs were authored with a separate transcribed standard QWERTY/ЙЦУКЕН fixture, never the production KeyMapping. All expected spellings were independently selected; the shipped JSON is static.",
+  "limits": "Small editorial regression corpus, not a representative precision estimate. Rare subtitle spellings and intent can be ambiguous. No model training, personal learning, or live input is involved.",
+  "cases": [
+    {
+      "id": "core-ru-greeting",
+      "input": "ghbdtn",
+      "sourceLanguage": "en",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": "привет",
+      "category": "explicit-regression"
+    },
+    {
+      "id": "core-ru-early-prefix",
+      "input": "ghbd",
+      "sourceLanguage": "en",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": "прив",
+      "category": "explicit-regression"
+    },
+    {
+      "id": "core-ru-rare-collision",
+      "input": "rfr ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "как ",
+      "category": "explicit-regression"
+    },
+    {
+      "id": "core-ru-final-letter-key",
+      "input": "levf.",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "думаю",
+      "category": "explicit-regression"
+    },
+    {
+      "id": "core-ru-hyphen",
+      "input": "xnj-nj",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "что-то",
+      "category": "explicit-regression"
+    },
+    {
+      "id": "core-en-greeting",
+      "input": "руддщ",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": "hello",
+      "category": "explicit-regression"
+    },
+    {
+      "id": "core-ru-title-punctuation",
+      "input": "Ghbdtn! ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "Привет! ",
+      "category": "explicit-regression"
+    },
+    {
+      "id": "core-ru-double-space",
+      "input": "xnj-nj  ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "что-то  ",
+      "category": "explicit-regression"
+    },
+    {
+      "id": "core-ru-nbsp",
+      "input": "ghbdtn ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "привет ",
+      "category": "explicit-regression"
+    },
+    {
+      "id": "core-ru-emoji-prefix",
+      "input": "🙂 ghbdtn ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "🙂 привет ",
+      "category": "explicit-regression"
+    },
+    {
+      "id": "core-ru-prior-English",
+      "input": "hello ghbdtn ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "hello привет ",
+      "category": "explicit-regression"
+    },
+    {
+      "id": "core-deferred-f-Russian",
+      "input": "f привет",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": "а привет",
+      "category": "explicit-regression"
+    },
+    {
+      "id": "core-deferred-f-both",
+      "input": "f  ghbdtn ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "а  привет ",
+      "category": "explicit-regression"
+    },
+    {
+      "id": "core-deferred-f-technical-next",
+      "input": "f ghbdtn",
+      "sourceLanguage": "en",
+      "atBoundary": false,
+      "precedingWords": [
+        "press"
+      ],
+      "expectedReplacement": "f привет",
+      "category": "explicit-regression"
+    },
+    {
+      "id": "ru-common-001",
+      "input": "cgfcb,j ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "спасибо ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-002",
+      "input": "gj;fkeqcnf ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "пожалуйста ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-003",
+      "input": "plhfdcndeqnt ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "здравствуйте ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-004",
+      "input": "lj,hsq ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "добрый ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-005",
+      "input": "dtxth ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "вечер ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-006",
+      "input": "enhj ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "утро ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-007",
+      "input": "ctujlyz ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "сегодня ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-008",
+      "input": "pfdnhf ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "завтра ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-009",
+      "input": "dxthf ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "вчера ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-010",
+      "input": "ctqxfc ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "сейчас ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-011",
+      "input": "gjnjv ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "потом ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-012",
+      "input": "gjnjve ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "потому ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-013",
+      "input": "gjxtve ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "почему ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-014",
+      "input": "rjulf ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "когда ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-015",
+      "input": "njulf ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "тогда ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-016",
+      "input": "vj;yj ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "можно ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-017",
+      "input": "ye;yj ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "нужно ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-018",
+      "input": "[jhjij ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "хорошо ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-019",
+      "input": "gkj[j ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "плохо ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-020",
+      "input": "jnkbxyj ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "отлично ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-021",
+      "input": "rjytxyj ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "конечно ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-022",
+      "input": "yfdthyjt ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "наверное ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-023",
+      "input": "rf;tncz ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "кажется ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-024",
+      "input": "ltqcndbntkmyj ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "действительно ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-025",
+      "input": "ghjcnj ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "просто ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-026",
+      "input": "jxtym ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "очень ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-027",
+      "input": "dctulf ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "всегда ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-028",
+      "input": "ybrjulf ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "никогда ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-029",
+      "input": "byjulf ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "иногда ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-030",
+      "input": "dvtcnt ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "вместе ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-031",
+      "input": "cyjdf ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "снова ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-032",
+      "input": ",scnhj ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "быстро ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-033",
+      "input": "vtlktyyj ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "медленно ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-034",
+      "input": "hf,jnfnm ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "работать ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-035",
+      "input": "hf,jnf ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "работа ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-036",
+      "input": "exbnmcz ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "учиться ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-037",
+      "input": "j,extybt ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "обучение ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-038",
+      "input": "ehjr ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "урок ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-039",
+      "input": "dbltj ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "видео ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-040",
+      "input": "ntrcn ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "текст ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-041",
+      "input": "ckjdj ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "слово ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-042",
+      "input": "ckjdf ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "слова ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-043",
+      "input": "heccrbq ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "русский ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-044",
+      "input": "fyukbqcrbq ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "английский ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-045",
+      "input": "xtkjdtr ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "человек ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-046",
+      "input": "k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "common-word",
+      "goldNote": "Gold revision 2: bare k.lb is ambiguous with a hostname; conservative policy abstains. Positive people collocations have separate gold cases."
+    },
+    {
+      "id": "ru-common-047",
+      "input": "dhtvz ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "время ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-048",
+      "input": ";bpym ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "жизнь ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-049",
+      "input": "ujhjl ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "город ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-050",
+      "input": "cnhfyf ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "страна ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-051",
+      "input": "Vjcrdf ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "Москва ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-052",
+      "input": "Hjccbz ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "Россия ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-053",
+      "input": "gbcmvj ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "письмо ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-054",
+      "input": "cjj,otybt ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "сообщение ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-055",
+      "input": "ntktajy ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "телефон ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-056",
+      "input": "rjvgm.nth ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "компьютер ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-057",
+      "input": "ghjuhfvvf ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "программа ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-058",
+      "input": "ghbkj;tybt ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "приложение ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-059",
+      "input": "rkfdbfnehf ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "клавиатура ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-060",
+      "input": "hfcrkflrf ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "раскладка ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-061",
+      "input": "jib,rf ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "ошибка ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-062",
+      "input": "bcghfdbnm ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "исправить ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-063",
+      "input": "bcghfdktybt ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "исправление ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-064",
+      "input": "ghbdtncndbt ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "приветствие ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-065",
+      "input": "ghbdsxrf ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "привычка ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-066",
+      "input": "gjybvfybt ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "понимание ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-067",
+      "input": "htitybt ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "решение ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-068",
+      "input": "djghjc ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "вопрос ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-069",
+      "input": "jndtn ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "ответ ",
+      "category": "common-word"
+    },
+    {
+      "id": "ru-common-070",
+      "input": "pflfxf ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "задача ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-001",
+      "input": "руддщ ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "hello ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-002",
+      "input": "цщкдв ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "world ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-003",
+      "input": "ерфтлы ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "thanks ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-004",
+      "input": "здуфыу ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "please ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-005",
+      "input": "ьщктштп ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "morning ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-006",
+      "input": "умутштп ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "evening ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-007",
+      "input": "ещьщккщц ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "tomorrow ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-008",
+      "input": "нуыеуквфн ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "yesterday ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-009",
+      "input": "ещвфн ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "today ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-010",
+      "input": "иусфгыу ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "because ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-011",
+      "input": "ьфниу ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "maybe ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-012",
+      "input": "фдцфны ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "always ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-013",
+      "input": "тумук ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "never ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-014",
+      "input": "ещпуерук ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "together ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-015",
+      "input": "фпфшт ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "again ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-016",
+      "input": "йгшслдн ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "quickly ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-017",
+      "input": "ыдщцдн ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "slowly ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-018",
+      "input": "цщклштп ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "working ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-019",
+      "input": "дуфктштп ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "learning ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-020",
+      "input": "дуыыщт ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "lesson ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-021",
+      "input": "мшвущ ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "video ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-022",
+      "input": "еуче ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "text ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-023",
+      "input": "дфтпгфпу ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "language ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-024",
+      "input": "лунищфкв ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "keyboard ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-025",
+      "input": "дфнщге ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "layout ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-026",
+      "input": "ьшыефлу ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "mistake ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-027",
+      "input": "сщккусешщт ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "correction ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-028",
+      "input": "йгуыешщт ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "question ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-029",
+      "input": "фтыцук ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "answer ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-030",
+      "input": "зкщоусе ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "project ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-031",
+      "input": "ршыещкн ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "history ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-032",
+      "input": "ьгышс ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "music ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-033",
+      "input": "куфвштп ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "reading ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-034",
+      "input": "цкшештп ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "writing ",
+      "category": "common-word"
+    },
+    {
+      "id": "en-common-035",
+      "input": "ызуфлштп ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "speaking ",
+      "category": "common-word"
+    },
+    {
+      "id": "brand-wrong-01-canonical",
+      "input": "ЩзутФШ ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "OpenAI ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-01-lower",
+      "input": "щзутфш ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "openai ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-02-canonical",
+      "input": "СрфеПЗЕ ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "ChatGPT ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-02-lower",
+      "input": "срфепзе ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "chatgpt ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-03-canonical",
+      "input": "Сдфгву ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "Claude ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-03-lower",
+      "input": "сдфгву ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "claude ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-04-canonical",
+      "input": "Сщвуч ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "Codex ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-04-lower",
+      "input": "сщвуч ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "codex ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-05-canonical",
+      "input": "ЬфсЫцшесрук ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "MacSwitcher ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-05-lower",
+      "input": "ьфсыцшесрук ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "macswitcher ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-06-canonical",
+      "input": "ЬфсВшсефеу ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "MacDictate ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-06-lower",
+      "input": "ьфсвшсефеу ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "macdictate ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-07-canonical",
+      "input": "Пуьштш ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "Gemini ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-07-lower",
+      "input": "пуьштш ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "gemini ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-08-canonical",
+      "input": "Фтеркщзшс ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "Anthropic ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-08-lower",
+      "input": "фтеркщзшс ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "anthropic ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-09-canonical",
+      "input": "ВуузЫуул ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "DeepSeek ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-09-lower",
+      "input": "вуузыуул ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "deepseek ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-10-canonical",
+      "input": "Еудупкфь ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "Telegram ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-10-lower",
+      "input": "еудупкфь ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "telegram ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-11-canonical",
+      "input": "ЦрфеыФзз ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "WhatsApp ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-11-lower",
+      "input": "црфеыфзз ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "whatsapp ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-12-canonical",
+      "input": "ПшеРги ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "GitHub ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-12-lower",
+      "input": "пшерги ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "github ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-13-canonical",
+      "input": "ПуеСщгкыу ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "GetCourse ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-13-lower",
+      "input": "пуесщгкыу ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "getcourse ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-14-canonical",
+      "input": "Ынтеч ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "Syntx ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-14-lower",
+      "input": "ынтеч ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "syntx ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-15-canonical",
+      "input": "РунПут ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "HeyGen ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-15-lower",
+      "input": "рунпут ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "heygen ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-16-canonical",
+      "input": "Ьшвощгктун ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "Midjourney ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-16-lower",
+      "input": "ьшвощгктун ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "midjourney ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-17-canonical",
+      "input": "Кгтцфн ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "Runway ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-17-lower",
+      "input": "кгтцфн ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "runway ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-18-canonical",
+      "input": "Ршппыашудв ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "Higgsfield ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-18-lower",
+      "input": "ршппыашудв ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "higgsfield ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-19-canonical",
+      "input": "Ьшскщыщае ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "Microsoft ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-19-lower",
+      "input": "ьшскщыщае ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "microsoft ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-20-canonical",
+      "input": "Фззду ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "Apple ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-20-lower",
+      "input": "фззду ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "apple ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-21-canonical",
+      "input": "Пщщпду ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "Google ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-21-lower",
+      "input": "пщщпду ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "google ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-22-canonical",
+      "input": "Нфтвуч ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "Yandex ",
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-wrong-22-lower",
+      "input": "нфтвуч ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "yandex ",
+      "category": "known-brand"
+    },
+    {
+      "id": "en-correct-001",
+      "input": "hello ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-002",
+      "input": "help ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-003",
+      "input": "helmet ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-004",
+      "input": "the ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-005",
+      "input": "press ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-006",
+      "input": "key ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-007",
+      "input": "keyboard ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-008",
+      "input": "button ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-009",
+      "input": "function ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-010",
+      "input": "variable ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-011",
+      "input": "symbol ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-012",
+      "input": "cat ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-013",
+      "input": "dog ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-014",
+      "input": "house ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-015",
+      "input": "work ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-016",
+      "input": "world ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-017",
+      "input": "word ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-018",
+      "input": "good ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-019",
+      "input": "bad ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-020",
+      "input": "you ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-021",
+      "input": "me ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-022",
+      "input": "we ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-023",
+      "input": "they ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-024",
+      "input": "them ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-025",
+      "input": "their ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-026",
+      "input": "there ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-027",
+      "input": "computer ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-028",
+      "input": "program ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-029",
+      "input": "application ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-030",
+      "input": "learning ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-031",
+      "input": "lesson ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-032",
+      "input": "school ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-033",
+      "input": "teacher ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-034",
+      "input": "student ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-035",
+      "input": "information ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-036",
+      "input": "communication ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-037",
+      "input": "automation ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-038",
+      "input": "philosophy ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-039",
+      "input": "antidisestablishmentarianism ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "en-correct-040",
+      "input": "electroencephalographically ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-001",
+      "input": "привет ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-002",
+      "input": "как ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-003",
+      "input": "думаю ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-004",
+      "input": "что-то ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-005",
+      "input": "спасибо ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-006",
+      "input": "пожалуйста ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-007",
+      "input": "здравствуйте ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-008",
+      "input": "работа ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-009",
+      "input": "учиться ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-010",
+      "input": "обучение ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-011",
+      "input": "урок ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-012",
+      "input": "видео ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-013",
+      "input": "текст ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-014",
+      "input": "слово ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-015",
+      "input": "слова ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-016",
+      "input": "русский ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-017",
+      "input": "английский ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-018",
+      "input": "человек ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-019",
+      "input": "люди ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-020",
+      "input": "время ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-021",
+      "input": "жизнь ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-022",
+      "input": "город ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-023",
+      "input": "страна ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-024",
+      "input": "Москва ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-025",
+      "input": "Россия ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-026",
+      "input": "письмо ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-027",
+      "input": "сообщение ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-028",
+      "input": "телефон ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-029",
+      "input": "компьютер ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-030",
+      "input": "программа ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-031",
+      "input": "приложение ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-032",
+      "input": "клавиатура ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-033",
+      "input": "раскладка ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-034",
+      "input": "ошибка ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "ru-correct-035",
+      "input": "исправить ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "correct-word"
+    },
+    {
+      "id": "brand-correct-01",
+      "input": "OpenAI ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-correct-02",
+      "input": "ChatGPT ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-correct-03",
+      "input": "Claude ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-correct-04",
+      "input": "Codex ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-correct-05",
+      "input": "MacSwitcher ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-correct-06",
+      "input": "MacDictate ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-correct-07",
+      "input": "Gemini ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-correct-08",
+      "input": "Anthropic ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-correct-09",
+      "input": "DeepSeek ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-correct-10",
+      "input": "Telegram ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-correct-11",
+      "input": "WhatsApp ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-correct-12",
+      "input": "GitHub ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-correct-13",
+      "input": "GetCourse ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-correct-14",
+      "input": "Syntx ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-correct-15",
+      "input": "HeyGen ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-correct-16",
+      "input": "Midjourney ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-correct-17",
+      "input": "Runway ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-correct-18",
+      "input": "Higgsfield ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-correct-19",
+      "input": "Microsoft ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-correct-20",
+      "input": "Apple ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-correct-21",
+      "input": "Google ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "known-brand"
+    },
+    {
+      "id": "brand-correct-22",
+      "input": "Yandex ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "known-brand"
+    },
+    {
+      "id": "en-name-01",
+      "input": "Alexander ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "en-name-02",
+      "input": "Alexey ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "en-name-03",
+      "input": "Sergey ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "en-name-04",
+      "input": "Sergei ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "en-name-05",
+      "input": "Dmitry ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "en-name-06",
+      "input": "Andrey ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "en-name-07",
+      "input": "John ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "en-name-08",
+      "input": "Jane ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "en-name-09",
+      "input": "Mary ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "en-name-10",
+      "input": "William ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "en-name-11",
+      "input": "Sophia ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "en-name-12",
+      "input": "Olivia ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "en-name-13",
+      "input": "Michael ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "en-name-14",
+      "input": "James ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "en-name-15",
+      "input": "Charlotte ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "en-name-16",
+      "input": "Benjamin ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "ru-name-01",
+      "input": "Александр ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "ru-name-02",
+      "input": "Алексей ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "ru-name-03",
+      "input": "Сергей ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "ru-name-04",
+      "input": "Дмитрий ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "ru-name-05",
+      "input": "Андрей ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "ru-name-06",
+      "input": "Иван ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "ru-name-07",
+      "input": "Фёдор ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "ru-name-08",
+      "input": "Мария ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "ru-name-09",
+      "input": "Елена ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "ru-name-10",
+      "input": "Ольга ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "ru-name-11",
+      "input": "София ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "ru-name-12",
+      "input": "Анна ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "ru-name-13",
+      "input": "Петров ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "ru-name-14",
+      "input": "Иванов ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "ru-name-15",
+      "input": "Смирнов ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "ru-name-16",
+      "input": "Пушкин ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "public-name"
+    },
+    {
+      "id": "technical-001",
+      "input": "API",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-002",
+      "input": "GPT",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-003",
+      "input": "AI",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-004",
+      "input": "HTTP",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-005",
+      "input": "HTTPS",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-006",
+      "input": "HTML",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-007",
+      "input": "CSS",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-008",
+      "input": "JSON",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-009",
+      "input": "XML",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-010",
+      "input": "SQL",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-011",
+      "input": "SDK",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-012",
+      "input": "CLI",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-013",
+      "input": "GPU",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-014",
+      "input": "CPU",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-015",
+      "input": "RAM",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-016",
+      "input": "SSD",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-017",
+      "input": "USB",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-018",
+      "input": "VPN",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-019",
+      "input": "DNS",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-020",
+      "input": "TCP",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-021",
+      "input": "UDP",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-022",
+      "input": "URL",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-023",
+      "input": "OAuth",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-024",
+      "input": "UUID",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-025",
+      "input": "UTF8",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-026",
+      "input": "UTF16",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-027",
+      "input": "SwiftUI",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-028",
+      "input": "fooBar",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-029",
+      "input": "someVariable",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-030",
+      "input": "myFunction",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-031",
+      "input": "ghbdtn123",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-032",
+      "input": "ghbdtn_foo",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-033",
+      "input": "hello_world",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-034",
+      "input": "foo@example.org",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-035",
+      "input": "user+tag@example.org",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-036",
+      "input": "https://example.org/ghbdtn",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-037",
+      "input": "http://example.com",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-038",
+      "input": "fisenkov.ru",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-039",
+      "input": "foo.com",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-040",
+      "input": "www.example.com",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-041",
+      "input": "/tmp/ghbdtn",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-042",
+      "input": "C:\\Temp\\ghbdtn",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-043",
+      "input": "f(x)",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-044",
+      "input": "Ctrl+f",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-045",
+      "input": "@ghbdtn",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-046",
+      "input": "#ghbdtn",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-047",
+      "input": "ghбdtn",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-048",
+      "input": "срфеgзе",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-049",
+      "input": "срфепзе123",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-050",
+      "input": "@срфепзе",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-051",
+      "input": "https://срфепзе",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-052",
+      "input": "foo()",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-053",
+      "input": "{ghbdtn}",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-054",
+      "input": "<ghbdtn>",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-055",
+      "input": "a=b",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "technical-056",
+      "input": "1+2",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "ambiguous-01",
+      "input": "f",
+      "sourceLanguage": "en",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "ambiguous"
+    },
+    {
+      "id": "ambiguous-02",
+      "input": "F",
+      "sourceLanguage": "en",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "ambiguous"
+    },
+    {
+      "id": "ambiguous-03",
+      "input": "f ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "ambiguous"
+    },
+    {
+      "id": "ambiguous-04",
+      "input": "F ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "ambiguous"
+    },
+    {
+      "id": "ambiguous-05",
+      "input": "a",
+      "sourceLanguage": "en",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "ambiguous"
+    },
+    {
+      "id": "ambiguous-06",
+      "input": "i",
+      "sourceLanguage": "en",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "ambiguous"
+    },
+    {
+      "id": "ambiguous-07",
+      "input": "я",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "ambiguous"
+    },
+    {
+      "id": "ambiguous-08",
+      "input": "а",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "ambiguous"
+    },
+    {
+      "id": "ambiguous-09",
+      "input": "и",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "ambiguous"
+    },
+    {
+      "id": "ambiguous-10",
+      "input": "gh",
+      "sourceLanguage": "en",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "ambiguous"
+    },
+    {
+      "id": "ambiguous-11",
+      "input": "ghb",
+      "sourceLanguage": "en",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "ambiguous"
+    },
+    {
+      "id": "ambiguous-12",
+      "input": "rfr",
+      "sourceLanguage": "en",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "ambiguous"
+    },
+    {
+      "id": "ambiguous-13",
+      "input": "руд",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "ambiguous"
+    },
+    {
+      "id": "ambiguous-14",
+      "input": "x",
+      "sourceLanguage": "en",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "ambiguous"
+    },
+    {
+      "id": "ambiguous-15",
+      "input": "X",
+      "sourceLanguage": "en",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "ambiguous"
+    },
+    {
+      "id": "ambiguous-16",
+      "input": "q",
+      "sourceLanguage": "en",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "ambiguous"
+    },
+    {
+      "id": "ambiguous-17",
+      "input": "й",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "ambiguous"
+    },
+    {
+      "id": "technical-f-01",
+      "input": "f привет",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [
+        "press"
+      ],
+      "expectedReplacement": null,
+      "category": "technical-context"
+    },
+    {
+      "id": "technical-f-02",
+      "input": "f привет",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [
+        "key"
+      ],
+      "expectedReplacement": null,
+      "category": "technical-context"
+    },
+    {
+      "id": "technical-f-03",
+      "input": "f привет",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [
+        "keys"
+      ],
+      "expectedReplacement": null,
+      "category": "technical-context"
+    },
+    {
+      "id": "technical-f-04",
+      "input": "f привет",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [
+        "keyboard"
+      ],
+      "expectedReplacement": null,
+      "category": "technical-context"
+    },
+    {
+      "id": "technical-f-05",
+      "input": "f привет",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [
+        "button"
+      ],
+      "expectedReplacement": null,
+      "category": "technical-context"
+    },
+    {
+      "id": "technical-f-06",
+      "input": "f привет",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [
+        "function"
+      ],
+      "expectedReplacement": null,
+      "category": "technical-context"
+    },
+    {
+      "id": "technical-f-07",
+      "input": "f привет",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [
+        "variable"
+      ],
+      "expectedReplacement": null,
+      "category": "technical-context"
+    },
+    {
+      "id": "technical-f-08",
+      "input": "f привет",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [
+        "symbol"
+      ],
+      "expectedReplacement": null,
+      "category": "technical-context"
+    },
+    {
+      "id": "technical-f-09",
+      "input": "f привет",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [
+        "нажми"
+      ],
+      "expectedReplacement": null,
+      "category": "technical-context"
+    },
+    {
+      "id": "technical-f-10",
+      "input": "f привет",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [
+        "нажмите"
+      ],
+      "expectedReplacement": null,
+      "category": "technical-context"
+    },
+    {
+      "id": "technical-f-11",
+      "input": "f привет",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [
+        "клавиша"
+      ],
+      "expectedReplacement": null,
+      "category": "technical-context"
+    },
+    {
+      "id": "technical-f-12",
+      "input": "f привет",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [
+        "клавишу"
+      ],
+      "expectedReplacement": null,
+      "category": "technical-context"
+    },
+    {
+      "id": "technical-f-13",
+      "input": "f привет",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [
+        "клавиши"
+      ],
+      "expectedReplacement": null,
+      "category": "technical-context"
+    },
+    {
+      "id": "technical-f-14",
+      "input": "f привет",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [
+        "клавишей"
+      ],
+      "expectedReplacement": null,
+      "category": "technical-context"
+    },
+    {
+      "id": "technical-f-15",
+      "input": "f привет",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [
+        "буква"
+      ],
+      "expectedReplacement": null,
+      "category": "technical-context"
+    },
+    {
+      "id": "technical-f-16",
+      "input": "f привет",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [
+        "букву"
+      ],
+      "expectedReplacement": null,
+      "category": "technical-context"
+    },
+    {
+      "id": "technical-f-17",
+      "input": "f привет",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [
+        "буквы"
+      ],
+      "expectedReplacement": null,
+      "category": "technical-context"
+    },
+    {
+      "id": "technical-f-18",
+      "input": "f привет",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [
+        "символ"
+      ],
+      "expectedReplacement": null,
+      "category": "technical-context"
+    },
+    {
+      "id": "technical-f-19",
+      "input": "f привет",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [
+        "символа"
+      ],
+      "expectedReplacement": null,
+      "category": "technical-context"
+    },
+    {
+      "id": "technical-f-20",
+      "input": "f привет",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [
+        "символом"
+      ],
+      "expectedReplacement": null,
+      "category": "technical-context"
+    },
+    {
+      "id": "technical-f-21",
+      "input": "f привет",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [
+        "функция"
+      ],
+      "expectedReplacement": null,
+      "category": "technical-context"
+    },
+    {
+      "id": "technical-f-22",
+      "input": "f привет",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [
+        "функцию"
+      ],
+      "expectedReplacement": null,
+      "category": "technical-context"
+    },
+    {
+      "id": "technical-f-23",
+      "input": "f привет",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [
+        "переменная"
+      ],
+      "expectedReplacement": null,
+      "category": "technical-context"
+    },
+    {
+      "id": "technical-f-24",
+      "input": "f привет",
+      "sourceLanguage": "ru",
+      "atBoundary": false,
+      "precedingWords": [
+        "витамин"
+      ],
+      "expectedReplacement": null,
+      "category": "technical-context"
+    },
+    {
+      "id": "deferred-unresolved-01",
+      "input": "f я",
+      "sourceLanguage": "en",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "ambiguous-context"
+    },
+    {
+      "id": "deferred-unresolved-02",
+      "input": "f не",
+      "sourceLanguage": "en",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "ambiguous-context"
+    },
+    {
+      "id": "deferred-unresolved-03",
+      "input": "f xyzzy",
+      "sourceLanguage": "en",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "ambiguous-context"
+    },
+    {
+      "id": "deferred-unresolved-04",
+      "input": "f hello",
+      "sourceLanguage": "en",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "ambiguous-context"
+    },
+    {
+      "id": "deferred-unresolved-05",
+      "input": "f ghb",
+      "sourceLanguage": "en",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "ambiguous-context"
+    },
+    {
+      "id": "deferred-unresolved-06",
+      "input": "F привет",
+      "sourceLanguage": "en",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "ambiguous-context"
+    },
+    {
+      "id": "deferred-unresolved-07",
+      "input": "'f' привет",
+      "sourceLanguage": "en",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "ambiguous-context"
+    },
+    {
+      "id": "deferred-unresolved-08",
+      "input": "\"f\" привет",
+      "sourceLanguage": "en",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "ambiguous-context"
+    },
+    {
+      "id": "deferred-unresolved-09",
+      "input": "f(x) привет",
+      "sourceLanguage": "en",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "ambiguous-context"
+    },
+    {
+      "id": "deferred-unresolved-10",
+      "input": "Ctrl+f привет",
+      "sourceLanguage": "en",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "ambiguous-context"
+    },
+    {
+      "id": "deferred-unresolved-11",
+      "input": "hello\nghbdtn",
+      "sourceLanguage": "en",
+      "atBoundary": false,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "ambiguous-context"
+    },
+    {
+      "id": "allcaps-protection-01",
+      "input": "ПЗЕ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "allcaps-protection-02",
+      "input": "ФЗШ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "allcaps-protection-03",
+      "input": "РЕЕЗ",
+      "sourceLanguage": "ru",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "allcaps-protection-04",
+      "input": "GHBDTN",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "technical-token"
+    },
+    {
+      "id": "domain-cue-01-preceding",
+      "input": "k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [
+        "сайт"
+      ],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-cue-01-inline",
+      "input": "сайт k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-cue-02-preceding",
+      "input": "k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [
+        "домен"
+      ],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-cue-02-inline",
+      "input": "домен k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-cue-03-preceding",
+      "input": "k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [
+        "адрес"
+      ],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-cue-03-inline",
+      "input": "адрес k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-cue-04-preceding",
+      "input": "k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [
+        "ссылка"
+      ],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-cue-04-inline",
+      "input": "ссылка k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-cue-05-preceding",
+      "input": "k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [
+        "domain"
+      ],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-cue-05-inline",
+      "input": "domain k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-cue-06-preceding",
+      "input": "k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [
+        "website"
+      ],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-cue-06-inline",
+      "input": "website k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-cue-07-preceding",
+      "input": "k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [
+        "url"
+      ],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-cue-07-inline",
+      "input": "url k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-cue-08-preceding",
+      "input": "k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [
+        "link"
+      ],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-cue-08-inline",
+      "input": "link k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-01",
+      "input": "google.com",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-02",
+      "input": "github.com",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-03",
+      "input": "openai.com",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-04",
+      "input": "yandex.ru",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-05",
+      "input": "vk.com",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-06",
+      "input": "ya.ru",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-07",
+      "input": "x.com",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-08",
+      "input": "t.co",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-09",
+      "input": "t.me",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-10",
+      "input": "example.org",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-11",
+      "input": "example.com",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-12",
+      "input": "example.net",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-13",
+      "input": "www.example.org",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-14",
+      "input": "www.k.lb",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-15",
+      "input": "k.lb/path",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-16",
+      "input": "http://k.lb",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-17",
+      "input": "https://k.lb",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-18",
+      "input": "http://rjvgm.nth",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-19",
+      "input": "user@k.lb",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-20",
+      "input": "user@rjvgm.nth",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-21",
+      "input": "contact@example.org",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-22",
+      "input": "name+tag@example.com",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-23",
+      "input": "localhost",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-24",
+      "input": "computer",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-25",
+      "input": "keyboard",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-26",
+      "input": "layout",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-27",
+      "input": "correction",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-28",
+      "input": "sesquipedalian",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-29",
+      "input": "zymurgy",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-30",
+      "input": "frequency",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-31",
+      "input": "dictionary",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-32",
+      "input": "offline",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-33",
+      "input": "engineering",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-34",
+      "input": "architecture",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-35",
+      "input": "testing",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "domain-and-English-36",
+      "input": "repository",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "explicit-domain-or-correct-English"
+    },
+    {
+      "id": "people-collocation-01",
+      "input": "k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [
+        "эти"
+      ],
+      "expectedReplacement": "люди ",
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "people-collocation-02",
+      "input": "k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [
+        "все"
+      ],
+      "expectedReplacement": "люди ",
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "people-collocation-03",
+      "input": "k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [
+        "наши"
+      ],
+      "expectedReplacement": "люди ",
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "people-collocation-04",
+      "input": "k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [
+        "другие"
+      ],
+      "expectedReplacement": "люди ",
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "people-collocation-05",
+      "input": "k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [
+        "многие"
+      ],
+      "expectedReplacement": "люди ",
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "people-collocation-06",
+      "input": "k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [
+        "некоторые"
+      ],
+      "expectedReplacement": "люди ",
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "people-collocation-07",
+      "input": "k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [
+        "добрые"
+      ],
+      "expectedReplacement": "люди ",
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "people-collocation-08",
+      "input": "k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [
+        "хорошие"
+      ],
+      "expectedReplacement": "люди ",
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "people-collocation-09",
+      "input": "k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [
+        "новые"
+      ],
+      "expectedReplacement": "люди ",
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "people-collocation-10",
+      "input": "k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [
+        "молодые"
+      ],
+      "expectedReplacement": "люди ",
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "people-collocation-inline-01",
+      "input": "эти k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "эти люди ",
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "people-collocation-inline-02",
+      "input": "все k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "все люди ",
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "people-collocation-inline-03",
+      "input": "наши k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "наши люди ",
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "people-collocation-inline-04",
+      "input": "добрые k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": "добрые люди ",
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "hostname-abstain-01",
+      "input": "k.lb",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "hostname-abstain-02",
+      "input": "k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "hostname-abstain-03",
+      "input": "Открой k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "hostname-abstain-04",
+      "input": "go to k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "hostname-abstain-05",
+      "input": "c.lf ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "hostname-abstain-06",
+      "input": "Открой c.lf ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "hostname-abstain-07",
+      "input": "эти c.lf ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "hostname-abstain-08",
+      "input": "domain эти k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "hostname-abstain-09",
+      "input": "сайт наши k.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "hostname-abstain-10",
+      "input": "rjvgm.lb ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "hostname-abstain-11",
+      "input": "k.ru ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "hostname-abstain-12",
+      "input": "k.io ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "hostname-abstain-13",
+      "input": "k.ai ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "hostname-abstain-14",
+      "input": "k.us ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "hostname-abstain-15",
+      "input": "k.de ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "hostname-abstain-16",
+      "input": "k.co.uk ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "hostname-abstain-17",
+      "input": "rjvgm.com ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "hostname-abstain-18",
+      "input": "rjvgm.org ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "hostname-abstain-19",
+      "input": "rjvgm.dev ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "hostname-abstain-20",
+      "input": "rjvgm.app ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "hostname-abstain-21",
+      "input": "rjvgm.info ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "hostname-abstain-22",
+      "input": "rjvgm.site ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "hostname-abstain-23",
+      "input": "rjvgm.tech ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "hostname-abstain-24",
+      "input": "rjvgm.cloud ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "hostname-protection-gold-v2"
+    },
+    {
+      "id": "hostname-abstain-25",
+      "input": "rjvgm.online ",
+      "sourceLanguage": "en",
+      "atBoundary": true,
+      "precedingWords": [],
+      "expectedReplacement": null,
+      "category": "hostname-protection-gold-v2"
+    }
+  ],
+  "goldRevision": 2,
+  "goldChangelog": [
+    {
+      "revision": 2,
+      "changedCaseIDs": [
+        "ru-common-046"
+      ],
+      "reason": "Corrected acceptance criterion: bare hostname-shaped k.lb must remain unchanged without a narrow positive Russian people collocation. Earlier no-context correction was too aggressive; this is an explicit gold change, not a score-only adjustment."
+    }
+  ]
+}

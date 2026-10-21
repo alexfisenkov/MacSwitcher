@@ -2,6 +2,24 @@ import XCTest
 @testable import RuSwitcher
 
 final class CombinedShiftSettingsTests: XCTestCase {
+    func testAutoConvertChoiceCannotBypassCandidateRolloutGate() throws {
+        let domain = "RuSwitcherTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let candidate = SettingsManager(defaults: defaults, nativeRolloutAccepted: false)
+        candidate.autoConvert = true
+        XCTAssertTrue(candidate.autoConvert)
+        XCTAssertFalse(candidate.nativeAutoEnabled)
+        candidate.autoConvert = false
+        candidate.autoConvert = true
+        XCTAssertFalse(candidate.nativeAutoEnabled)
+        let accepted = SettingsManager(defaults: defaults, nativeRolloutAccepted: true)
+        accepted.autoConvert = true
+        XCTAssertTrue(accepted.nativeAutoEnabled)
+        // A controlled owner rollout remains explicit for the pilot.
+        candidate.nativeAutoEnabled = false
+        XCTAssertFalse(candidate.nativeAutoEnabled)
+    }
     func testAutomaticCorrectionWaitsForChoiceAndPreservesExplicitOptOut() throws {
         let domain = "RuSwitcherTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))

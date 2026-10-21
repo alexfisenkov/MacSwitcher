@@ -1,12 +1,13 @@
 {
-  "schema": 1,
+  "schema": 2,
   "upstream": "https://github.com/hermitdave/FrequencyWords",
   "revision": "525f9b560de45753a5ea01069454e72e9aa541c6",
   "corpus": "OpenSubtitles 2018",
   "license": "CC-BY-SA-4.0",
   "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
-  "max_entries_per_language": 200000,
-  "transformation": "NFC/lowercase/alphabet filter/max frequency duplicates/frequency descending then lexical",
+  "max_trigger_entries_per_language": 200000,
+  "transformation": "NFC/lowercase/alphabet and length 1...40 filter/max frequency duplicates; top 200k frequency descending then lexical for triggers; all filtered words sorted into read-only exact SQLite",
+  "sqlite_builder_version": "3.50.4",
   "languages": {
     "ru": {
       "source_url": "https://raw.githubusercontent.com/hermitdave/FrequencyWords/525f9b560de45753a5ea01069454e72e9aa541c6/content/2018/ru/ru_full.txt",
@@ -14,7 +15,15 @@
       "output": "macos/Sources/RuSwitcher/Resources/ru.tsv",
       "output_sha256": "0900f2f5a9be8843e4c10a3e34fdff4f45e13b9687ad9e8f80923f8bed2220b8",
       "entries": 200000,
-      "bytes": 4129260
+      "bytes": 4129260,
+      "full": {
+        "output": "macos/Sources/RuSwitcher/Resources/ru-full.sqlite",
+        "output_sha256": "88d92a509d7448bfe12fcd70bb66a3ff76571231601378c9c42274c944bdd51f",
+        "entries": 1178533,
+        "bytes": 29569024,
+        "schema": 1,
+        "storage": "SQLite frequencies(word TEXT PRIMARY KEY, frequency INTEGER) WITHOUT ROWID; metadata; user_version=1"
+      }
     },
     "en": {
       "source_url": "https://raw.githubusercontent.com/hermitdave/FrequencyWords/525f9b560de45753a5ea01069454e72e9aa541c6/content/2018/en/en_full.txt",
@@ -22,7 +31,30 @@
       "output": "macos/Sources/RuSwitcher/Resources/en.tsv",
       "output_sha256": "f77203659ef53f56abad265dca021a0308b26f5800ef67d33403c84aefbbf2f7",
       "entries": 200000,
-      "bytes": 2375131
+      "bytes": 2375131,
+      "full": {
+        "output": "macos/Sources/RuSwitcher/Resources/en-full.sqlite",
+        "output_sha256": "1b00dd21575f8206b888941d87fe0942ca86a9e5180b69100caa33c3c8272596",
+        "entries": 1387382,
+        "bytes": 21594112,
+        "schema": 1,
+        "storage": "SQLite frequencies(word TEXT PRIMARY KEY, frequency INTEGER) WITHOUT ROWID; metadata; user_version=1"
+      }
     }
+  },
+  "protected_terms": {
+    "source": "dictionaries/protected-terms-source.tsv",
+    "source_sha256": "6787b2cd600cd70ae44f3239979dedbb56bc36291f3763597b4cebcc259ba2e7",
+    "output": "macos/Sources/RuSwitcher/Resources/protected-terms.tsv",
+    "output_sha256": "145f388d15aeccd3033374ec957be41d926851a58a0ecd19467cca414fda5d55",
+    "entries": 2434,
+    "counts": {
+      "ru": 872,
+      "en": 1562
+    },
+    "bytes": 45723,
+    "provenance": "Project-curated public spellings of brands, technology, common given/family names, IT words and place names; no personal contacts or user text",
+    "license": "CC0-1.0",
+    "license_url": "https://creativecommons.org/publicdomain/zero/1.0/"
   }
 }

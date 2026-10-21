@@ -28,7 +28,8 @@ struct CombinedShiftGesture {
     private var pressed: Press?
     private var firstTap: Tap?
     private let soloLimit: UInt64 = 250_000_000
-    private let doubleWindow: UInt64 = 400_000_000
+    // A double must finish quickly; pauses belong to independent solo switches.
+    private let doubleWindow: UInt64 = 180_000_000
 
     mutating func press(_ side: Side, at timestamp: UInt64, context: CombinedShiftContext) {
         guard pressed == nil else { interrupt(); return }  // overlapping Shift keys are a chord

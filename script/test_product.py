@@ -39,6 +39,18 @@ class ProductTests(unittest.TestCase):
         self.assertNotIn("LocalProjectRoot", info)
         self.assertNotIn(b"/Users/", plistlib.dumps(info))
 
+    def test_native_rollout_metadata_requires_explicit_boolean_acceptance(self):
+        build = load("build_app")
+        version = build.json.loads((ROOT / "version.json").read_text())
+        for accepted in (False, True):
+            with patch.object(build.json, "loads", return_value={**version, "native_backend_accepted": accepted}):
+                info = build.metadata(ROOT, "a" * 40, False)
+                self.assertIs(info["MacSwitcherNativeBackendAccepted"], accepted)
+        for malformed in ("false", 0, 1, None):
+            with patch.object(build.json, "loads", return_value={**version, "native_backend_accepted": malformed}):
+                with self.assertRaisesRegex(ValueError, "acceptance must be a boolean"):
+                    build.metadata(ROOT, "a" * 40, False)
+
     def test_builder_refuses_installed_or_symlink_target(self):
         build = load("build_app")
         with self.assertRaises(ValueError):

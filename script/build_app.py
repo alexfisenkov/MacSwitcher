@@ -38,6 +38,10 @@ def metadata(root, revision, dirty):
                 MacSwitcherReleaseVersion=version["version"],
                 MacSwitcherChannel=version["channel"],
                 SourceRevision=revision, SourceDirty=dirty)
+    accepted = version.get("native_backend_accepted", False)
+    if type(accepted) is not bool:
+        raise ValueError("Native backend acceptance must be a boolean")
+    info["MacSwitcherNativeBackendAccepted"] = accepted
     # Never bake a private source checkout path or the old personal updater into an app.
     for key in list(info):
         if key.startswith("LocalProject") or key.startswith("LocalUpstream"):

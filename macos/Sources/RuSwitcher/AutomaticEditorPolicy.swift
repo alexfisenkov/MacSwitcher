@@ -1,13 +1,14 @@
 import AppKit
 import ApplicationServices
 
-/// Known incompatible numeric AX selection must never be used by Codex auto.
-/// Its replacement mechanism remains an explicit, one-shot synthetic canary.
-enum AutomaticEditorRoute: Equatable { case axRange, blocked, nativeCanary }
+/// Codex never uses numeric AX selection. Ordinary native editing is a separate
+/// rollout; the fixed owned fixture can exercise it before that rollout.
+enum AutomaticEditorRoute: Equatable { case axRange, blocked, nativeCanary, nativeVerified }
 
 @MainActor
 enum AutomaticEditorPolicy {
     static let codexBundleID = "com.openai.codex"
+    static let inputFixtureBundleID = "com.alexfisenkov.macswitcher.inputfixture"
     private static var canaryClaimed = false
     private static var armedUntil: TimeInterval?
 
@@ -20,7 +21,13 @@ enum AutomaticEditorPolicy {
 
     static func route(bundleID: String?, suffix: String, sourceID: String,
                       arguments: [String] = CommandLine.arguments,
-                      claimed: Bool? = nil, armed: Bool? = nil) -> AutomaticEditorRoute {
+                      claimed: Bool? = nil, armed: Bool? = nil,
+                      nativeEnabled: Bool? = nil) -> AutomaticEditorRoute {
+        if bundleID == inputFixtureBundleID,
+           arguments.contains("--diagnostic-panel"),
+           arguments.contains("--diagnostic-native-canary") { return .nativeVerified }
+        if (nativeEnabled ?? SettingsManager.shared.nativeAutoEnabled),
+           !arguments.contains("--diagnostic-only-auto") { return .nativeVerified }
         guard bundleID == codexBundleID else { return .axRange }
         guard arguments.contains("--diagnostic-native-canary"), arguments.contains("--diagnostic-panel"),
               armed ?? (armedUntil.map { ProcessInfo.processInfo.systemUptime < $0 } ?? false),

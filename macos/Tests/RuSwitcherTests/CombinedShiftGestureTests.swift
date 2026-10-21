@@ -40,10 +40,30 @@ final class CombinedShiftGestureTests: XCTestCase {
         XCTAssertEqual(tap(&gesture, .left, down: 560, up: 580, context: ruToEn), .switchLayout(ruToEn))
     }
 
-    func testSecondTapOutside400msStartsNewSingle() {
+    func testThinkingPauseBeyond180msProducesSeparateImmediateSingleSwitches() {
         var gesture = CombinedShiftGesture()
         XCTAssertEqual(tap(&gesture, .left, down: 10, up: 60, context: enToRu), .switchLayout(enToRu))
-        XCTAssertEqual(tap(&gesture, .right, down: 410, up: 461, context: ruToEn), .switchLayout(ruToEn))
+        XCTAssertEqual(tap(&gesture, .right, down: 241, up: 291, context: ruToEn), .switchLayout(ruToEn))
+    }
+
+    func testSecondReleaseExactly180msAfterFirstStillConverts() {
+        var gesture = CombinedShiftGesture()
+        XCTAssertEqual(tap(&gesture, .left, down: 10, up: 60, context: enToRu), .switchLayout(enToRu))
+        XCTAssertEqual(tap(&gesture, .right, down: 190, up: 240, context: ruToEn), .convert(enToRu))
+    }
+
+    func testSecondReleaseOneNanosecondBeyond180msStartsNewSingle() {
+        var gesture = CombinedShiftGesture()
+        XCTAssertEqual(tap(&gesture, .left, down: 10, up: 60, context: enToRu), .switchLayout(enToRu))
+        gesture.press(.right, at: 190 * ms, context: ruToEn)
+        XCTAssertEqual(gesture.release(.right, at: 240 * ms + 1), .switchLayout(ruToEn))
+    }
+
+    func testTapAfterThinkingPauseStartsItsOwnDoubleInNewDirection() {
+        var gesture = CombinedShiftGesture()
+        XCTAssertEqual(tap(&gesture, .left, down: 10, up: 60, context: enToRu), .switchLayout(enToRu))
+        XCTAssertEqual(tap(&gesture, .right, down: 241, up: 291, context: ruToEn), .switchLayout(ruToEn))
+        XCTAssertEqual(tap(&gesture, .left, down: 330, up: 370, context: enToRu), .convert(ruToEn))
     }
 
     func testKeyMouseOrModifierInterruptionCancelsPressAndPendingTap() {
@@ -84,10 +104,12 @@ final class CombinedShiftGestureTests: XCTestCase {
     }
 
     func testTripleTapProducesSingleDoubleSingle() {
-        var gesture = CombinedShiftGesture()
-        XCTAssertEqual(tap(&gesture, .left, down: 10, up: 50, context: enToRu), .switchLayout(enToRu))
-        XCTAssertEqual(tap(&gesture, .right, down: 100, up: 140, context: ruToEn), .convert(enToRu))
-        XCTAssertEqual(tap(&gesture, .left, down: 180, up: 220, context: ruToEn), .switchLayout(ruToEn))
+        for (firstDirection, nextDirection) in [(enToRu, ruToEn), (ruToEn, enToRu)] {
+            var gesture = CombinedShiftGesture()
+            XCTAssertEqual(tap(&gesture, .left, down: 10, up: 50, context: firstDirection), .switchLayout(firstDirection))
+            XCTAssertEqual(tap(&gesture, .right, down: 100, up: 140, context: nextDirection), .convert(firstDirection))
+            XCTAssertEqual(tap(&gesture, .left, down: 180, up: 220, context: nextDirection), .switchLayout(nextDirection))
+        }
     }
 
     func testTwoDoublePairsPreserveEachOriginalDirectionForUndo() {

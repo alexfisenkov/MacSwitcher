@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var lastFlagShown: String?            // идентичность раскладки для детекта смены (не title!)
     private var badgeCache: [String: NSImage] = [:]  // монохромные плашки, чтобы не перерисовывать 2с-опросом
     private var diagnosticRepro: DiagnosticReproController?
+    private static let recoveryCopyItemTag = 71003
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
@@ -94,6 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         settingsController.onAutoConvertChanged = { [weak self] _ in
             self?.predictionCoordinator.invalidate()
             self?.keyboardMonitor.resetPredictionContext()
+            self?.reconfigureTap()
             self?.rebuildMenu()  // синхронизировать галочку в меню
         }
         settingsController.onRemoteDesktopChanged = { [weak self] _ in
@@ -503,7 +505,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // флаг «застревает». Постоянный лёгкий опрос держит иконку в синхроне с системой.
         iconRefreshTimer?.invalidate()
         iconRefreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.updateStatusIcon() }
+            Task { @MainActor in
+                guard let self else { return }
+                if self.monitoringActive, self.keyboardMonitor.nativeFenceNeedsRecovery {
+                    // A timed-out lease stays invalid. Replace the tap/fence
+                    // only after main returns; pending originals remain retained.
+                    self.reconfigureTap()
+                }
+                self.updateStatusIcon()
+            }
         }
         rslog("Monitoring started successfully")
 
@@ -561,72 +571,77 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             currentInputRevision: { [weak self] in self?.keyboardMonitor.inputRevision ?? UInt64.max })
         guard execution.isValid() else { RuntimeDiagnostics.record(.doubleInvalidExecution); return }
 
-        // An uncertain automatic edit has not marked the typing buffer converted.
-        // A new explicit gesture may reconcile its exact original field even
-        // when request.reconvert is false; other fields keep their normal route.
-        if textConverter.hasUnconfirmedAXEdit(in: focus) {
-            let succeeded = textConverter.reconvert(context: context, execution: execution)
-            finishCombinedShift(succeeded: succeeded, request: request, context: context)
-            return
-        }
-
-        // Explicit selection belongs to its AX range, independently of a stale
-        // word buffer or the previous conversion's reconvert flag. The converter
-        // verifies the range directly, without a preliminary Cmd+C round trip.
-        if (focus.initialSelection?.length ?? 0) > 0 {
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                let succeeded = await self.textConverter.convertSelection(context: context,
-                    execution: execution, restorePrevious: request.reconvert)
-                self.finishCombinedShift(succeeded: succeeded, request: request, context: context)
-            }
-            return
-        }
-
-        let succeeded: Bool
-        if request.reconvert {
-            guard textConverter.hasReconversionState else { RuntimeDiagnostics.record(.doubleNoReconversionState); return }
-            succeeded = SpotlightAX.isActive()
-                ? textConverter.convertSpotlight(context: context, restorePrevious: true, execution: execution)
-                : textConverter.reconvert(context: context, execution: execution)
-        } else {
-            guard let wordContext = request.wordContext else { RuntimeDiagnostics.record(.doubleMissingWordContext); return }
-            let hasBuffer = !request.wordKeys.isEmpty || (!request.prevWordKeys.isEmpty && request.boundaryCount > 0)
-            guard hasBuffer || textConverter.hasFocusedTextSelection() else {
-                RuntimeDiagnostics.record(.doubleNoBufferOrSelection); return
-            }
-            if SpotlightAX.isActive() {
-                succeeded = textConverter.convertSpotlight(context: wordContext, execution: execution)
-            } else if SettingsManager.shared.convertWholeLine {
-                let frontID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-                if AutoSwitchPolicy.isTerminalApp(frontID), !request.lineKeys.isEmpty {
-                    guard let lineSource = request.lineSourceLayoutID,
-                          let lineContext = LayoutSwitcher.combinedShiftContext(sourceLayoutID: lineSource) else { return }
-                    succeeded = textConverter.convertLineBuffer(request.lineKeys, context: lineContext,
-                        execution: execution)
-                } else if !AutoSwitchPolicy.isTerminalApp(frontID) {
-                    succeeded = textConverter.convertLine(context: wordContext, execution: execution)
-                } else {
-                    succeeded = textConverter.convert(wordKeys: request.wordKeys, prevWordKeys: request.prevWordKeys,
-                        boundaryCount: request.boundaryCount, context: wordContext, execution: execution)
-                }
-            } else {
-                succeeded = textConverter.convert(wordKeys: request.wordKeys, prevWordKeys: request.prevWordKeys,
-                    boundaryCount: request.boundaryCount, context: wordContext, execution: execution)
-            }
-        }
-        finishCombinedShift(succeeded: succeeded, request: request, context: context)
+        handleVerifiedCombinedShift(request, context: context, execution: execution)
     }
 
-    private func finishCombinedShift(succeeded: Bool, request: CombinedShiftRequest, context: CombinedShiftContext) {
-        guard succeeded else { RuntimeDiagnostics.record(.doubleFailed); return }
+    private func handleVerifiedCombinedShift(_ request: CombinedShiftRequest,
+        context: CombinedShiftContext, execution: CombinedShiftExecutionContext) {
+        guard let lease = keyboardMonitor.beginNativeInputTransaction(processID: execution.focus.processID) else {
+            RuntimeDiagnostics.record(.nativeFenceUnavailable)
+            RuntimeDiagnostics.record(.doubleFailed)
+            return
+        }
+        var replayLayoutID: String?
+        defer { keyboardMonitor.finishNativeInputTransaction(lease, replayLayoutID: replayLayoutID) }
+        let isCurrent = { [weak self] in self?.keyboardMonitor.nativeInputTransactionIsCurrent(lease) == true }
+        let succeeded: Bool
+        if textConverter.hasUnconfirmedAXEdit(in: execution.focus) {
+            succeeded = textConverter.reconvert(context: context, execution: execution,
+                inputBarrierIsActive: isCurrent)
+        } else if (execution.focus.initialSelection?.length ?? 0) > 0 {
+            succeeded = textConverter.convertSelection(context: context, execution: execution,
+                restorePrevious: request.reconvert, inputBarrierIsActive: isCurrent)
+        } else if request.reconvert {
+            guard textConverter.hasReconversionState else {
+                RuntimeDiagnostics.record(.doubleNoReconversionState); return
+            }
+            succeeded = textConverter.reconvert(context: context, execution: execution,
+                inputBarrierIsActive: isCurrent)
+        } else {
+            guard let wordContext = request.wordContext else {
+                RuntimeDiagnostics.record(.doubleMissingWordContext); return
+            }
+            guard !request.wordKeys.isEmpty || (!request.prevWordKeys.isEmpty && request.boundaryCount > 0) else {
+                RuntimeDiagnostics.record(.doubleNoBufferOrSelection); return
+            }
+            if SettingsManager.shared.convertWholeLine, !request.lineKeys.isEmpty,
+               let source = request.lineSourceLayoutID,
+               let lineContext = LayoutSwitcher.combinedShiftContext(sourceLayoutID: source) {
+                succeeded = textConverter.convertLineBuffer(request.lineKeys, context: lineContext,
+                    execution: execution, inputBarrierIsActive: isCurrent)
+            } else {
+                succeeded = textConverter.convert(wordKeys: request.wordKeys, prevWordKeys: request.prevWordKeys,
+                    boundaryCount: request.boundaryCount, context: wordContext, execution: execution,
+                    inputBarrierIsActive: isCurrent)
+            }
+        }
+        replayLayoutID = finishCombinedShift(succeeded: succeeded, request: request, context: context,
+            isInputCurrent: isCurrent)
+    }
+
+    @discardableResult
+    private func finishCombinedShift(succeeded: Bool, request: CombinedShiftRequest,
+        context: CombinedShiftContext, isInputCurrent: (() -> Bool)? = nil) -> String? {
+        guard succeeded, isInputCurrent?() ?? true else {
+            RuntimeDiagnostics.record(.doubleFailed); return nil
+        }
+        let resultID = textConverter.lastResultLayoutID ?? context.targetLayoutID
+        let requestedAt = DispatchTime.now().uptimeNanoseconds
+        let outcome = LayoutSwitcher.switchToWithConfirmation(layoutID: resultID)
+        if outcome == .unconfirmed {
+            keyboardMonitor.noteUnconfirmedInputSource(resultID, requestedAt: requestedAt)
+        }
+        guard outcome == .confirmed, isInputCurrent?() ?? true else {
+            keyboardMonitor.resetPredictionContext()
+            RuntimeDiagnostics.record(.doubleFailed); return nil
+        }
         RuntimeDiagnostics.record(.doubleSucceeded)
         keyboardMonitor.markConverted()
-        let resultID = textConverter.lastResultLayoutID ?? context.targetLayoutID
-        if LayoutSwitcher.currentLayoutID() != resultID { LayoutSwitcher.switchTo(layoutID: resultID) }
         updateStatusIcon()
-        if request.reconvert { offerExceptionAfterUndo() }
+        // A modal question must never keep the native input lease open.
+        if request.reconvert { DispatchQueue.main.async { [weak self] in self?.offerExceptionAfterUndo() } }
         else { lastAutoConverted = nil }
+        return resultID
     }
 
     private func resetCombinedShiftAfterPause() {
@@ -746,6 +761,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         autoConvertItem.state = SettingsManager.shared.autoConvert ? .on : .off
         menu.addItem(autoConvertItem)
 
+        let recovery = NSMenuItem(title: L10n.languageCode == "ru"
+            ? "Исходные тексты после сбоя"
+            : "Original texts after unconfirmed edits", action: nil, keyEquivalent: "")
+        recovery.target = self
+        recovery.tag = Self.recoveryCopyItemTag
+        recovery.isEnabled = textConverter.hasUnconfirmedAXEdit
+        menu.addItem(recovery)
+        refreshRecoveryMenu(recovery)
+
         let keySoundItem = NSMenuItem(title: L10n.menuKeySound, action: #selector(toggleKeySound), keyEquivalent: "")
         keySoundItem.target = self
         keySoundItem.state = SettingsManager.shared.keySound ? .on : .off
@@ -849,6 +873,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// а текущую меняют и мимо нас — системным хоткеем).
     func menuWillOpen(_ menu: NSMenu) {
         guard menu === statusItem.menu else { return }
+        if let recovery = menu.item(withTag: Self.recoveryCopyItemTag) { refreshRecoveryMenu(recovery) }
         let insertAt = menu.items.firstIndex { $0.tag == Self.layoutItemTag } ?? 2
         for old in menu.items where old.tag == Self.layoutItemTag { menu.removeItem(old) }
         for (offset, item) in layoutMenuItems().enumerated() {
@@ -979,8 +1004,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func toggleAutoConvert(_ sender: NSMenuItem) {
         SettingsManager.shared.autoConvert.toggle()
+        predictionCoordinator.invalidate()
+        keyboardMonitor.resetPredictionContext()
+        reconfigureTap()
         sender.state = SettingsManager.shared.autoConvert ? .on : .off
         settingsController.updateAutoConvertState(SettingsManager.shared.autoConvert)   // #4
+    }
+
+    private func refreshRecoveryMenu(_ parent: NSMenuItem) {
+        parent.isEnabled = textConverter.hasUnconfirmedAXEdit
+        let submenu = NSMenu()
+        for (index, original) in textConverter.unconfirmedOriginals.enumerated() {
+            let title = L10n.languageCode == "ru" ? "Скопировать исходник \(index + 1)" : "Copy original \(index + 1)"
+            let item = NSMenuItem(title: title, action: #selector(copyRecoveryOriginal(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = original
+            submenu.addItem(item)
+        }
+        parent.submenu = submenu
+    }
+
+    @objc private func copyRecoveryOriginal(_ sender: NSMenuItem) {
+        guard let original = sender.representedObject as? TextConverter.RecoveryOriginal else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(original.text, forType: .string)
     }
 
     @objc private func toggleKeySound(_ sender: NSMenuItem) {
@@ -1198,15 +1245,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         predictionCoordinator.invalidate()
+        perAppLayoutManager.stop()
+        keyboardMonitor.stop()
         // Не теряем буфер обмена в 2-секундном окне отложенного восстановления
         // (актуально и при само-обновлении, которое завершает процесс).
         textConverter.flushPendingClipboardRestore()
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard textConverter.hasUnconfirmedAXEdit else { return .terminateNow }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = L10n.languageCode == "ru" ? "Сначала сохраните исходный текст" : "Save the original text first"
+        alert.informativeText = L10n.languageCode == "ru"
+            ? "После неподтверждённой замены полные исходные тексты остались в памяти MacSwitcher. Перед выходом их можно сохранить в локальный файл в Library/Application Support/MacSwitcher/Recovery. Обычное копирование в буфер не считается сохранением."
+            : "Full originals from unconfirmed edits remain in MacSwitcher memory. Before quitting, save them to a local file in Library/Application Support/MacSwitcher/Recovery. Clipboard copying is not a saved backup."
+        alert.addButton(withTitle: L10n.languageCode == "ru" ? "Сохранить локально и выйти" : "Save locally and quit")
+        alert.addButton(withTitle: L10n.languageCode == "ru" ? "Отмена" : "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return .terminateCancel }
+        do {
+            let directory = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                appropriateFor: nil, create: true).appendingPathComponent("MacSwitcher/Recovery", isDirectory: true)
+            let originals = textConverter.unconfirmedOriginals.map { RecoveryArchive.Source(id: $0.id, text: $0.text) }
+            _ = try RecoveryArchive.save(originals, in: directory)
+            return .terminateNow
+        } catch {
+            let failure = NSAlert()
+            failure.messageText = L10n.languageCode == "ru" ? "Исходники не сохранены. Выход отменён." : "Originals were not saved. Quit cancelled."
+            failure.runModal()
+            return .terminateCancel
+        }
+    }
+
     @objc private func quit() {
         textConverter.flushPendingClipboardRestore()
-        perAppLayoutManager.stop()
-        keyboardMonitor.stop()
         NSApplication.shared.terminate(nil)
     }
 }
