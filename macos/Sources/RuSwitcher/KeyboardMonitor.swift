@@ -565,32 +565,8 @@ final class KeyboardMonitor: @unchecked Sendable {
         } else {
             focus = nil
         }
-        let gestureContext: CombinedShiftContext
-        switch action {
-        case .switchLayout(let context), .convert(let context): gestureContext = context
-        }
-        let typedSourceID = !currentWordKeys.isEmpty ? currentWordSourceID
-            : (!prevWordKeys.isEmpty && boundaryCount > 0 ? prevWordSourceID : gestureContext.sourceLayoutID)
-        var request = CombinedShiftRequest(
-            action: action,
-            wordContext: typedSourceID.flatMap { LayoutSwitcher.combinedShiftContext(sourceLayoutID: $0) },
-            wordKeys: currentWordKeys, prevWordKeys: prevWordKeys, lineKeys: lineKeys,
-            lineSourceLayoutID: lineSourceID, boundaryCount: boundaryCount,
-            reconvert: !keysTypedSinceConversion, inputRevision: inputRevision, frontProcessID: frontPID,
-            focus: focus)
-        if case .convert = action {
-            RuntimeDiagnostics.record(.doubleRecognized)
-            guard let first = combinedShiftFirstRequest, first.inputRevision == inputRevision else {
-                RuntimeDiagnostics.record(.doubleFirstSnapshotUnavailable); return
-            }
-            request = CombinedShiftRequest(action: action, wordContext: first.wordContext,
-                wordKeys: first.wordKeys, prevWordKeys: first.prevWordKeys, lineKeys: first.lineKeys,
-                lineSourceLayoutID: first.lineSourceLayoutID, boundaryCount: first.boundaryCount,
-                reconvert: first.reconvert, inputRevision: inputRevision, frontProcessID: frontPID, focus: first.focus)
-            combinedShiftFirstRequest = nil
-        } else {
-            combinedShiftFirstRequest = request
-        }
+        guard let request = snapshotCombinedShiftRequest(action: action, frontProcessID: frontPID,
+            focus: focus, contextForSource: { LayoutSwitcher.combinedShiftContext(sourceLayoutID: $0) }) else { return }
         if case .switchLayout = action {
             // Event handling is synchronously handed to main. Deliver the solo
             // before another character can advance revision and swallow it.
@@ -604,6 +580,40 @@ final class KeyboardMonitor: @unchecked Sendable {
         pendingCombinedShiftConversion = request
     }
 
+    /// Captures the production manual-conversion snapshot after a Shift action.
+    /// The resolver is injectable so tests can use real installed source IDs without
+    /// selecting a TIS source or querying an accessibility field.
+    func snapshotCombinedShiftRequest(action: CombinedShiftGesture.Action, frontProcessID: Int32,
+        focus: CombinedShiftFocus?, contextForSource: (String) -> CombinedShiftContext?) -> CombinedShiftRequest? {
+        let gestureContext: CombinedShiftContext
+        switch action {
+        case .switchLayout(let context), .convert(let context): gestureContext = context
+        }
+        let typedSourceID = !currentWordKeys.isEmpty ? currentWordSourceID
+            : (!prevWordKeys.isEmpty && boundaryCount > 0 ? prevWordSourceID : gestureContext.sourceLayoutID)
+        var request = CombinedShiftRequest(
+            action: action,
+            wordContext: typedSourceID.flatMap(contextForSource),
+            wordKeys: currentWordKeys, prevWordKeys: prevWordKeys, lineKeys: lineKeys,
+            lineSourceLayoutID: lineSourceID, boundaryCount: boundaryCount,
+            reconvert: !keysTypedSinceConversion, inputRevision: inputRevision, frontProcessID: frontProcessID,
+            focus: focus)
+        if case .convert = action {
+            RuntimeDiagnostics.record(.doubleRecognized)
+            guard let first = combinedShiftFirstRequest, first.inputRevision == inputRevision else {
+                RuntimeDiagnostics.record(.doubleFirstSnapshotUnavailable); return nil
+            }
+            request = CombinedShiftRequest(action: action, wordContext: first.wordContext,
+                wordKeys: first.wordKeys, prevWordKeys: first.prevWordKeys, lineKeys: first.lineKeys,
+                lineSourceLayoutID: first.lineSourceLayoutID, boundaryCount: first.boundaryCount,
+                reconvert: first.reconvert, inputRevision: inputRevision, frontProcessID: frontProcessID, focus: first.focus)
+            combinedShiftFirstRequest = nil
+        } else {
+            combinedShiftFirstRequest = request
+        }
+        return request
+    }
+
     @MainActor
     fileprivate func deliverPendingCombinedShiftConversion(after fence: InputEventFence) {
         guard inputFence === fence, let request = pendingCombinedShiftConversion else { return }
@@ -614,8 +624,8 @@ final class KeyboardMonitor: @unchecked Sendable {
         onCombinedShift?(request)
     }
 
-    fileprivate func handleKeyDown(keyCode: UInt16, flags: CGEventFlags, char: Character? = nil,
-                                   renderedText: String? = nil, renderedSourceLayoutID: String? = nil) {
+    func handleKeyDown(keyCode: UInt16, flags: CGEventFlags, char: Character? = nil,
+                       renderedText: String? = nil, renderedSourceLayoutID: String? = nil) {
         interruptCombinedShift()
         // Submit after existing buffer mutation. Structural/reset branches clear it.
         defer { recordPredictionKey(keyCode: keyCode, flags: flags, renderedText: renderedText,
