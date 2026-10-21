@@ -7,7 +7,9 @@ private let macSwitcherEventMarker: Int64 = 0x52555300
 @MainActor
 @objc(MacSwitcherInputFixtureApplication)
 final class InputFixtureApplication: NSApplication {
-    private let fixtureDelegate = InputFixtureDelegate()
+    // NSTextView initialization may request NSApplication.shared. Delay it
+    // until our NSApplication subclass has finished its own initialization.
+    private lazy var fixtureDelegate = InputFixtureDelegate()
     private var delayed: [(event: NSEvent, readyAt: DispatchTime)] = []
     private var deliveryScheduled = false
     private var markedCount = 0
