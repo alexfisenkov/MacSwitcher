@@ -22,6 +22,51 @@ func diagnosticFixtureProcessIsKnown(_ processID: Int32) -> Bool {
     return DiagnosticFixtureLocation.matches(actual: app.executableURL)
 }
 
+/// HIToolbox requires its input-source state on Main. Only immutable strings
+/// cross back to the worker; every event requests a fresh source snapshot.
+enum DiagnosticFixtureInputSource {
+    struct Snapshot: Sendable {
+        let sourceID: String?
+        let payload: String?
+    }
+
+    static func snapshot(keyCode: UInt16? = nil) -> Snapshot {
+        if Thread.isMainThread {
+            return MainActor.assumeIsolated { readOnMain(keyCode: keyCode) }
+        }
+        return DispatchQueue.main.sync { readOnMain(keyCode: keyCode) }
+    }
+
+    @MainActor
+    private static func readOnMain(keyCode: UInt16?) -> Snapshot {
+        guard let source = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else {
+            return Snapshot(sourceID: nil, payload: nil)
+        }
+        let sourceID = TISGetInputSourceProperty(source, kTISPropertyInputSourceID).map {
+            Unmanaged<CFString>.fromOpaque($0).takeUnretainedValue() as String
+        }
+        guard let keyCode,
+              let pointer = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else {
+            return Snapshot(sourceID: sourceID, payload: nil)
+        }
+        let data = Unmanaged<CFData>.fromOpaque(pointer).takeUnretainedValue() as Data
+        var deadState: UInt32 = 0
+        var characters = [UniChar](repeating: 0, count: 8)
+        var length = 0
+        let status = data.withUnsafeBytes { bytes -> OSStatus in
+            guard let layout = bytes.baseAddress?.assumingMemoryBound(to: UCKeyboardLayout.self) else { return -1 }
+            return UCKeyTranslate(layout, keyCode, UInt16(kUCKeyActionDown), 0, UInt32(LMGetKbdType()),
+                                  UInt32(kUCKeyTranslateNoDeadKeysMask), &deadState,
+                                  characters.count, &length, &characters)
+        }
+        guard status == noErr, length > 0, length <= characters.count else {
+            return Snapshot(sourceID: sourceID, payload: nil)
+        }
+        let payload = String(utf16CodeUnits: characters, count: length)
+        return Snapshot(sourceID: sourceID, payload: payload.allSatisfy(\.isLetter) ? payload : nil)
+    }
+}
+
 struct DiagnosticFixtureEdge: Equatable, Sendable {
     let atMilliseconds: Int
     let keyCode: UInt16
@@ -257,9 +302,7 @@ private final class DiagnosticFixtureWorker: @unchecked Sendable {
     }
 
     private func currentSourceID() -> String? {
-        guard let source = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(),
-              let pointer = TISGetInputSourceProperty(source, kTISPropertyInputSourceID) else { return nil }
-        return Unmanaged<CFString>.fromOpaque(pointer).takeUnretainedValue() as String
+        DiagnosticFixtureInputSource.snapshot().sourceID
     }
 
     private func makeEvent(_ edge: DiagnosticFixtureEdge, keyDown: Bool, source: CGEventSource?) -> CGEvent? {
@@ -283,20 +326,6 @@ private final class DiagnosticFixtureWorker: @unchecked Sendable {
     }
 
     private func currentPayload(for keyCode: UInt16) -> String? {
-        guard let source = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(),
-              let pointer = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else { return nil }
-        let data = Unmanaged<CFData>.fromOpaque(pointer).takeUnretainedValue() as Data
-        var deadState: UInt32 = 0
-        var characters = [UniChar](repeating: 0, count: 8)
-        var length = 0
-        let status = data.withUnsafeBytes { bytes -> OSStatus in
-            guard let layout = bytes.baseAddress?.assumingMemoryBound(to: UCKeyboardLayout.self) else { return -1 }
-            return UCKeyTranslate(layout, keyCode, UInt16(kUCKeyActionDown), 0, UInt32(LMGetKbdType()),
-                                  UInt32(kUCKeyTranslateNoDeadKeysMask), &deadState,
-                                  characters.count, &length, &characters)
-        }
-        guard status == noErr, length > 0 else { return nil }
-        let payload = String(utf16CodeUnits: characters, count: length)
-        return payload.allSatisfy(\.isLetter) ? payload : nil
+        DiagnosticFixtureInputSource.snapshot(keyCode: keyCode).payload
     }
 }

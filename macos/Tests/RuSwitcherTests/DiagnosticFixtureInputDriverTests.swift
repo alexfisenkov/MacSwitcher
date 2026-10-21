@@ -2,6 +2,28 @@ import XCTest
 @testable import RuSwitcher
 
 final class DiagnosticFixtureInputDriverTests: XCTestCase {
+    @MainActor
+    func testBackgroundActualTISSnapshotHopsToMainWithoutPostingEvents() async {
+        let observation: (Bool, DiagnosticFixtureInputSource.Snapshot) = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(returning:
+                    (Thread.isMainThread, DiagnosticFixtureInputSource.snapshot(keyCode: 5)))
+            }
+        }
+        let (startedOnMain, snapshot) = observation
+        XCTAssertFalse(startedOnMain)
+        XCTAssertFalse(snapshot.sourceID?.isEmpty ?? true)
+        if let payload = snapshot.payload { XCTAssertFalse(payload.isEmpty) }
+    }
+
+    @MainActor
+    func testActualTISSnapshotOnMainReturnsWithoutSynchronousRedispatch() {
+        XCTAssertTrue(Thread.isMainThread)
+        let snapshot = DiagnosticFixtureInputSource.snapshot(keyCode: 5)
+        XCTAssertFalse(snapshot.sourceID?.isEmpty ?? true)
+        if let payload = snapshot.payload { XCTAssertFalse(payload.isEmpty) }
+    }
+
     func testLocationAcceptsKnownFixtureThroughTmpAlias() {
         XCTAssertTrue(DiagnosticFixtureLocation.matches(actual: URL(fileURLWithPath:
             "/tmp/MacSwitcherInputFixture.app/Contents/MacOS/InputFixture")))
