@@ -276,20 +276,16 @@ final class KeyboardMonitor: @unchecked Sendable {
         combinedShiftGesture.interrupt()
         if combinedShiftEnabled { fullReset(); keysTypedSinceConversion = true }
         rslog("Attempting to create event tap... (trigger=\(SettingsManager.shared.triggerKey) switch=\(SettingsManager.shared.switchHotkey.isEmpty ? "off" : SettingsManager.shared.switchHotkey) capsLock=\(triggerConfig.isCapsLock))")
-        let mask: CGEventMask =
-            (1 << CGEventType.keyDown.rawValue)
-            | (1 << CGEventType.keyUp.rawValue)
-            | (1 << CGEventType.flagsChanged.rawValue)
-            | (1 << CGEventType.leftMouseDown.rawValue)
-            | (1 << CGEventType.rightMouseDown.rawValue)
-            | (1 << CGEventType.otherMouseDown.rawValue)
-            | (1 << CGEventType.leftMouseUp.rawValue)
-            | (1 << CGEventType.rightMouseUp.rawValue)
-            | (1 << CGEventType.otherMouseUp.rawValue)
-            | (1 << CGEventType.leftMouseDragged.rawValue)
-            | (1 << CGEventType.rightMouseDragged.rawValue)
-            | (1 << CGEventType.otherMouseDragged.rawValue)
-            | (1 << CGEventType.scrollWheel.rawValue)
+        // Explicit element and integer types keep Swift 6.0's solver bounded.
+        let observedEvents: [CGEventType] = [
+            .keyDown, .keyUp, .flagsChanged,
+            .leftMouseDown, .rightMouseDown, .otherMouseDown,
+            .leftMouseUp, .rightMouseUp, .otherMouseUp,
+            .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .scrollWheel
+        ]
+        let mask = observedEvents.reduce(CGEventMask(0)) { mask, type in
+            mask | (CGEventMask(1) << type.rawValue)
+        }
 
         // A native transaction holds complete keyboard/mouse pairs on the
         // independent tap runloop while the target confirms each edit step.
