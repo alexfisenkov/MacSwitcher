@@ -18,4 +18,15 @@ final class RuntimeDiagnosticsTests: XCTestCase {
         XCTAssertTrue(RuntimeDiagnosticEvent.autoUnicodeMissing.logOnce)
         XCTAssertTrue(RuntimeDiagnosticEvent.autoEditPosted.logOnce)
     }
+
+    func testNativeAttemptRetainsItsFocusFailureEvenIfItOccurredEarlier() {
+        let seen = RuntimeDiagnostics.SeenEvents()
+        XCTAssertTrue(seen.insert(.focusReadCannotComplete))
+        XCTAssertFalse(seen.insert(.focusReadCannotComplete))
+        XCTAssertTrue(seen.insert(.autoEngineReady))
+        seen.beginNativeFocusReadAttempt()
+        XCTAssertTrue(seen.insert(.focusReadCannotComplete))
+        XCTAssertFalse(seen.insert(.focusReadCannotComplete))
+        XCTAssertFalse(seen.insert(.autoEngineReady))
+    }
 }

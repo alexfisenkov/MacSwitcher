@@ -32,8 +32,11 @@ enum RuntimeDiagnosticEvent: String, CaseIterable, Sendable {
     case autoWorkStarted, sourceNotificationPreserved, sourceNotificationInvalidated
     case harnessNativeStarted, harnessNativePassed, harnessNativeFailed
     case nativeAutoBlocked, nativeAutoInsertPosted, nativeAutoRemovalPosted, nativeAutoVerified, nativeAutoUncertain
+    case nativeAutoFocusRetry, nativeAutoFocusRecovered, nativeAutoFocusRecheckFailed
+    case focusReadCannotComplete, focusReadNoValue, focusReadInvalidElement
+    case focusReadOtherError, focusReadMissingValue, focusReadUnexpectedType
 
-    var logOnce: Bool { rawValue.hasPrefix("auto") || rawValue.hasPrefix("native") }
+    var logOnce: Bool { rawValue.hasPrefix("auto") || rawValue.hasPrefix("native") || rawValue.hasPrefix("focusRead") }
 }
 
 enum RuntimeDiagnostics {
@@ -48,12 +51,21 @@ enum RuntimeDiagnostics {
         logger.notice("\(event.rawValue, privacy: .public)")
     }
 
-    private final class SeenEvents: @unchecked Sendable {
+    static func beginNativeFocusReadAttempt() {
+        seen.beginNativeFocusReadAttempt()
+    }
+
+    final class SeenEvents: @unchecked Sendable {
         private let lock = NSLock()
         private var events = Set<RuntimeDiagnosticEvent>()
         func insert(_ event: RuntimeDiagnosticEvent) -> Bool {
             lock.lock(); defer { lock.unlock() }
             return events.insert(event).inserted
+        }
+
+        func beginNativeFocusReadAttempt() {
+            lock.lock(); defer { lock.unlock() }
+            events = events.filter { !$0.rawValue.hasPrefix("focusRead") }
         }
     }
 }

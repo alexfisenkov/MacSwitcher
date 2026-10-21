@@ -241,6 +241,7 @@ final class TextConverter {
         guard route != .blocked else { RuntimeDiagnostics.record(.nativeAutoBlocked); return false }
         let usesNative = forceNativeFixture || route == .nativeCanary
         if usesNative {
+            RuntimeDiagnostics.beginNativeFocusReadAttempt()
             AXUIElementSetMessagingTimeout(execution.focus.element, 0.003)
             defer { AXUIElementSetMessagingTimeout(execution.focus.element, 0.05) }
             guard execution.isValid(timeout: 0.003), original == "ghbd", replacement == "прив", sourceLayoutID == "com.apple.keylayout.US",

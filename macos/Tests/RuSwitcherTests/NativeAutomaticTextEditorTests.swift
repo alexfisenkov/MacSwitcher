@@ -269,6 +269,35 @@ final class NativeAutomaticTextEditorTests: XCTestCase {
     }
 
     @MainActor
+    func testTransientFinalFocusReadConfirmsWithoutRepeatingEitherMutation() {
+        let field = Field()
+        let base = field.access()
+        var unavailableReads = 0
+        let access = NativeAutomaticTextAccess(
+            isValid: {
+                NativeFocusRevalidation.validate(until: 0.100, now: { field.clock },
+                    mayContinue: { field.barrier }, read: {
+                        guard field.valid else { return .focusChanged }
+                        if field.operations.last == .moveRight, unavailableReads < 2 {
+                            unavailableReads += 1
+                            return .focusUnavailable
+                        }
+                        return nil
+                    }, pause: { field.clock += $0 })
+            }, inputBarrierIsActive: base.inputBarrierIsActive, observe: base.observe,
+            insertReplacement: base.insertReplacement, deleteOriginal: base.deleteOriginal,
+            pause: base.pause, now: base.now)
+        XCTAssertEqual(NativeAutomaticTextEditor.replace(original: "ghbd", replacement: "прив",
+            originalStartUTF16: 0, access: access), .confirmed)
+        XCTAssertEqual(field.text, "прив")
+        XCTAssertEqual(field.caret, 4)
+        XCTAssertEqual(unavailableReads, 2)
+        XCTAssertEqual(field.operations.filter { $0 == .insertReplacement }.count, 1)
+        XCTAssertEqual(field.operations.filter { $0 == .deleteBackward }.count, 4)
+        XCTAssertEqual(field.operations.count, 13)
+    }
+
+    @MainActor
     func testUnsafeOrUnequalTextRefusesWithoutMutation() {
         let cases = [("", ""), ("ghbd", "привет"), ("same", "same"), ("😀", "😃"),
                      ("a\u{0301}", "ab"), ("ab\n", "абв"), ("ab\u{202E}", "абв"),

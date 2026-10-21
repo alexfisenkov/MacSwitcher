@@ -72,8 +72,20 @@ struct CombinedShiftFocus: @unchecked Sendable {
         let app = AXUIElementCreateApplication(processID)
         AXUIElementSetMessagingTimeout(app, timeout)
         var raw: AnyObject?
-        guard AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &raw) == .success,
-              let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() else { return nil }
+        let error = AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &raw)
+        guard error == .success else {
+            switch error {
+            case .cannotComplete: RuntimeDiagnostics.record(.focusReadCannotComplete)
+            case .noValue: RuntimeDiagnostics.record(.focusReadNoValue)
+            case .invalidUIElement: RuntimeDiagnostics.record(.focusReadInvalidElement)
+            default: RuntimeDiagnostics.record(.focusReadOtherError)
+            }
+            return nil
+        }
+        guard let raw else { RuntimeDiagnostics.record(.focusReadMissingValue); return nil }
+        guard CFGetTypeID(raw) == AXUIElementGetTypeID() else {
+            RuntimeDiagnostics.record(.focusReadUnexpectedType); return nil
+        }
         let element = raw as! AXUIElement
         AXUIElementSetMessagingTimeout(element, timeout)
         let focus = CombinedShiftFocus(processID: processID, element: element)

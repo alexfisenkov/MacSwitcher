@@ -1,8 +1,8 @@
 {
-  "version": "0.1.0-alpha.4",
+  "version": "0.1.0-alpha.5",
   "short_version": "0.1.0",
-  "build": 4,
+  "build": 5,
   "channel": "alpha",
   "url": "https://github.com/alexfisenkov/MacSwitcher/releases",
-  "notes": "Block unsafe automatic AX selection in Codex. Native insert-first replacement remains a one-shot synthetic experiment, disabled in normal mode."
+  "notes": "Bounded read-only retry for unavailable native focus, with explicit AX failure diagnostics. Ordinary Codex autocorrection remains disabled pending broader acceptance."
 }

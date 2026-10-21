@@ -82,8 +82,31 @@ extension NativeAutoEventTransport {
                 && NSWorkspace.shared.frontmostApplication?.processIdentifier == focus.processID
                 && !AutoSwitchPolicy.secureInputActive
         }
+        func validateFocus() -> Bool {
+            var wasUnavailable = false
+            let valid = NativeFocusRevalidation.validate(until: deadline,
+                now: { ProcessInfo.processInfo.systemUptime }, mayContinue: cheapGate,
+                read: {
+                    let failure = execution.validationFailure(timeout: 0.003)
+                    switch failure {
+                    case .focusUnavailable:
+                        wasUnavailable = true
+                        RuntimeDiagnostics.record(.nativeAutoFocusRetry)
+                    case .focusChanged: RuntimeDiagnostics.record(.executionFocusChanged)
+                    case .wrongProcess: RuntimeDiagnostics.record(.executionWrongProcess)
+                    case .revisionChanged: RuntimeDiagnostics.record(.executionRevisionChanged)
+                    case .secureInput: RuntimeDiagnostics.record(.executionSecureInput)
+                    case nil: break
+                    }
+                    return failure
+                }, pause: { seconds in usleep(useconds_t(max(0, seconds) * 1_000_000)) })
+            if wasUnavailable {
+                RuntimeDiagnostics.record(valid ? .nativeAutoFocusRecovered : .nativeAutoFocusRecheckFailed)
+            }
+            return valid
+        }
         let access = NativeAutomaticTextAccess(
-            isValid: { cheapGate() && execution.isValid(timeout: 0.003) },
+            isValid: validateFocus,
             inputBarrierIsActive: inputBarrierIsActive,
             observe: { length in
                 guard cheapGate(), length > 0, length <= NativeAutomaticTextEditor.maximumUnits * 2,
