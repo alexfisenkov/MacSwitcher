@@ -1,9 +1,9 @@
 {
-  "version": "0.1.0-alpha.6",
+  "version": "0.1.0-alpha.7",
   "short_version": "0.1.0",
-  "build": 6,
+  "build": 7,
   "channel": "alpha",
   "url": "https://github.com/alexfisenkov/MacSwitcher/releases",
-  "notes": "Candidate: acknowledged bounded native edits, observed input-source commits, 180 ms double Shift, and expanded licensed offline lexicons. Ordinary Codex rollout remains pending live acceptance.",
+  "notes": "Candidate: remove the startup self-disable that invalidated the native input fence. No-UI lifecycle probe passes; ordinary editor acceptance remains pending.",
   "native_backend_accepted": false
 }

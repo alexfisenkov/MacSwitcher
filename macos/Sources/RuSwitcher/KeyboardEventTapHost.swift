@@ -33,7 +33,8 @@ final class KeyboardEventTapHost: @unchecked Sendable {
             userInfo: Unmanaged.passUnretained(host).toOpaque()
         ) else { return nil }
         host.eventTap = tap
-        CGEvent.tapEnable(tap: tap, enable: false)
+        // New taps are already enabled. Disabling here queues a user-disabled
+        // notification that would invalidate the newly created input fence.
         guard let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0) else {
             host.stop()
             return nil

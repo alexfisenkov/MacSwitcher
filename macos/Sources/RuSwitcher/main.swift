@@ -1,6 +1,8 @@
 import AppKit
 import Darwin
 
+if let status = EventTapLifecycleDiagnostics.runIfRequested(arguments: CommandLine.arguments) { exit(status) }
+
 if let status = AXCapabilityDiagnostics.runIfRequested(arguments: CommandLine.arguments) { exit(status) }
 
 if CommandLine.arguments.contains("--benchmark-prediction") {
