@@ -148,6 +148,20 @@ enum AXCapabilityDiagnostics {
                                      "settableError": settableError.rawValue, "settable": settable.boolValue]
         }
         result["attributes"] = attributes
+        var editability: [String: Any] = [:]
+        for name in [kAXEnabledAttribute, "AXReadOnly", "AXEditable"] {
+            var raw: AnyObject?
+            let status = AXUIElementCopyAttributeValue(element, name as CFString, &raw)
+            let signal = NativeFieldBooleanSignal.attribute(status: status, raw: raw)
+            let state: String
+            switch signal {
+            case .value(let value): state = value ? "true" : "false"
+            case .unavailable: state = "unavailable"
+            case .invalid: state = "invalid"
+            }
+            editability[name] = ["error": status.rawValue, "state": state]
+        }
+        result["editability"] = editability
         var names: CFArray?
         let namesError = AXUIElementCopyParameterizedAttributeNames(element, &names)
         let whitelist: Set<String> = [kAXStringForRangeParameterizedAttribute,

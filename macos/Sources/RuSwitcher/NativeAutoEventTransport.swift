@@ -2,6 +2,46 @@ import ApplicationServices
 import AppKit
 import Foundation
 
+/// An optional AX Boolean may be absent, but a failed or malformed supported
+/// read must not be mistaken for absence.
+enum NativeFieldBooleanSignal: Equatable {
+    case value(Bool)
+    case unavailable
+    case invalid
+
+    static func attribute(status: AXError, raw: AnyObject?) -> Self {
+        switch status {
+        case .success:
+            guard let raw, CFGetTypeID(raw) == CFBooleanGetTypeID() else { return .invalid }
+            return .value(CFBooleanGetValue((raw as! CFBoolean)))
+        case .attributeUnsupported, .noValue:
+            return .unavailable
+        default:
+            return .invalid
+        }
+    }
+
+    static func capability(status: AXError, settable: Bool) -> Self {
+        switch status {
+        case .success: return .value(settable)
+        case .attributeUnsupported, .noValue: return .unavailable
+        default: return .invalid
+        }
+    }
+}
+
+enum NativeFieldEditabilityPolicy {
+    static func allows(enabled: NativeFieldBooleanSignal, readOnly: NativeFieldBooleanSignal,
+                       editable: NativeFieldBooleanSignal,
+                       selectedTextSettable: NativeFieldBooleanSignal) -> Bool {
+        guard enabled != .value(false), enabled != .invalid,
+              readOnly != .value(true), readOnly != .invalid,
+              editable != .value(false), editable != .invalid else { return false }
+        if editable == .value(true) { return true }
+        return selectedTextSettable == .value(true)
+    }
+}
+
 /// Preallocated, marked, PID-only events. Construction never posts input.
 /// No AX selection, clipboard, global event destination, or asynchronous job.
 @MainActor
@@ -293,23 +333,26 @@ private extension CombinedShiftFocus {
     /// settable text capability; no setter is called by this native transport.
     func nativeFieldIsEditable() -> Bool {
         guard nativeFieldHasNoSecureSubrole() else { return false }
-        func attribute(_ name: String) -> AnyObject? {
+        var rawRole: AnyObject?
+        guard AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &rawRole) == .success,
+              let role = rawRole as? String,
+              [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole].contains(role) else { return false }
+        func flag(_ name: String) -> NativeFieldBooleanSignal {
             var raw: AnyObject?
-            guard AXUIElementCopyAttributeValue(element, name as CFString, &raw) == .success else { return nil }
-            return raw
+            let status = AXUIElementCopyAttributeValue(element, name as CFString, &raw)
+            return NativeFieldBooleanSignal.attribute(status: status, raw: raw)
         }
-        guard let role = attribute(kAXRoleAttribute) as? String,
-              [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole].contains(role),
-              attribute(kAXEnabledAttribute) as? Bool == true,
-              attribute("AXReadOnly") as? Bool != true,
-              attribute("AXEditable") as? Bool != false else { return false }
-        if attribute("AXEditable") as? Bool == true { return true }
-        for name in [kAXValueAttribute, kAXSelectedTextAttribute] {
+        let enabled = flag(kAXEnabledAttribute)
+        let readOnly = flag("AXReadOnly")
+        let editable = flag("AXEditable")
+        var selectedTextSettable = NativeFieldBooleanSignal.unavailable
+        if editable == .unavailable {
             var settable = DarwinBoolean(false)
-            if AXUIElementIsAttributeSettable(element, name as CFString, &settable) == .success,
-               settable.boolValue { return true }
+            let status = AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable)
+            selectedTextSettable = .capability(status: status, settable: settable.boolValue)
         }
-        return false
+        return NativeFieldEditabilityPolicy.allows(enabled: enabled, readOnly: readOnly,
+            editable: editable, selectedTextSettable: selectedTextSettable)
     }
 
     /// Whole bounded raw UTF-16 read from the original AX object. Checking the
