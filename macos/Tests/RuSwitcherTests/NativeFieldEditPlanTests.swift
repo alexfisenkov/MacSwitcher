@@ -18,24 +18,23 @@ final class NativeFieldEditPlanTests: XCTestCase {
         XCTAssertEqual(value.originalSnapshot.text.utf16.map { $0 }, Array((prefix + "ghbd" + suffix).utf16))
         XCTAssertEqual(value.resultSnapshot.text.utf16.map { $0 }, Array((prefix + "прив" + suffix).utf16))
         XCTAssertEqual(value.resultSnapshot.caretUTF16Location, start + 4)
-        XCTAssertEqual(value.steps.count, 13)
-        XCTAssertEqual(value.steps.first?.operation, .insertReplacement)
-        XCTAssertEqual(value.steps.first?.expectedAfter.text, prefix + "ghbdприв" + suffix)
+        XCTAssertEqual(value.steps.count, 5)
+        XCTAssertEqual(value.steps.first?.operation, .selectPreviousCharacter)
+        XCTAssertEqual(value.steps.first?.expectedAfter.text, prefix + "ghbd" + suffix)
         for index in 1..<value.steps.count {
             XCTAssertEqual(value.steps[index].expectedBefore, value.steps[index - 1].expectedAfter)
         }
         XCTAssertEqual(value.steps.last?.expectedAfter, value.resultSnapshot)
     }
 
-    func testEveryLeftDeleteAndRightHasAnExactWholeFieldState() throws {
+    func testSelectionKeepsOriginalTextUntilOneFinalReplacement() throws {
         let value = try plan().get()
-        XCTAssertEqual(value.steps.map(\.operation), [.insertReplacement]
-            + Array(repeating: .left, count: 4) + Array(repeating: .backspace, count: 4)
-            + Array(repeating: .right, count: 4))
-        XCTAssertEqual(value.steps[4].expectedAfter, NativeFieldObservation(text: "ghbdприв", caretUTF16Location: 4, selectionLength: 0))
-        XCTAssertEqual(value.steps[5].expectedAfter, NativeFieldObservation(text: "ghbприв", caretUTF16Location: 3, selectionLength: 0))
-        XCTAssertEqual(value.steps[8].expectedAfter, NativeFieldObservation(text: "прив", caretUTF16Location: 0, selectionLength: 0))
-        XCTAssertEqual(value.steps[9].expectedAfter, NativeFieldObservation(text: "прив", caretUTF16Location: 1, selectionLength: 0))
+        XCTAssertEqual(value.steps.map(\.operation), Array(repeating: .selectPreviousCharacter, count: 4) + [.insertReplacement])
+        for index in 0..<4 {
+            XCTAssertEqual(value.steps[index].expectedAfter,
+                NativeFieldObservation(text: "ghbd", caretUTF16Location: 3 - index, selectionLength: index + 1))
+        }
+        XCTAssertEqual(value.steps[4].expectedAfter, NativeFieldObservation(text: "прив", caretUTF16Location: 4, selectionLength: 0))
     }
 
     func testRejectsReadOnlyInvalidSelectionRangeTextAndUnsupportedEdits() {
@@ -46,6 +45,12 @@ final class NativeFieldEditPlanTests: XCTestCase {
         for result in failures { if case .success = result { XCTFail("Unsafe plan was accepted") } }
     }
 
+    func testRefusesSuffixBoundaryInsideComposedCharacterBeforeSelection() {
+        for suffix in ["\u{301}", "\u{FE0F}", "\u{20E3}", "\u{200D}x"] {
+            XCTAssertThrowsError(try plan("ghbd" + suffix).get(), "Selection would include a neighbour")
+        }
+    }
+
     func testRejectsRTLAndBidiControlsAnywhereIncludingSupplementaryScripts() {
         for neighbor in ["שלום", "مرحبا", "𞤀", "١٢٣", "\u{202E}", "\u{2067}", "\u{061C}", "\u{200F}"] {
             if case .success = plan("ghbd " + neighbor) { XCTFail("Accepted unsafe direction") }
@@ -54,10 +59,10 @@ final class NativeFieldEditPlanTests: XCTestCase {
         }
     }
 
-    func testFieldBoundIncludesInsertFirstDuplicateAndEditLengthIsBounded() {
+    func testFieldBoundAllowsExactLimitWithoutDuplicateAndEditLengthIsBounded() {
         let max = NativeFieldEditPlan.maximumFieldUnits
-        XCTAssertNoThrow(try plan("ghbd" + String(repeating: "x", count: max - 8)).get())
-        if case .success = plan("ghbd" + String(repeating: "x", count: max - 7)) { XCTFail("Duplicate exceeds whole-field bound") }
+        XCTAssertNoThrow(try plan("ghbd" + String(repeating: "x", count: max - 4)).get())
+        if case .success = plan("ghbd" + String(repeating: "x", count: max - 3)) { XCTFail("Original exceeds whole-field bound") }
         let limit = NativeFieldEditPlan.maximumEditUnits
         XCTAssertEqual(limit, 24)
         let accepted = String(repeating: "a", count: limit)

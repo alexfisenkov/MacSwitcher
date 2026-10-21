@@ -29,7 +29,7 @@ final class HeldKeyReplayTests: XCTestCase {
     }
 
     func testShortcutsAndUnconfirmedSourceKeepTheirOriginalPayload() {
-        for flags in [CGEventFlags.maskCommand, .maskControl, .maskAlternate] {
+        for flags in [CGEventFlags.maskCommand, .maskControl, .maskAlternate, .maskSecondaryFn] {
             let next = event(flags: flags)
             XCTAssertFalse(HeldKeyReplay.rewrite(next, confirmedLayoutID: "ru", currentLayoutID: { "ru" },
                 translate: { _, _, _ in XCTFail("Shortcut must not become printable text"); return "е" }))
@@ -102,5 +102,87 @@ final class HeldKeyReplayTests: XCTestCase {
             translate: { id, _, _, _ in id == "ru" ? "е" : "t" })
         XCTAssertEqual(observed, "ru")
         XCTAssertEqual(text(next), "е")
+    }
+
+    func testPreLeaseQueuedKeyUsesReceiptAfterLastKnownForwardedTimestamp() throws {
+        let fence = InputEventFence()
+        let lastForwarded = fence.enterPhysicalEvent(eventTimestamp: DispatchTime.now().uptimeNanoseconds)
+        fence.leavePhysicalEvent(lastForwarded)
+        let next = event()
+        let beforeLease = DispatchTime.now().uptimeNanoseconds
+        next.timestamp = beforeLease
+        let lease = try XCTUnwrap(fence.begin(processID: 42))
+        fence.finish(lease, replayLayoutID: "ru")
+        let admission = fence.enterPhysicalEvent(eventTimestamp: beforeLease)
+        defer { fence.leavePhysicalEvent() }
+        XCTAssertFalse(admission.wasHeld)
+        XCTAssertTrue(admission.needsSourceRefresh)
+        var reads = 0
+        let source = HeldKeyReplay.refreshForForwarding(next,
+            needsSourceRefresh: admission.needsSourceRefresh, remoteDesktopMode: false,
+            observeSource: { reads += 1; return "ru" },
+            translate: { source, _, _, _ in source == "ru" ? "е" : "t" })
+        XCTAssertEqual(source, "ru")
+        XCTAssertEqual(text(next), "е")
+        XCTAssertEqual(reads, 1)
+    }
+
+    func testIdleASCIIReplacementPayloadIsNotReinterpretedFromPhysicalKeyCode() {
+        // A remapper/software keyboard intentionally emitted ASCII t on the a key.
+        let next = event(key: 0)
+        XCTAssertNil(HeldKeyReplay.refreshForForwarding(next, needsSourceRefresh: false, remoteDesktopMode: false,
+            observeSource: { XCTFail("No correction window authorizes source refresh"); return "en" },
+            translate: { _, _, _, _ in XCTFail("Preserve intentional payload"); return "a" }))
+        XCTAssertEqual(text(next), "t")
+    }
+
+    func testRemappedPayloadOutsideOldReceiptRemainsUnchanged() throws {
+        let fence = InputEventFence()
+        let prior = fence.enterPhysicalEvent(eventTimestamp: DispatchTime.now().uptimeNanoseconds)
+        fence.leavePhysicalEvent(prior)
+        let lease = try XCTUnwrap(fence.begin(processID: 42))
+        fence.finish(lease, replayLayoutID: "ru")
+        let next = event(key: 0)
+        next.timestamp = DispatchTime.now().uptimeNanoseconds
+        let admission = fence.enterPhysicalEvent(eventTimestamp: next.timestamp)
+        defer { fence.leavePhysicalEvent(admission) }
+        XCTAssertFalse(admission.needsSourceRefresh)
+        XCTAssertNil(HeldKeyReplay.refreshForForwarding(next,
+            needsSourceRefresh: admission.needsSourceRefresh, remoteDesktopMode: false,
+            observeSource: { XCTFail("Completed old window must not authorize this event"); return "ru" },
+            translate: { _, _, _, _ in XCTFail("Keep remapped payload"); return "ф" }))
+        XCTAssertEqual(text(next), "t")
+    }
+
+    func testForwardingPreservesRemoteUnicodeAndInputWithoutTransitionReceipt() {
+        for (receipt, remote) in [(true, true), (false, true), (false, false)] {
+            let next = event()
+            XCTAssertNil(HeldKeyReplay.refreshForForwarding(next, needsSourceRefresh: receipt, remoteDesktopMode: remote,
+                observeSource: { XCTFail("Ineligible input must not read or decode a source"); return "ru" },
+                translate: { _, _, _, _ in XCTFail("Preserve forwarded input"); return "е" }))
+            XCTAssertEqual(text(next), "t")
+        }
+    }
+
+    func testEmptyComposedAndUnsupportedPayloadsCannotInventPrintableText() {
+        for original in ["", "é", "e\u{301}", "😀", "ab", "\u{0483}", "\n"] {
+            let next = event()
+            let units = Array(original.utf16)
+            units.withUnsafeBufferPointer {
+                next.keyboardSetUnicodeString(stringLength: units.count, unicodeString: $0.baseAddress)
+            }
+            XCTAssertFalse(HeldKeyReplay.rewrite(next, confirmedLayoutID: "ru", currentLayoutID: { "ru" },
+                translate: { _, _, _ in XCTFail("Unsupported payload must not be decoded"); return "е" }))
+            XCTAssertEqual(text(next), original)
+        }
+    }
+
+    func testMissingDeadKeyOrUnsupportedTranslationPreservesOriginalPayload() {
+        for translated: Character? in [nil, "é", "e\u{301}", "😀", "\u{0483}", "\n"] {
+            let next = event()
+            XCTAssertFalse(HeldKeyReplay.rewrite(next, confirmedLayoutID: "ru", currentLayoutID: { "ru" },
+                translate: { _, _, _ in translated }))
+            XCTAssertEqual(text(next), "t")
+        }
     }
 }

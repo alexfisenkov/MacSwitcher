@@ -190,6 +190,20 @@ enum NativeWholeFieldRecovery {
 /// Конвертация текста между раскладками
 @MainActor
 final class TextConverter {
+    private var nativeTextQueuedHandler: ((String) -> Void)?
+    private var nativeAXTimeout: Float {
+        Float(NativeAXMessagingPolicy.configuredTimeout(arguments: CommandLine.arguments))
+    }
+
+    /// MainActor-scoped receipt. Only a queued text insertion invokes it;
+    /// selection preparation and cancellation never change the input source.
+    func withNativeTextQueuedHandler<T>(_ handler: @escaping (String) -> Void,
+                                       perform: () -> T) -> T {
+        let previous = nativeTextQueuedHandler
+        nativeTextQueuedHandler = handler
+        defer { nativeTextQueuedHandler = previous }
+        return perform()
+    }
     private var lastConvertedCount = 0
     private var lastBoundaryCount = 0
     private lazy var clipboardSession = ClipboardRestoreSession(pasteboard: .general)
@@ -278,9 +292,9 @@ final class TextConverter {
             RuntimeDiagnostics.beginNativeFocusReadAttempt()
         }
         if forceNativeFixture || route == .nativeCanary {
-            AXUIElementSetMessagingTimeout(execution.focus.element, 0.003)
+            guard AXUIElementSetMessagingTimeout(execution.focus.element, nativeAXTimeout) == .success else { return false }
             defer { AXUIElementSetMessagingTimeout(execution.focus.element, 0.05) }
-            guard execution.isValid(timeout: 0.003), original == "ghbd", replacement == "прив", sourceLayoutID == "com.apple.keylayout.US",
+            guard execution.isValid(timeout: nativeAXTimeout), original == "ghbd", replacement == "прив", sourceLayoutID == "com.apple.keylayout.US",
                   AutomaticEditorPolicy.fieldMatchesFixture(execution.focus),
                   CommandLine.arguments.contains("--diagnostic-native-canary"),
                   (!forceNativeFixture || (appID == "com.apple.TextEdit" && CommandLine.arguments.contains("--diagnostic-panel")))
@@ -451,7 +465,9 @@ final class TextConverter {
                           restorePrevious: Bool = false,
                           inputBarrierIsActive: (() -> Bool)? = nil) -> Bool {
         guard !isConverting, inputBarrierIsActive?() ?? true else { return false }
-        if inputBarrierIsActive != nil { AXUIElementSetMessagingTimeout(execution.focus.element, 0.003) }
+        if inputBarrierIsActive != nil {
+            guard AXUIElementSetMessagingTimeout(execution.focus.element, nativeAXTimeout) == .success else { return false }
+        }
         defer { if inputBarrierIsActive != nil { AXUIElementSetMessagingTimeout(execution.focus.element, 0.05) } }
         if hasUnconfirmedAXEdit(in: execution.focus) {
             return recoverUnconfirmedAXEdit(execution: execution, inputBarrierIsActive: inputBarrierIsActive)
@@ -465,7 +481,7 @@ final class TextConverter {
                 RuntimeDiagnostics.record(.selectionSnapshotUnavailable); return false
             }
         }
-        guard execution.isValid(timeout: inputBarrierIsActive == nil ? 0.05 : 0.003), let original = execution.focus.selectionSnapshot() else {
+        guard execution.isValid(timeout: inputBarrierIsActive == nil ? 0.05 : nativeAXTimeout), let original = execution.focus.selectionSnapshot() else {
             RuntimeDiagnostics.record(.selectionSnapshotUnavailable); return false
         }
         let restoring = restorePrevious && lastWasAXEdit && !lastOriginal.isEmpty && original.text == lastConverted
@@ -554,7 +570,7 @@ final class TextConverter {
             replacing: preservedOriginal?.focus) else {
             RuntimeDiagnostics.record(.unconfirmedEditBlocked); return .refused
         }
-        AXUIElementSetMessagingTimeout(execution.focus.element, 0.003)
+        guard AXUIElementSetMessagingTimeout(execution.focus.element, nativeAXTimeout) == .success else { return .refused }
         defer { AXUIElementSetMessagingTimeout(execution.focus.element, 0.05) }
         guard let current = execution.focus.selectionRange(),
               current.location == expectedSelection.location, current.length == expectedSelection.length,
@@ -581,14 +597,18 @@ final class TextConverter {
             retainedSource = snapshot
         }
         let result: VerifiedNativeFieldEditResult
+        let textQueued = { [weak self] in
+            guard let target = layouts?.target ?? context?.targetLayoutID, !target.isEmpty else { return }
+            self?.nativeTextQueuedHandler?(target)
+        }
         if selected {
             result = NativeAutoEventTransport.executeSelected(original: original.text, replacement: replacement,
                 start: original.range.location, execution: execution, inputBarrierIsActive: leasedGate,
-                onPrepared: prepare)
+                onPrepared: prepare, onTextQueued: textQueued)
         } else {
             result = NativeAutoEventTransport.executeVerified(original: original.text, replacement: replacement,
                 start: original.range.location, execution: execution, inputBarrierIsActive: leasedGate,
-                onPrepared: prepare)
+                onPrepared: prepare, onTextQueued: textQueued)
         }
         switch result {
         case .refused: return .refused
@@ -636,9 +656,11 @@ final class TextConverter {
         // A native unknown requires an independent input lease and an explicit
         // whole-result selection. It cannot fall through to an AX writer.
         guard !pending.requiresExplicitSelection || inputBarrierIsActive != nil else { return false }
-        if inputBarrierIsActive != nil { AXUIElementSetMessagingTimeout(execution.focus.element, 0.003) }
+        if inputBarrierIsActive != nil {
+            guard AXUIElementSetMessagingTimeout(execution.focus.element, nativeAXTimeout) == .success else { return false }
+        }
         defer { if inputBarrierIsActive != nil { AXUIElementSetMessagingTimeout(execution.focus.element, 0.05) } }
-        guard execution.isValid(timeout: inputBarrierIsActive == nil ? 0.05 : 0.003),
+        guard execution.isValid(timeout: inputBarrierIsActive == nil ? 0.05 : nativeAXTimeout),
               let current = execution.focus.selectionRange() else { return false }
         guard !pending.requiresExplicitSelection || current.length > 0 else { return false }
         let resultRange = CFRange(location: pending.original.range.location, length: pending.replacement.utf16.count)
@@ -650,7 +672,7 @@ final class TextConverter {
             if !pending.requiresExplicitSelection,
                pending.original.resultSnapshot(replacement: pending.original.text, selection: current,
                 observedText: execution.focus.text(in: pending.original.range)) != nil,
-               execution.isValid(timeout: inputBarrierIsActive == nil ? 0.05 : 0.003) {
+               execution.isValid(timeout: inputBarrierIsActive == nil ? 0.05 : nativeAXTimeout) {
                 removeUnconfirmed(in: execution.focus)
             }
             return false
@@ -1099,7 +1121,9 @@ final class TextConverter {
                    inputBarrierIsActive: (() -> Bool)? = nil) -> Bool {
         guard context == nil || execution != nil else { return false }
         guard inputBarrierIsActive == nil || (execution != nil && inputBarrierIsActive?() == true) else { return false }
-        if let execution, inputBarrierIsActive != nil { AXUIElementSetMessagingTimeout(execution.focus.element, 0.003) }
+        if let execution, inputBarrierIsActive != nil {
+            guard AXUIElementSetMessagingTimeout(execution.focus.element, nativeAXTimeout) == .success else { return false }
+        }
         defer { if let execution, inputBarrierIsActive != nil { AXUIElementSetMessagingTimeout(execution.focus.element, 0.05) } }
         guard !isConverting else { return false }
         if let execution, hasUnconfirmedAXEdit(in: execution.focus) {
@@ -1108,7 +1132,7 @@ final class TextConverter {
         if lastWasAXEdit {
             guard let execution, let origin = lastSelectionOrigin, let resultRange = lastSelectionRange,
                   origin.processID == execution.focus.processID, CFEqual(origin.element, execution.focus.element),
-                  execution.isValid(timeout: inputBarrierIsActive == nil ? 0.05 : 0.003), let current = execution.focus.selectionRange(),
+                  execution.isValid(timeout: inputBarrierIsActive == nil ? 0.05 : nativeAXTimeout), let current = execution.focus.selectionRange(),
                   let original = CombinedShiftSelectionSnapshot(range: resultRange, text: lastConverted),
                   original.resultSnapshot(replacement: lastConverted, selection: current,
                       observedText: execution.focus.text(in: resultRange)) != nil else { return false }

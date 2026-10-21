@@ -2,7 +2,7 @@ import Foundation
 
 /// Diagnostic RPC budget only; it never extends an edit or input-fence deadline.
 enum NativeAXMessagingPolicy {
-    static let defaultTimeout: TimeInterval = 0.003
+    static let defaultTimeout: TimeInterval = 0.020
     private static let option = "--diagnostic-native-ax-timeout-ms"
 
     static func configuredTimeout(arguments: [String]) -> TimeInterval {

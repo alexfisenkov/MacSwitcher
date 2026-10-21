@@ -581,59 +581,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             RuntimeDiagnostics.record(.doubleFailed)
             return
         }
-        var replayLayoutID: String?
-        defer { keyboardMonitor.finishNativeInputTransaction(lease, replayLayoutID: replayLayoutID) }
-        let isCurrent = { [weak self] in self?.keyboardMonitor.nativeInputTransactionIsCurrent(lease) == true }
-        let succeeded: Bool
-        if textConverter.hasUnconfirmedAXEdit(in: execution.focus) {
-            succeeded = textConverter.reconvert(context: context, execution: execution,
-                inputBarrierIsActive: isCurrent)
-        } else if (execution.focus.initialSelection?.length ?? 0) > 0 {
-            succeeded = textConverter.convertSelection(context: context, execution: execution,
-                restorePrevious: request.reconvert, inputBarrierIsActive: isCurrent)
-        } else if request.reconvert {
-            guard textConverter.hasReconversionState else {
-                RuntimeDiagnostics.record(.doubleNoReconversionState); return
-            }
-            succeeded = textConverter.reconvert(context: context, execution: execution,
-                inputBarrierIsActive: isCurrent)
-        } else {
-            guard let wordContext = request.wordContext else {
-                RuntimeDiagnostics.record(.doubleMissingWordContext); return
-            }
-            guard !request.wordKeys.isEmpty || (!request.prevWordKeys.isEmpty && request.boundaryCount > 0) else {
-                RuntimeDiagnostics.record(.doubleNoBufferOrSelection); return
-            }
-            if SettingsManager.shared.convertWholeLine, !request.lineKeys.isEmpty,
-               let source = request.lineSourceLayoutID,
-               let lineContext = LayoutSwitcher.combinedShiftContext(sourceLayoutID: source) {
-                succeeded = textConverter.convertLineBuffer(request.lineKeys, context: lineContext,
-                    execution: execution, inputBarrierIsActive: isCurrent)
+        let isCurrent = { [weak self] in
+            guard let self else { return false }
+            return self.keyboardMonitor.nativeInputTransactionIsCurrent(lease)
+                && self.keyboardMonitor.inputRevision == execution.inputRevision
+                && NSWorkspace.shared.frontmostApplication?.processIdentifier == execution.focus.processID
+                && !AutoSwitchPolicy.secureInputActive
+        }
+        var requestedAt: UInt64 = 0
+        let sourceCommit = NativeQueuedSourceCommit(isCurrent: isCurrent, request: { target in
+            requestedAt = DispatchTime.now().uptimeNanoseconds
+            return LayoutSwitcher.switchToWithConfirmation(layoutID: target)
+        }, onUnconfirmed: { [weak self] target in
+            self?.keyboardMonitor.noteUnconfirmedInputSource(target, requestedAt: requestedAt)
+        })
+        defer { keyboardMonitor.finishNativeInputTransaction(lease, replayLayoutID: sourceCommit.confirmedLayoutID) }
+        let succeeded = textConverter.withNativeTextQueuedHandler({ target in
+            sourceCommit.textQueued(targetID: target)
+        }) {
+            if textConverter.hasUnconfirmedAXEdit(in: execution.focus) {
+                return textConverter.reconvert(context: context, execution: execution,
+                    inputBarrierIsActive: isCurrent)
+            } else if (execution.focus.initialSelection?.length ?? 0) > 0 {
+                return textConverter.convertSelection(context: context, execution: execution,
+                    restorePrevious: request.reconvert, inputBarrierIsActive: isCurrent)
+            } else if request.reconvert {
+                guard textConverter.hasReconversionState else {
+                    RuntimeDiagnostics.record(.doubleNoReconversionState); return false
+                }
+                return textConverter.reconvert(context: context, execution: execution,
+                    inputBarrierIsActive: isCurrent)
             } else {
-                succeeded = textConverter.convert(wordKeys: request.wordKeys, prevWordKeys: request.prevWordKeys,
+                guard let wordContext = request.wordContext else {
+                    RuntimeDiagnostics.record(.doubleMissingWordContext); return false
+                }
+                guard !request.wordKeys.isEmpty || (!request.prevWordKeys.isEmpty && request.boundaryCount > 0) else {
+                    RuntimeDiagnostics.record(.doubleNoBufferOrSelection); return false
+                }
+                if SettingsManager.shared.convertWholeLine, !request.lineKeys.isEmpty,
+                   let source = request.lineSourceLayoutID,
+                   let lineContext = LayoutSwitcher.combinedShiftContext(sourceLayoutID: source) {
+                    return textConverter.convertLineBuffer(request.lineKeys, context: lineContext,
+                        execution: execution, inputBarrierIsActive: isCurrent)
+                }
+                return textConverter.convert(wordKeys: request.wordKeys, prevWordKeys: request.prevWordKeys,
                     boundaryCount: request.boundaryCount, context: wordContext, execution: execution,
                     inputBarrierIsActive: isCurrent)
             }
         }
-        replayLayoutID = finishCombinedShift(succeeded: succeeded, request: request, context: context,
-            isInputCurrent: isCurrent)
+        finishCombinedShift(succeeded: succeeded, request: request, context: context,
+            sourceCommit: sourceCommit, isInputCurrent: isCurrent)
     }
 
-    @discardableResult
     private func finishCombinedShift(succeeded: Bool, request: CombinedShiftRequest,
-        context: CombinedShiftContext, isInputCurrent: (() -> Bool)? = nil) -> String? {
-        guard succeeded, isInputCurrent?() ?? true else {
-            RuntimeDiagnostics.record(.doubleFailed); return nil
+        context: CombinedShiftContext, sourceCommit: NativeQueuedSourceCommit,
+        isInputCurrent: () -> Bool) {
+        guard succeeded, isInputCurrent() else {
+            // A queued edit already selected its source before AX acknowledgement.
+            // Keep that receipt even when this field's result remains uncertain.
+            if sourceCommit.confirmedLayoutID != nil { updateStatusIcon() }
+            RuntimeDiagnostics.record(.doubleFailed); return
         }
         let resultID = textConverter.lastResultLayoutID ?? context.targetLayoutID
-        let requestedAt = DispatchTime.now().uptimeNanoseconds
-        let outcome = LayoutSwitcher.switchToWithConfirmation(layoutID: resultID)
-        if outcome == .unconfirmed {
-            keyboardMonitor.noteUnconfirmedInputSource(resultID, requestedAt: requestedAt)
-        }
-        guard outcome == .confirmed, isInputCurrent?() ?? true else {
+        if sourceCommit.targetLayoutID == nil { sourceCommit.textQueued(targetID: resultID) }
+        guard sourceCommit.confirmedLayoutID == resultID, isInputCurrent() else {
             keyboardMonitor.resetPredictionContext()
-            RuntimeDiagnostics.record(.doubleFailed); return nil
+            RuntimeDiagnostics.record(.doubleFailed); return
         }
         RuntimeDiagnostics.record(.doubleSucceeded)
         keyboardMonitor.markConverted()
@@ -641,7 +654,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // A modal question must never keep the native input lease open.
         if request.reconvert { DispatchQueue.main.async { [weak self] in self?.offerExceptionAfterUndo() } }
         else { lastAutoConverted = nil }
-        return resultID
     }
 
     private func resetCombinedShiftAfterPause() {

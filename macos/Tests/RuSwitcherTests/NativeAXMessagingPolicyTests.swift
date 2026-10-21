@@ -9,9 +9,9 @@ final class NativeAXMessagingPolicyTests: XCTestCase {
         for arguments in [[], ["--diagnostic-panel"], ["--diagnostic-native-canary"],
                           ["--diagnostic-panel=true", "--diagnostic-native-canary"],
                           ["--diagnostic-panel", "--diagnostic-native-canary=true"]] {
-            XCTAssertEqual(NativeAXMessagingPolicy.configuredTimeout(arguments: arguments + [option, "20"]), 0.003)
+            XCTAssertEqual(NativeAXMessagingPolicy.configuredTimeout(arguments: arguments + [option, "20"]), 0.020)
         }
-        XCTAssertEqual(NativeAXMessagingPolicy.configuredTimeout(arguments: flags), 0.003)
+        XCTAssertEqual(NativeAXMessagingPolicy.configuredTimeout(arguments: flags), 0.020)
     }
 
     func testOnlyFourWhitelistedValuesWorkInSeparateAndEqualsForms() {
@@ -21,12 +21,12 @@ final class NativeAXMessagingPolicyTests: XCTestCase {
         }
     }
 
-    func testMalformedMissingAndDuplicateOverridesFailClosedToThreeMilliseconds() {
+    func testMalformedMissingAndDuplicateOverridesFailClosedToDefaultTwentyMilliseconds() {
         for value in ["", "0", "2", "5", "-1", "NaN", "inf", "10.0", "010", "+10", "1000"] {
-            XCTAssertEqual(NativeAXMessagingPolicy.configuredTimeout(arguments: flags + [option, value]), 0.003)
+            XCTAssertEqual(NativeAXMessagingPolicy.configuredTimeout(arguments: flags + [option, value]), 0.020)
         }
-        XCTAssertEqual(NativeAXMessagingPolicy.configuredTimeout(arguments: flags + [option]), 0.003)
-        XCTAssertEqual(NativeAXMessagingPolicy.configuredTimeout(arguments: flags + [option, "10", option + "=20"]), 0.003)
+        XCTAssertEqual(NativeAXMessagingPolicy.configuredTimeout(arguments: flags + [option]), 0.020)
+        XCTAssertEqual(NativeAXMessagingPolicy.configuredTimeout(arguments: flags + [option, "10", option + "=20"]), 0.020)
     }
 
     func testRpcTimeoutIsPositiveAndBoundedByConfiguredAndRemainingBudgets() throws {

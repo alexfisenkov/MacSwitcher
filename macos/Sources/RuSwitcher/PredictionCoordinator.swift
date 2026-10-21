@@ -180,36 +180,49 @@ final class PredictionCoordinator {
         guard let lease = monitor.beginNativeInputTransaction(processID: snapshot.processID) else {
             RuntimeDiagnostics.record(.nativeFenceUnavailable); return
         }
-        var replayLayoutID: String?
-        defer { monitor.finishNativeInputTransaction(lease, replayLayoutID: replayLayoutID) }
-        guard converter.replaceVerifiedSuffix(original: edit.original,
-            replacement: edit.replacement, sourceLayoutID: snapshot.sourceLayoutID,
-            resultLayoutID: resultID, execution: execution,
-            inputBarrierIsActive: { [weak monitor] in
-                monitor?.nativeInputTransactionIsCurrent(lease) == true
-            }) else { RuntimeDiagnostics.record(.autoEditRefused); return }
-        RuntimeDiagnostics.record(.autoTextConfirmed)
-        guard monitor.nativeInputTransactionIsCurrent(lease) else {
-            monitor.resetPredictionContext()
-            RuntimeDiagnostics.record(.autoSourceFailed)
-            return
+        var requestedAt: UInt64 = 0
+        let sourceCommit = NativeQueuedSourceCommit(isCurrent: { [weak monitor] in
+            guard let monitor else { return false }
+            return monitor.nativeInputTransactionIsCurrent(lease)
+                && monitor.inputRevision == snapshot.inputRevision
+                && NSWorkspace.shared.frontmostApplication?.processIdentifier == snapshot.processID
+                && !AutoSwitchPolicy.secureInputActive
+        }, request: { target in
+            requestedAt = DispatchTime.now().uptimeNanoseconds
+            return LayoutSwitcher.switchToWithConfirmation(layoutID: target)
+        }, onUnconfirmed: { [weak monitor] target in
+            monitor?.noteUnconfirmedInputSource(target, requestedAt: requestedAt)
+        })
+        defer { monitor.finishNativeInputTransaction(lease, replayLayoutID: sourceCommit.confirmedLayoutID) }
+        let textConfirmed = converter.withNativeTextQueuedHandler({ target in
+            guard target == resultID else { return }
+            sourceCommit.textQueued(targetID: target)
+        }) {
+            converter.replaceVerifiedSuffix(original: edit.original,
+                replacement: edit.replacement, sourceLayoutID: snapshot.sourceLayoutID,
+                resultLayoutID: resultID, execution: execution,
+                inputBarrierIsActive: { [weak monitor] in
+                    monitor?.nativeInputTransactionIsCurrent(lease) == true
+                })
         }
-        let sourceRequestedAt = DispatchTime.now().uptimeNanoseconds
-        let sourceOutcome = LayoutSwitcher.switchToWithConfirmation(layoutID: resultID)
-        guard sourceOutcome == .confirmed else {
-            if sourceOutcome == .unconfirmed {
-                monitor.noteUnconfirmedInputSource(resultID, requestedAt: sourceRequestedAt)
+        guard textConfirmed else {
+            if sourceCommit.targetLayoutID != nil {
+                monitor.resetPredictionContext()
+                RuntimeDiagnostics.record(.autoTextUnconfirmed)
+            } else {
+                RuntimeDiagnostics.record(.autoEditRefused)
             }
-            monitor.resetPredictionContext()
-            RuntimeDiagnostics.record(sourceOutcome == .unconfirmed ? .autoSourceUnconfirmed : .autoSourceFailed)
             return
         }
-        guard monitor.nativeInputTransactionIsCurrent(lease) else {
+        RuntimeDiagnostics.record(.autoTextConfirmed)
+        // An older AX-only route has no native queue receipt. It changes the
+        // source only after its independent confirmed edit, as before.
+        if sourceCommit.targetLayoutID == nil { sourceCommit.textQueued(targetID: resultID) }
+        guard sourceCommit.outcome == .confirmed, monitor.nativeInputTransactionIsCurrent(lease) else {
             monitor.resetPredictionContext()
-            RuntimeDiagnostics.record(.autoSourceFailed)
+            RuntimeDiagnostics.record(sourceCommit.outcome == .unconfirmed ? .autoSourceUnconfirmed : .autoSourceFailed)
             return
         }
-        replayLayoutID = resultID
         RuntimeDiagnostics.record(.autoSourceConfirmed)
         monitor.recordPredictionResult(original: proposal.originalSuffix,
             replacement: proposal.replacementSuffix, resultLayoutID: resultID)

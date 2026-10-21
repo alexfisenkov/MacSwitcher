@@ -34,7 +34,7 @@ enum RuntimeDiagnosticEvent: String, CaseIterable, Sendable {
     case nativeAutoBlocked, nativeAutoInsertPosted, nativeAutoRemovalPosted, nativeAutoVerified, nativeAutoUncertain
     case nativeAutoFocusRetry, nativeAutoFocusRecovered, nativeAutoFocusRecheckFailed
     case nativeFenceHeldInput, nativeFenceInterrupted, nativeFenceUnavailable
-    case autoTextConfirmed, autoSourceConfirmed, autoSourceFailed, autoSourceUnconfirmed, heldInputRecoded
+    case autoTextConfirmed, autoTextUnconfirmed, autoSourceConfirmed, autoSourceFailed, autoSourceUnconfirmed, heldInputRecoded
     case focusReadCannotComplete, focusReadNoValue, focusReadInvalidElement
     case focusReadOtherError, focusReadMissingValue, focusReadUnexpectedType
 

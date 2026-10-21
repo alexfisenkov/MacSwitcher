@@ -15,7 +15,7 @@ struct NativeFieldObservation: Equatable {
 }
 
 enum NativeFieldEditOperation: Equatable {
-    case insertReplacement, left, backspace, right
+    case insertReplacement, selectPreviousCharacter, left, backspace, right
 }
 
 enum NativeFieldEditRefusal: Error, Equatable {
@@ -28,8 +28,8 @@ struct NativeFieldEditStep {
     let expectedAfter: NativeFieldObservation
 }
 
-/// Immutable insert-first states. Every movement and every single deletion has
-/// its own exact whole-field/caret acknowledgement, including both neighbours.
+/// Immutable states of one prepared native batch. Selecting the exact bounded
+/// suffix never changes text; the final Unicode pair replaces it in one edit.
 struct NativeFieldEditPlan {
     static let maximumFieldUnits = 32_768
     static let maximumEditUnits = 24
@@ -38,6 +38,18 @@ struct NativeFieldEditPlan {
     let originalSnapshot: NativeFieldObservation
     let resultSnapshot: NativeFieldObservation
     let steps: [NativeFieldEditStep]
+
+    /// Only an initially collapsed caret needs a preparatory native selection.
+    var preparationOperations: [NativeFieldEditOperation] {
+        originalSnapshot.selectionLength == 0 ? steps.dropLast().map(\.operation) : []
+    }
+    var preparedSnapshot: NativeFieldObservation { steps.last?.expectedBefore ?? originalSnapshot }
+    var replacementOperations: [NativeFieldEditOperation] {
+        // For a created backward selection, stabilize the caret even when an
+        // editor ignores Unicode: Shift+Left then Right preserves the old end.
+        originalSnapshot.selectionLength == 0 ? [.insertReplacement, .selectPreviousCharacter, .right]
+            : [.insertReplacement]
+    }
 
     // ICU covers supplementary RTL scripts as well as Hebrew/Arabic. Refuse if
     // the system cannot compile this Unicode-property expression.
@@ -53,12 +65,18 @@ struct NativeFieldEditPlan {
               original.utf16.count == replacement.utf16.count else { return .failure(.invalidEdit) }
         let count = original.utf16.count
         let whole = Array(snapshot.text.utf16)
-        // The insertion's duplicate must fit too, not only the original value.
-        guard whole.count <= maximumFieldUnits - count else { return .failure(.fieldTooLarge) }
+        guard whole.count <= maximumFieldUnits else { return .failure(.fieldTooLarge) }
         guard start >= 0, start <= whole.count, count <= whole.count - start,
               snapshot.selectionLength == 0,
               snapshot.caretUTF16Location == start + count else { return .failure(.invalidRange) }
         guard whole[start..<(start + count)].elementsEqual(original.utf16) else { return .failure(.originalMismatch) }
+        // Shift+Left moves by composed character, not UTF-16 unit. A combining
+        // mark just outside the proposed suffix must never be selected with it.
+        let characterBoundaries = Set(snapshot.text.indices.map { $0.utf16Offset(in: snapshot.text) }
+            + [whole.count])
+        guard characterBoundaries.contains(start), characterBoundaries.contains(start + count) else {
+            return .failure(.invalidRange)
+        }
         guard let unsafeDirection,
               unsafeDirection.firstMatch(in: snapshot.text,
                   range: NSRange(location: 0, length: whole.count)) == nil else { return .failure(.unsupportedDirection) }
@@ -72,22 +90,17 @@ struct NativeFieldEditPlan {
         let suffix = String(decoding: suffixUnits, as: UTF16.self)
         var current = snapshot
         var steps: [NativeFieldEditStep] = []
-        steps.reserveCapacity(1 + 3 * count)
-        func append(_ operation: NativeFieldEditOperation, text: String, caret: Int) {
-            let after = NativeFieldObservation(text: text, caretUTF16Location: caret, selectionLength: 0)
+        steps.reserveCapacity(count + 1)
+        func append(_ operation: NativeFieldEditOperation, text: String, caret: Int, selection: Int = 0) {
+            let after = NativeFieldObservation(text: text, caretUTF16Location: caret, selectionLength: selection)
             steps.append(NativeFieldEditStep(operation: operation, expectedBefore: current, expectedAfter: after))
             current = after
         }
-        let duplicate = prefix + original + replacement + suffix
-        append(.insertReplacement, text: duplicate, caret: start + 2 * count)
-        for offset in 1...count { append(.left, text: duplicate, caret: start + 2 * count - offset) }
-        let originalUnits = Array(original.utf16)
-        for removed in 1...count {
-            let remaining = String(decoding: originalUnits.prefix(count - removed), as: UTF16.self)
-            append(.backspace, text: prefix + remaining + replacement + suffix, caret: start + count - removed)
+        for selected in 1...count {
+            append(.selectPreviousCharacter, text: snapshot.text,
+                   caret: start + count - selected, selection: selected)
         }
-        let result = prefix + replacement + suffix
-        for offset in 1...count { append(.right, text: result, caret: start + offset) }
+        append(.insertReplacement, text: prefix + replacement + suffix, caret: start + count)
         return .success(Self(originalSnapshot: snapshot, resultSnapshot: current, steps: steps))
     }
 

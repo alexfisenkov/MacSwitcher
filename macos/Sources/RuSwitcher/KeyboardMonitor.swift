@@ -1063,20 +1063,27 @@ private func processKeyboardInput(type: CGEventType, event: CGEvent, monitor: Ke
         }
         if admission.wasHeld { RuntimeDiagnostics.record(.nativeFenceHeldInput) }
         if admission.interrupted { RuntimeDiagnostics.record(.nativeFenceInterrupted) }
-        var renderedSourceLayoutID: String?
-        if admission.needsSourceRefresh || monitor.inputSourceNeedsRefresh(eventTimestamp: event.timestamp) {
-            let observedSource = LayoutSwitcher.currentLayoutID()
-            monitor.observeInputSource(observedSource)
-            if type == .keyDown, !SettingsManager.shared.remoteDesktopMode {
-                renderedSourceLayoutID = HeldKeyReplay.refreshUsingObservedSource(event,
-                    observeSource: { observedSource })
-            }
+        let needsSourceRefresh = admission.needsSourceRefresh
+            || monitor.inputSourceNeedsRefresh(eventTimestamp: event.timestamp)
+        var observedSource: String?
+        func observeSourceOnce() -> String {
+            if let observedSource { return observedSource }
+            let source = LayoutSwitcher.currentLayoutID()
+            observedSource = source
+            monitor.observeInputSource(source)
+            return source
         }
+        // Non-key events still acknowledge a previously unconfirmed transition.
+        if needsSourceRefresh { _ = observeSourceOnce() }
+        let renderedSourceLayoutID = HeldKeyReplay.refreshForForwarding(event,
+            needsSourceRefresh: needsSourceRefresh,
+            remoteDesktopMode: SettingsManager.shared.remoteDesktopMode,
+            observeSource: observeSourceOnce)
         let result = keyboardEventOnMain(type: type, event: event, monitor: monitor,
             renderedSourceLayoutID: renderedSourceLayoutID)
         return (result, monitor.pendingCombinedShiftConversion != nil)
     }
-    fence.leavePhysicalEvent()
+    fence.leavePhysicalEvent(admission, wasForwarded: forwarded.event != nil)
     if forwarded.needsConversion {
         DispatchQueue.main.sync { monitor.deliverPendingCombinedShiftConversion(after: fence) }
     }

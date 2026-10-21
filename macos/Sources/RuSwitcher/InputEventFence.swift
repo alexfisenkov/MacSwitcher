@@ -21,17 +21,21 @@ final class InputEventFence: @unchecked Sendable {
         let needsSourceRefresh: Bool
         let replayLayoutID: String?
         let interrupted: Bool
+        fileprivate let eventTimestamp: UInt64?
+        fileprivate let fenceID: UUID
     }
 
     private struct ActiveLease {
         let lease: Lease
         let startedAt: UInt64
+        let lastForwardedTimestamp: UInt64?
         let deadline: TimeInterval
     }
 
     private struct Completion {
         let generation: UInt64
         let startedAt: UInt64
+        let lastForwardedTimestamp: UInt64?
         let finishedAt: UInt64
         let replayLayoutID: String?
     }
@@ -42,6 +46,9 @@ final class InputEventFence: @unchecked Sendable {
     private var active: ActiveLease?
     private var waitingCallbacks = 0
     private var forwardingCallbacks = 0
+    // Metadata only. Returning an event for forwarding does not acknowledge
+    // editor delivery; it bounds which older queued events may need recoding.
+    private var lastForwardedTimestamp: UInt64?
     private var blocked = false
     // Later leases must not erase receipts for events still queued by the OS.
     private var completions: [Completion] = []
@@ -56,6 +63,7 @@ final class InputEventFence: @unchecked Sendable {
         currentGeneration &+= 1
         let lease = Lease(generation: currentGeneration, processID: processID, fenceID: fenceID)
         active = ActiveLease(lease: lease, startedAt: DispatchTime.now().uptimeNanoseconds,
+                             lastForwardedTimestamp: lastForwardedTimestamp,
                              deadline: ProcessInfo.processInfo.systemUptime + maximumDuration)
         return lease
     }
@@ -65,6 +73,8 @@ final class InputEventFence: @unchecked Sendable {
         condition.lock()
         defer { condition.unlock() }
         expireLease()
+        let enteredAt = DispatchTime.now().uptimeNanoseconds
+        let validTimestamp = eventTimestamp.flatMap { $0 > 0 && $0 <= enteredAt ? $0 : nil }
         let heldGeneration = active?.lease.generation
         if let heldGeneration {
             // Reserve the callback before waiting so a competing begin cannot
@@ -86,15 +96,19 @@ final class InputEventFence: @unchecked Sendable {
             if let heldGeneration {
                 return completed.generation == heldGeneration
             }
-            guard let eventTimestamp, eventTimestamp > 0 else { return false }
-            return eventTimestamp >= completed.startedAt && eventTimestamp <= completed.finishedAt
+            guard let eventTimestamp = validTimestamp, eventTimestamp <= completed.finishedAt else { return false }
+            if let baseline = completed.lastForwardedTimestamp {
+                return eventTimestamp > baseline
+            }
+            return eventTimestamp >= completed.startedAt
         }
         return Admission(wasHeld: heldGeneration != nil,
                          needsSourceRefresh: heldGeneration != nil || receipt != nil,
-                         replayLayoutID: receipt?.replayLayoutID, interrupted: blocked)
+                         replayLayoutID: receipt?.replayLayoutID, interrupted: blocked,
+                         eventTimestamp: validTimestamp, fenceID: fenceID)
     }
 
-    func leavePhysicalEvent() {
+    func leavePhysicalEvent(_ admission: Admission? = nil, wasForwarded: Bool = true) {
         condition.lock()
         defer { condition.unlock() }
         guard forwardingCallbacks > 0 else {
@@ -102,6 +116,10 @@ final class InputEventFence: @unchecked Sendable {
             return
         }
         forwardingCallbacks -= 1
+        if wasForwarded, let admission, admission.fenceID == fenceID,
+           let timestamp = admission.eventTimestamp {
+            lastForwardedTimestamp = max(lastForwardedTimestamp ?? timestamp, timestamp)
+        }
     }
 
     func finish(_ lease: Lease, replayLayoutID: String?) {
@@ -110,6 +128,7 @@ final class InputEventFence: @unchecked Sendable {
         expireLease()
         guard !blocked, let finished = active, finished.lease == lease else { return }
         completions.append(Completion(generation: lease.generation, startedAt: finished.startedAt,
+                                      lastForwardedTimestamp: finished.lastForwardedTimestamp,
                                       finishedAt: DispatchTime.now().uptimeNanoseconds, replayLayoutID: replayLayoutID))
         if completions.count > 64 { completions.removeFirst(completions.count - 64) }
         active = nil

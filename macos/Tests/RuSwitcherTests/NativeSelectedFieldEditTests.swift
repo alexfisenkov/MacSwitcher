@@ -73,6 +73,7 @@ final class NativeSelectedFieldEditTests: XCTestCase {
         var truncatedToUnits: Int?
         var afterPost: (() -> Void)?
         var afterObservation: (() -> Void)?
+        var observationOverride: ((Int) -> NativeFieldObservation?)?
         var observations = 0
         var pauses = 0
 
@@ -81,14 +82,14 @@ final class NativeSelectedFieldEditTests: XCTestCase {
         }
         func run() -> VerifiedNativeFieldEditResult {
             let access = NativeFieldAccess(validateOriginalIdentity: { _ in self.valid },
-                cheapGate: { self.barrier }, isEditable: { self.editable },
-                observe: {
+                cheapGate: { self.barrier }, isEditable: { _ in self.editable },
+                observe: { _ in
                     self.observations += 1
                     self.afterObservation?()
-                    return self.snapshot
-                }, post: { operation in
-                    self.posted.append(operation)
-                    guard operation == .insertReplacement else { return false }
+                    return self.observationOverride?(self.observations) ?? self.snapshot
+                }, postBatch: { operations in
+                    guard operations == [.insertReplacement] else { return false }
+                    self.posted.append(contentsOf: operations)
                     if self.deliver {
                         var units = Array(self.text.utf16)
                         let inserted = Array(self.replacement.utf16.prefix(self.truncatedToUnits ?? self.replacement.utf16.count))
@@ -138,6 +139,19 @@ final class NativeSelectedFieldEditTests: XCTestCase {
     }
 
     @MainActor
+    func testSelectedTornOldTextWithNewCaretWaitsForExactFinalReadWithoutSecondInsertion() {
+        let field = Field()
+        field.observationOverride = { count in
+            count == 3 ? NativeFieldObservation(text: "ghbdtn", caretUTF16Location: 6, selectionLength: 0) : nil
+        }
+        XCTAssertEqual(field.run(), .confirmed)
+        XCTAssertEqual(field.posted, [.insertReplacement])
+        XCTAssertEqual(field.text, "привет")
+        XCTAssertEqual(field.observations, 4)
+        XCTAssertEqual(field.pauses, 1)
+    }
+
+    @MainActor
     func testSelectedDeliveryTruncationIsUncertainActualStateWithNoRetry() {
         let field = Field()
         let initial = field.snapshot
@@ -147,7 +161,8 @@ final class NativeSelectedFieldEditTests: XCTestCase {
         XCTAssertEqual(result, .uncertain(observation: field.snapshot))
         XCTAssertEqual(field.posted, [.insertReplacement])
         XCTAssertEqual(field.prepared, [initial])
-        XCTAssertEqual(field.pauses, 0)
+        XCTAssertGreaterThan(field.pauses, 0)
+        XCTAssertLessThanOrEqual(field.clock, VerifiedNativeFieldEditor.maximumDuration)
     }
 
     @MainActor

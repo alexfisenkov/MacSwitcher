@@ -42,130 +42,12 @@ enum NativeFieldEditabilityPolicy {
     }
 }
 
-/// Preallocated, marked, PID-only events. Construction never posts input.
-/// No AX selection, clipboard, global event destination, or asynchronous job.
-@MainActor
-struct NativeAutoEventTransport {
-    private let insertion: [CGEvent]
-    private let removal: [CGEvent]
-    private let left: [CGEvent]
-    private let backspace: [CGEvent]
-    private let right: [CGEvent]
-
-    init?(original: String, replacement: String) {
-        guard !original.isEmpty, original.count == replacement.count,
-              original.utf16.count == original.count, replacement.utf16.count == replacement.count,
-              replacement.utf16.count <= NativeFieldEditPlan.maximumEditUnits,
-              let source = CGEventSource(stateID: .privateState) else { return nil }
-        source.userData = kRuSwitcherEventMarker
-        source.localEventsSuppressionInterval = 0
-        func pair(_ code: CGKeyCode) -> [CGEvent]? {
-            guard let down = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: true),
-                  let up = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: false) else { return nil }
-            for event in [down, up] {
-                event.flags = []
-                event.setIntegerValueField(.eventSourceUserData, value: kRuSwitcherEventMarker)
-                event.setIntegerValueField(.keyboardEventAutorepeat, value: 0)
-            }
-            return [down, up]
-        }
-        guard let unicode = pair(0) else { return nil }
-        let units = Array(replacement.utf16)
-        for event in unicode {
-            units.withUnsafeBufferPointer { event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: $0.baseAddress) }
-            guard CombinedShiftUnicode.payloadMatches(event, expected: units) else { return nil }
-        }
-        guard let leftPair = pair(123), let backspacePair = pair(51), let rightPair = pair(124) else { return nil }
-        left = leftPair
-        backspace = backspacePair
-        right = rightPair
-        var navigation: [CGEvent] = []
-        for code in [CGKeyCode(123), 51, 124] { // Left, Backspace, Right
-            for _ in 0..<original.count {
-                guard let events = pair(code) else { return nil }
-                navigation.append(contentsOf: events)
-            }
-        }
-        insertion = unicode
-        removal = navigation
-    }
-
-    func postInsertion(to processID: Int32, whileCurrent: () -> Bool) -> Bool {
-        post(insertion, to: processID, whileCurrent: whileCurrent)
-    }
-
-    func postRemoval(to processID: Int32, whileCurrent: () -> Bool) -> Bool {
-        post(removal, to: processID, whileCurrent: whileCurrent)
-    }
-
-    /// The verified executor calls this once, then waits for this exact pair's
-    /// whole-field/caret acknowledgement before requesting another operation.
-    func post(_ operation: NativeFieldEditOperation, to processID: Int32,
-              whileCurrent: () -> Bool) -> Bool {
-        let events: [CGEvent]
-        switch operation {
-        case .insertReplacement: events = insertion
-        case .left: events = left
-        case .backspace: events = backspace
-        case .right: events = right
-        }
-        return post(events, to: processID, whileCurrent: whileCurrent)
-    }
-
-    private func post(_ events: [CGEvent], to processID: Int32, whileCurrent: () -> Bool) -> Bool {
-        guard processID > 0 else { return false }
-        for offset in stride(from: 0, to: events.count, by: 2) {
-            guard NativeFieldKeyPairPoster.post(mayContinue: whileCurrent,
-                keyDown: { events[offset].postToPid(processID) },
-                keyUp: { events[offset + 1].postToPid(processID) }) else { return false }
-        }
-        return true // queued, never interpreted as delivery confirmation
-    }
-}
-
-/// Prepared-only selection transport. One Unicode key pair carries the entire
-/// replacement; constructing or inspecting it never posts input. The CGEvent
-/// payload round-trip is preparation evidence, not target-delivery evidence.
-@MainActor
-struct NativeSelectedTextEventTransport {
-    let events: [CGEvent]
-
-    init?(replacement: String) {
-        guard !replacement.isEmpty,
-              replacement.utf16.count <= NativeFieldEditPlan.maximumSelectedReplacementUnits else { return nil }
-        let units = Array(replacement.utf16)
-        guard NativeFieldEditPlan.isWellFormedUTF16(units),
-              let source = CGEventSource(stateID: .privateState) else { return nil }
-        source.userData = kRuSwitcherEventMarker
-        source.localEventsSuppressionInterval = 0
-        guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
-              let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) else { return nil }
-        for event in [down, up] {
-            event.flags = []
-            event.setIntegerValueField(.eventSourceUserData, value: kRuSwitcherEventMarker)
-            event.setIntegerValueField(.keyboardEventAutorepeat, value: 0)
-            units.withUnsafeBufferPointer {
-                event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: $0.baseAddress)
-            }
-            guard CombinedShiftUnicode.payloadMatches(event, expected: units) else { return nil }
-        }
-        events = [down, up]
-    }
-
-    func post(to processID: Int32, whileCurrent: () -> Bool) -> Bool {
-        guard processID > 0 else { return false }
-        return NativeFieldKeyPairPoster.post(mayContinue: whileCurrent,
-            keyDown: { events[0].postToPid(processID) },
-            keyUp: { events[1].postToPid(processID) })
-    }
-}
-
 @MainActor
 extension NativeAutoEventTransport {
     static func execute(original: String, replacement: String, start: Int,
                         execution: CombinedShiftExecutionContext,
                         inputBarrierIsActive: @escaping () -> Bool) -> NativeAutomaticTextEditResult {
-        guard start == 0, let transport = NativeAutoEventTransport(original: original, replacement: replacement) else { return .refused }
+        guard start == 0, let transport = NativeAutoEventTransport(original: original, replacement: replacement, prepareLegacyRemoval: true) else { return .refused }
         let deadline = ProcessInfo.processInfo.systemUptime + NativeAutomaticTextEditor.maximumDuration
         let focus = execution.focus
         AXUIElementSetMessagingTimeout(focus.element, 0.003)
@@ -236,14 +118,18 @@ extension NativeAutoEventTransport {
     static func executeVerified(original: String, replacement: String, start: Int,
                                 execution: CombinedShiftExecutionContext,
                                 inputBarrierIsActive: @escaping () -> Bool,
-                                onPrepared: (NativeFieldObservation) -> Void = { _ in }) -> VerifiedNativeFieldEditResult {
+                                onPrepared: (NativeFieldObservation) -> Void = { _ in },
+                                onTextQueued: () -> Void = {}) -> VerifiedNativeFieldEditResult {
         let deadline = ProcessInfo.processInfo.systemUptime + VerifiedNativeFieldEditor.maximumDuration
         guard let transport = NativeAutoEventTransport(original: original, replacement: replacement) else { return .refused }
         return executeBounded(original: original, replacement: replacement, start: start,
             replacingSelection: false, execution: execution, deadline: deadline,
             inputBarrierIsActive: inputBarrierIsActive, onPrepared: onPrepared,
-            postOperation: { operation, current in
-                transport.post(operation, to: execution.focus.processID, whileCurrent: current)
+            onTextQueued: onTextQueued,
+            postBatch: { operations, current in
+                transport.postBatch(operations, to: execution.focus.processID, whileCurrent: current)
+            }, cancelSelection: { current in
+                transport.cancelPreparedSelection(to: execution.focus.processID, whileCurrent: current)
             })
     }
 
@@ -252,14 +138,16 @@ extension NativeAutoEventTransport {
     static func executeSelected(original: String, replacement: String, start: Int,
                                 execution: CombinedShiftExecutionContext,
                                 inputBarrierIsActive: @escaping () -> Bool,
-                                onPrepared: (NativeFieldObservation) -> Void = { _ in }) -> VerifiedNativeFieldEditResult {
+                                onPrepared: (NativeFieldObservation) -> Void = { _ in },
+                                onTextQueued: () -> Void = {}) -> VerifiedNativeFieldEditResult {
         let deadline = ProcessInfo.processInfo.systemUptime + VerifiedNativeFieldEditor.maximumDuration
         guard let transport = NativeSelectedTextEventTransport(replacement: replacement) else { return .refused }
         return executeBounded(original: original, replacement: replacement, start: start,
             replacingSelection: true, execution: execution, deadline: deadline,
             inputBarrierIsActive: inputBarrierIsActive, onPrepared: onPrepared,
-            postOperation: { operation, current in
-                guard operation == .insertReplacement else { return false }
+            onTextQueued: onTextQueued,
+            postBatch: { operations, current in
+                guard operations == [.insertReplacement] else { return false }
                 return transport.post(to: execution.focus.processID, whileCurrent: current)
             })
     }
@@ -268,7 +156,9 @@ extension NativeAutoEventTransport {
                                        replacingSelection: Bool, execution: CombinedShiftExecutionContext,
                                        deadline: TimeInterval, inputBarrierIsActive: @escaping () -> Bool,
                                        onPrepared: (NativeFieldObservation) -> Void,
-                                       postOperation: @escaping (NativeFieldEditOperation, () -> Bool) -> Bool)
+                                       onTextQueued: () -> Void,
+                                       postBatch: @escaping ([NativeFieldEditOperation], () -> Bool) -> Bool,
+                                       cancelSelection: ((() -> Bool) -> Bool)? = nil)
         -> VerifiedNativeFieldEditResult {
         let focus = execution.focus
         let configuredTimeout = NativeAXMessagingPolicy.configuredTimeout(arguments: CommandLine.arguments)
@@ -280,10 +170,12 @@ extension NativeAutoEventTransport {
                 && NSWorkspace.shared.frontmostApplication?.processIdentifier == focus.processID
                 && !AutoSwitchPolicy.secureInputActive
         }
-        func prepareRead() -> Bool {
-            guard cheapGate(), let timeout = NativeAXMessagingPolicy.remainingTimeout(until: deadline,
+        func prepareRead(until phaseDeadline: TimeInterval) -> Bool {
+            let limit = min(deadline, phaseDeadline)
+            guard cheapGate(), let timeout = NativeAXMessagingPolicy.remainingTimeout(until: limit,
                 now: ProcessInfo.processInfo.systemUptime, configuredTimeout: configuredTimeout) else { return false }
-            return AXUIElementSetMessagingTimeout(focus.element, timeout) == .success && cheapGate()
+            return AXUIElementSetMessagingTimeout(focus.element, timeout) == .success
+                && ProcessInfo.processInfo.systemUptime < limit && cheapGate()
         }
         func validateFocus(until sharedDeadline: TimeInterval) -> Bool {
             NativeFocusRevalidation.validate(until: min(deadline, sharedDeadline),
@@ -300,27 +192,40 @@ extension NativeAutoEventTransport {
         let access = NativeFieldAccess(
             validateOriginalIdentity: validateFocus,
             cheapGate: cheapGate,
-            isEditable: { cheapGate() && focus.nativeFieldIsEditable(prepareRead: prepareRead) && cheapGate() },
-            observe: {
-                guard cheapGate(), let observed = focus.nativeWholeFieldObservation(prepareRead: prepareRead),
-                      cheapGate() else { return nil }
+            isEditable: { phaseDeadline in
+                cheapGate() && focus.nativeFieldIsEditable(prepareRead: { prepareRead(until: phaseDeadline) })
+                    && ProcessInfo.processInfo.systemUptime < phaseDeadline && cheapGate()
+            },
+            observe: { phaseDeadline in
+                guard cheapGate(), let observed = focus.nativeWholeFieldObservation(
+                    prepareRead: { prepareRead(until: phaseDeadline) }),
+                    ProcessInfo.processInfo.systemUptime < phaseDeadline, cheapGate() else { return nil }
                 return observed
             },
-            post: { operation in
-                // Full focus/whole-state validation lives in the core; this
-                // cheap lease/PID/revision/secure/deadline gate runs per pair.
-                let posted = postOperation(operation, cheapGate)
-                if posted && operation == .insertReplacement { RuntimeDiagnostics.record(.nativeAutoInsertPosted) }
+            postBatch: { operations in
+                // Core has just checked the whole field and exact identity.
+                // The bridge admits once, then queues the complete fixed batch.
+                let posted = postBatch(operations, cheapGate)
+                if posted && operations.contains(.insertReplacement) { RuntimeDiagnostics.record(.nativeAutoInsertPosted) }
                 return posted
+            },
+            cancelPreparedSelection: { phaseDeadline in
+                guard let cancelSelection else { return false }
+                return cancelSelection {
+                    ProcessInfo.processInfo.systemUptime < min(deadline, phaseDeadline)
+                        && inputBarrierIsActive()
+                        && NSWorkspace.shared.frontmostApplication?.processIdentifier == focus.processID
+                        && !AutoSwitchPolicy.secureInputActive
+                }
             },
             now: { ProcessInfo.processInfo.systemUptime },
             pause: { seconds in usleep(useconds_t(max(0, seconds) * 1_000_000)) })
         if replacingSelection {
             return VerifiedNativeFieldEditor.executeSelection(original: original, replacement: replacement,
-                start: start, access: access, absoluteDeadline: deadline, onPrepared: onPrepared)
+                start: start, access: access, absoluteDeadline: deadline, onPrepared: onPrepared, onTextQueued: onTextQueued)
         }
         return VerifiedNativeFieldEditor.execute(original: original, replacement: replacement,
-            start: start, access: access, absoluteDeadline: deadline, onPrepared: onPrepared)
+            start: start, access: access, absoluteDeadline: deadline, onPrepared: onPrepared, onTextQueued: onTextQueued)
     }
 }
 

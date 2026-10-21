@@ -17,16 +17,16 @@ final class InputEventFenceTests: XCTestCase {
             return result
         }
 
-        init(_ fence: InputEventFence) {
+        init(_ fence: InputEventFence, eventTimestamp: UInt64? = nil) {
             DispatchQueue.global(qos: .userInteractive).async { [self] in
                 started.signal()
-                let admitted = fence.enterPhysicalEvent()
+                let admitted = fence.enterPhysicalEvent(eventTimestamp: eventTimestamp)
                 lock.lock()
                 result = admitted
                 lock.unlock()
                 returned.signal()
                 mayLeave.wait()
-                fence.leavePhysicalEvent()
+                fence.leavePhysicalEvent(admitted)
                 left.signal()
             }
         }
@@ -355,5 +355,78 @@ final class InputEventFenceTests: XCTestCase {
             XCTAssertEqual(admission.replayLayoutID, expectedRefresh ? "com.apple.keylayout.Russian" : nil)
             fence.leavePhysicalEvent()
         }
+    }
+
+    func testCompletedWindowStartsAfterKnownForwardedEventBeforeLeaseStart() throws {
+        let fence = InputEventFence()
+        let baseline = DispatchTime.now().uptimeNanoseconds
+        let prior = fence.enterPhysicalEvent(eventTimestamp: baseline)
+        fence.leavePhysicalEvent(prior)
+        let queuedBeforeLease = DispatchTime.now().uptimeNanoseconds
+        let lease = try XCTUnwrap(fence.begin(processID: 42))
+        fence.finish(lease, replayLayoutID: "ru")
+
+        for (timestamp, expected) in [(baseline - 1, false), (baseline, false),
+                                       (UInt64(0), false), (queuedBeforeLease, true)] {
+            let admission = fence.enterPhysicalEvent(eventTimestamp: timestamp)
+            XCTAssertEqual(admission.needsSourceRefresh, expected)
+            XCTAssertEqual(admission.replayLayoutID, expected ? "ru" : nil)
+            fence.leavePhysicalEvent(admission)
+        }
+    }
+
+    func testConsumedOrUnknownTimestampCannotEstablishEarlierWindowBaseline() throws {
+        let cases: [(UInt64?, Bool)] = [(nil, true), (0, true), (UInt64.max, true),
+                                       (DispatchTime.now().uptimeNanoseconds, false)]
+        for (timestamp, forwarded) in cases {
+            let fence = InputEventFence()
+            let consumed = fence.enterPhysicalEvent(eventTimestamp: timestamp)
+            fence.leavePhysicalEvent(consumed, wasForwarded: forwarded)
+            let beforeLease = DispatchTime.now().uptimeNanoseconds
+            let lease = try XCTUnwrap(fence.begin(processID: 42))
+            fence.finish(lease, replayLayoutID: "ru")
+            let queued = fence.enterPhysicalEvent(eventTimestamp: beforeLease)
+            XCTAssertFalse(queued.needsSourceRefresh)
+            fence.leavePhysicalEvent(queued)
+        }
+    }
+
+    func testOutOfOrderForwardingCannotMoveBaselineBackwards() throws {
+        let fence = InputEventFence()
+        let oldest = DispatchTime.now().uptimeNanoseconds
+        let older = fence.enterPhysicalEvent(eventTimestamp: oldest)
+        let newerTimestamp = DispatchTime.now().uptimeNanoseconds
+        let newer = fence.enterPhysicalEvent(eventTimestamp: newerTimestamp)
+        fence.leavePhysicalEvent(newer)
+        fence.leavePhysicalEvent(older)
+        let queued = DispatchTime.now().uptimeNanoseconds
+        let lease = try XCTUnwrap(fence.begin(processID: 42))
+        fence.finish(lease, replayLayoutID: "ru")
+        for (timestamp, expected) in [(oldest, false), (newerTimestamp, false), (queued, true)] {
+            let admission = fence.enterPhysicalEvent(eventTimestamp: timestamp)
+            XCTAssertEqual(admission.needsSourceRefresh, expected)
+            fence.leavePhysicalEvent(admission)
+        }
+    }
+
+    func testHeldCallbackCompletionCannotReplaceFrozenEarlierReceiptBoundary() throws {
+        let fence = InputEventFence()
+        let prior = fence.enterPhysicalEvent(eventTimestamp: DispatchTime.now().uptimeNanoseconds)
+        fence.leavePhysicalEvent(prior)
+        let queuedBeforeLease = DispatchTime.now().uptimeNanoseconds
+        let lease = try XCTUnwrap(fence.begin(processID: 42))
+        let held = Callback(fence, eventTimestamp: DispatchTime.now().uptimeNanoseconds)
+        defer { held.release() }
+        XCTAssertEqual(held.started.wait(timeout: .now() + 1), .success)
+        XCTAssertEqual(held.returned.wait(timeout: .now() + 0.010), .timedOut)
+        fence.finish(lease, replayLayoutID: "ru")
+        XCTAssertEqual(held.returned.wait(timeout: .now() + 1), .success)
+        held.release()
+        XCTAssertEqual(held.left.wait(timeout: .now() + 1), .success)
+
+        let queued = fence.enterPhysicalEvent(eventTimestamp: queuedBeforeLease)
+        XCTAssertTrue(queued.needsSourceRefresh)
+        XCTAssertEqual(queued.replayLayoutID, "ru")
+        fence.leavePhysicalEvent(queued)
     }
 }

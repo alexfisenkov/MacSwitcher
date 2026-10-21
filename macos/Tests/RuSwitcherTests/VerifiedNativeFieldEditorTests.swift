@@ -7,6 +7,8 @@ final class VerifiedNativeFieldEditorTests: XCTestCase {
         var text = "ghbd"
         var caret = 4
         var selection = 0
+        var original = "ghbd"
+        var replacement = "прив"
         var valid = true
         var barrier = true
         var editable = true
@@ -18,6 +20,12 @@ final class VerifiedNativeFieldEditorTests: XCTestCase {
         var observed: [NativeFieldObservation] = []
         var pauseCount = 0
         var observeCount = 0
+        var batchCount = 0
+        var cancellationCount = 0
+        var textQueuedCount = 0
+        var rejectReplacement = false
+        var readDeadlines: [TimeInterval] = []
+        var editableDeadlines: [TimeInterval] = []
         var deliverImmediately = true
         var postResponse = true
         var onPost: ((NativeFieldEditOperation) -> Void)?
@@ -26,7 +34,9 @@ final class VerifiedNativeFieldEditorTests: XCTestCase {
         var onValidate: (() -> Void)?
         var onCheapGate: (() -> Void)?
         var observationUnavailable = false
-        var replacement = "прив"
+        var observationOverride: ((Int) -> NativeFieldObservation?)?
+        var dropFinalInsertion = false
+        var deliveryTarget: Field?
         var physicalPending: [String] = []
         var physicalDelivered: [String] = []
 
@@ -38,48 +48,80 @@ final class VerifiedNativeFieldEditorTests: XCTestCase {
             guard !pending.isEmpty else { return }
             let operation = pending.removeFirst()
             delivered.append(operation)
+            if let target = deliveryTarget {
+                target.pending.append(operation)
+                target.deliverNext()
+                return
+            }
             var units = Array(text.utf16)
             switch operation {
             case .insertReplacement:
-                units.insert(contentsOf: replacement.utf16, at: caret)
+                if dropFinalInsertion { return }
+                units.replaceSubrange(caret..<(caret + selection), with: replacement.utf16)
                 caret += replacement.utf16.count
+                selection = 0
+            case .selectPreviousCharacter:
+                if caret > 0 { caret -= 1; selection += 1 }
             case .left: caret -= 1
-            case .backspace:
-                guard caret > 0 else { return }
-                units.remove(at: caret - 1)
-                caret -= 1
-            case .right: caret += 1
+            case .backspace: units.remove(at: caret - 1); caret -= 1
+            case .right:
+                caret = min(units.count, caret + (selection > 0 ? selection : 1))
+                selection = 0
             }
             text = String(decoding: units, as: UTF16.self)
         }
 
+        func flush() { while !pending.isEmpty { deliverNext() } }
+
         func physicalInput(_ value: String) {
             if barrier { physicalPending.append(value) }
-            else { physicalDelivered.append(value) }
+            else {
+                physicalDelivered.append(value)
+                var units = Array(text.utf16)
+                units.replaceSubrange(caret..<(caret + selection), with: value.utf16)
+                caret += value.utf16.count
+                selection = 0
+                text = String(decoding: units, as: UTF16.self)
+            }
         }
 
         func releasePhysicalInput() {
             barrier = false
-            physicalDelivered += physicalPending
+            let held = physicalPending
             physicalPending.removeAll()
+            for value in held { physicalInput(value) }
         }
 
         func access() -> NativeFieldAccess {
             NativeFieldAccess(validateOriginalIdentity: { _ in self.onValidate?(); return self.valid },
-                cheapGate: { self.onCheapGate?(); return self.barrier }, isEditable: { self.editable },
-                observe: {
+                cheapGate: { self.onCheapGate?(); return self.barrier }, isEditable: { limit in self.editableDeadlines.append(limit); return self.editable },
+                observe: { limit in
+                    self.readDeadlines.append(limit)
                     self.observeCount += 1
                     self.onObserve?()
                     guard !self.observationUnavailable else { return nil }
-                    let value = self.snapshot
+                    let value = self.observationOverride?(self.observeCount) ?? self.snapshot
                     self.observed.append(value)
                     return value
-                }, post: { operation in
-                    self.posted.append(operation)
-                    self.pending.append(operation)
-                    if self.deliverImmediately { self.deliverNext() }
-                    self.onPost?(operation)
-                    return self.postResponse
+                }, postBatch: { operations in
+                    guard self.postResponse, !(self.rejectReplacement && operations.contains(.insertReplacement)) else { return false }
+                    self.batchCount += 1
+                    for operation in operations {
+                        self.posted.append(operation)
+                        self.pending.append(operation)
+                        if self.deliverImmediately { self.deliverNext() }
+                        self.onPost?(operation)
+                    }
+                    return true
+                }, cancelPreparedSelection: { deadline in
+                    guard self.barrier, self.clock < deadline else { return false }
+                    self.cancellationCount += 1
+                    for operation: NativeFieldEditOperation in [.selectPreviousCharacter, .right] {
+                        self.posted.append(operation)
+                        self.pending.append(operation)
+                        if self.deliverImmediately { self.deliverNext() }
+                    }
+                    return true
                 }, now: { self.clock }, pause: { interval in
                     if !self.frozenClock { self.clock += interval }
                     self.pauseCount += 1
@@ -88,140 +130,266 @@ final class VerifiedNativeFieldEditorTests: XCTestCase {
         }
 
         func run(start: Int = 0) -> VerifiedNativeFieldEditResult {
-            VerifiedNativeFieldEditor.execute(original: "ghbd", replacement: replacement, start: start, access: access())
+            VerifiedNativeFieldEditor.execute(original: original, replacement: replacement, start: start,
+                access: access(), onTextQueued: { self.textQueuedCount += 1 })
         }
     }
 
     @MainActor
-    func testConfirmedPacesEveryPairWithExactReadbackAndPreservesUnicodeNeighbours() {
+    func testRealisticAXLatencyNeverLeavesMixedPrefixWhenHeldTypingResumes() {
+        let field = Field()
+        field.text = "ghbdtn"
+        field.original = "ghbdtn"
+        field.replacement = "привет"
+        field.caret = 6
+        field.onValidate = { field.clock += 0.0025 }
+        field.onObserve = { field.clock += 0.0015 }
+        let result = field.run()
+        field.physicalInput("!")
+        field.releasePhysicalInput()
+        // The old per-pair protocol leaves exactly "ghпривет" at these latencies.
+        XCTAssertEqual(result, .confirmed)
+        XCTAssertEqual(field.text, "привет!")
+        XCTAssertEqual(field.caret, 7)
+        XCTAssertEqual(field.selection, 0)
+        XCTAssertEqual(field.physicalDelivered, ["!"])
+    }
+
+    @MainActor
+    func testTwoPhasesPreserveExactUnicodeNeighboursAndUseFiveWholeReads() {
         let field = Field()
         let prefix = "😀 e\u{301} "
         let suffix = " tail 🧑🏽‍💻"
         field.text = prefix + "ghbd" + suffix
         field.caret = prefix.utf16.count + 4
-        var previousWasObserved = true
         field.onPost = { operation in
-            XCTAssertTrue(previousWasObserved)
-            previousWasObserved = false
-            if operation == .backspace { XCTAssertTrue(field.observed.contains { $0.text == prefix + "ghbdприв" + suffix && $0.caretUTF16Location == prefix.utf16.count + 4 }) }
+            XCTAssertEqual(field.observeCount, field.batchCount == 1 ? 2 : 4)
+            if operation == .insertReplacement { XCTAssertEqual(field.selection, 0) }
         }
-        field.onObserve = { previousWasObserved = true }
         XCTAssertEqual(field.run(start: prefix.utf16.count), .confirmed)
         XCTAssertEqual(Array(field.text.utf16), Array((prefix + "прив" + suffix).utf16))
         XCTAssertEqual(field.caret, prefix.utf16.count + 4)
-        XCTAssertEqual(field.posted, [.insertReplacement] + Array(repeating: .left, count: 4)
-            + Array(repeating: .backspace, count: 4) + Array(repeating: .right, count: 4))
-        XCTAssertEqual(field.pending.count, 0)
+        XCTAssertEqual(field.posted, Array(repeating: .selectPreviousCharacter, count: 4)
+            + [.insertReplacement, .selectPreviousCharacter, .right])
+        XCTAssertEqual(field.batchCount, 2)
+        XCTAssertEqual(field.textQueuedCount, 1)
+        XCTAssertEqual(field.observeCount, 5)
     }
 
     @MainActor
-    func testUndeliveredInsertionNeverQueuesNavigationOrDeletionAndReturnsActualState() {
+    func testPreparationRpcDeadlineReservesCleanupAndFinalAcknowledgementBudget() {
+        let field = Field()
+        XCTAssertEqual(field.run(), .confirmed)
+        XCTAssertEqual(field.readDeadlines, [0.180, 0.070, 0.070, 0.070, 0.180])
+        XCTAssertEqual(field.editableDeadlines, [0.180, 0.070, 0.070])
+        XCTAssertEqual(field.textQueuedCount, 1)
+    }
+
+    @MainActor
+    func testEveryDelayedSelectionIsAllowedToReachTheFinalWholeFieldAcknowledgement() {
         let field = Field()
         field.deliverImmediately = false
-        XCTAssertEqual(field.run(), .uncertain(observation: field.snapshot))
-        XCTAssertEqual(field.posted, [.insertReplacement])
-        XCTAssertEqual(field.delivered, [])
-        XCTAssertEqual(field.pending, [.insertReplacement])
+        field.onPause = { if field.pauseCount.isMultiple(of: 2) { field.deliverNext() } }
+        XCTAssertEqual(field.run(), .confirmed)
+        // Text can already be exact while the two non-text stabilization pairs
+        // are still queued. The receipt never claims delivery of those pairs.
+        XCTAssertEqual(field.pending, [.selectPreviousCharacter, .right])
+        field.physicalInput("!")
+        field.flush()
+        XCTAssertEqual(field.posted, field.delivered)
+        field.releasePhysicalInput()
+        XCTAssertEqual(field.text, "прив!")
+        XCTAssertEqual(field.selection, 0)
+        XCTAssertEqual(field.batchCount, 2)
+    }
+
+    @MainActor
+    func testLateSelectionPreparationQueuesCancellationBeforeHeldTypingWithoutText() {
+        let field = Field()
+        field.deliverImmediately = false
+        let original = field.snapshot
+        XCTAssertEqual(field.run(), .refused)
+        XCTAssertEqual(field.snapshot, original)
+        XCTAssertFalse(field.posted.contains(.insertReplacement))
+        XCTAssertEqual(field.cancellationCount, 1)
+        XCTAssertEqual(field.textQueuedCount, 0)
+        field.physicalInput("!")
+        field.flush()
+        field.releasePhysicalInput()
+        XCTAssertEqual(field.text, "ghbd!")
+        XCTAssertEqual(field.selection, 0)
         XCTAssertLessThanOrEqual(field.clock, VerifiedNativeFieldEditor.maximumDuration)
     }
 
     @MainActor
-    func testDelayedNavigationMustBeAcknowledgedBeforeAnotherPairOrDeletion() {
-        let field = Field()
-        field.deliverImmediately = false
-        field.onPost = { operation in
-            XCTAssertEqual(field.pending.count, 1)
-            if operation == .backspace { XCTAssertEqual(field.caret, 4 - field.posted.filter { $0 == .backspace }.count + 1) }
+    func testSelectionIdentityLossAtEveryPairNeverAuthorizesTextAndQueuesCleanup() {
+        for pair in 1...4 {
+            let field = Field()
+            field.onPost = { _ in if field.posted.count == pair { field.valid = false } }
+            guard case .uncertain = field.run() else { return XCTFail("Identity lost") }
+            XCTAssertFalse(field.posted.contains(.insertReplacement))
+            XCTAssertEqual(field.text, "ghbd")
+            XCTAssertEqual(field.selection, 0)
+            XCTAssertEqual(field.caret, 4)
+            XCTAssertEqual(field.textQueuedCount, 0)
+            XCTAssertEqual(field.cancellationCount, 1)
         }
-        field.onPause = { if field.pauseCount.isMultiple(of: 2) { field.deliverNext() } }
-        XCTAssertEqual(field.run(), .confirmed)
-        XCTAssertEqual(field.posted, field.delivered)
-        XCTAssertEqual(field.text, "прив")
     }
 
     @MainActor
-    func testWrongCaretAndNonCollapsedReadbackStopImmediatelyWithoutDeletion() {
-        for nonCollapsed in [false, true] {
+    func testCommittedReplacementNeverInterruptsItsCaretStabilization() {
+        for pair in 5...7 {
+            let field = Field()
+            field.onPost = { _ in if field.posted.count == pair { field.valid = false } }
+            guard case .uncertain = field.run() else { return XCTFail("Identity lost after data was queued") }
+            XCTAssertEqual(field.posted.count, 7)
+            XCTAssertEqual(field.text, "прив")
+            XCTAssertEqual(field.selection, 0)
+            XCTAssertEqual(field.caret, 4)
+            XCTAssertEqual(field.textQueuedCount, 1)
+            XCTAssertEqual(field.cancellationCount, 0)
+        }
+    }
+
+    @MainActor
+    func testSuffixTornNewTextWithOldSelectionWaitsForExactFinalReadWithoutResubmission() {
+        let field = Field()
+        field.observationOverride = { count in
+            count == 5 ? NativeFieldObservation(text: "прив", caretUTF16Location: 0, selectionLength: 4) : nil
+        }
+        XCTAssertEqual(field.run(), .confirmed)
+        XCTAssertEqual(field.batchCount, 2)
+        XCTAssertEqual(field.posted.count, 7)
+        XCTAssertEqual(field.text, "прив")
+        XCTAssertEqual(field.observeCount, 6)
+        XCTAssertEqual(field.pauseCount, 1)
+    }
+
+    @MainActor
+    func testProgrammaticFocusMoveDuringSelectionNeverSubmitsTextIntoAnotherField() {
+        let field = Field()
+        let other = Field()
+        other.text = "KEEPB"
+        other.caret = 5
+        field.onPost = { _ in
+            if field.posted.count == 1 { field.valid = false; field.deliveryTarget = other }
+        }
+        guard case .uncertain = field.run() else { return XCTFail("Original focus was lost") }
+        XCTAssertEqual(field.text, "ghbd")
+        XCTAssertEqual(other.text, "KEEPB")
+        XCTAssertFalse(field.posted.contains(.insertReplacement))
+        XCTAssertEqual(field.textQueuedCount, 0)
+        XCTAssertEqual(field.cancellationCount, 1)
+    }
+
+    @MainActor
+    func testDroppedUnicodeAfterPreparedSelectionCannotDeleteOriginalOnHeldTyping() {
+        let field = Field()
+        field.dropFinalInsertion = true
+        field.physicalInput("!")
+        guard case .uncertain = field.run() else { return XCTFail("Missing Unicode cannot confirm") }
+        field.flush()
+        field.releasePhysicalInput()
+        XCTAssertEqual(field.text, "ghbd!")
+        XCTAssertEqual(field.selection, 0)
+        XCTAssertEqual(field.caret, 5)
+        XCTAssertEqual(field.textQueuedCount, 1) // Queue receipt is not delivery.
+    }
+
+    @MainActor
+    func testDroppedFinalInsertionRemainsUncertainWithoutClaimingDeliveryOrResubmitting() {
+        let field = Field()
+        field.dropFinalInsertion = true
+        let original = field.snapshot
+        XCTAssertEqual(field.run(), .uncertain(observation: original))
+        XCTAssertEqual(field.snapshot, original)
+        XCTAssertEqual(field.batchCount, 2)
+        XCTAssertEqual(field.posted.count, 7)
+        XCTAssertLessThanOrEqual(field.clock, VerifiedNativeFieldEditor.maximumDuration)
+    }
+
+    @MainActor
+    func testKnownCurrentCollapsedCaretAtZeroSkipsCancellationNavigation() {
+        let field = Field()
+        field.onObserve = {
+            if field.observeCount == 3 { field.caret = 0; field.selection = 0 }
+        }
+        XCTAssertEqual(field.run(), .uncertain(observation:
+            NativeFieldObservation(text: "ghbd", caretUTF16Location: 0, selectionLength: 0)))
+        XCTAssertEqual(field.text, "ghbd")
+        XCTAssertEqual(field.caret, 0)
+        XCTAssertEqual(field.cancellationCount, 0)
+        XCTAssertEqual(field.textQueuedCount, 0)
+    }
+
+    @MainActor
+    func testCleanupThatCannotBeQueuedIsUncertainWithNoTextReceipt() {
+        let field = Field()
+        field.onPost = { _ in if field.batchCount == 1 { field.barrier = false } }
+        guard case .uncertain = field.run() else { return XCTFail("Cleanup was not queued") }
+        XCTAssertFalse(field.posted.contains(.insertReplacement))
+        XCTAssertEqual(field.cancellationCount, 0)
+        XCTAssertEqual(field.textQueuedCount, 0)
+        XCTAssertEqual(field.text, "ghbd")
+    }
+
+    @MainActor
+    func testRejectedTextPhaseRestoresOriginalSelectionAndReturnsRefusedWithoutReceipt() {
+        let field = Field()
+        field.rejectReplacement = true
+        let original = field.snapshot
+        XCTAssertEqual(field.run(), .refused)
+        XCTAssertEqual(field.snapshot, original)
+        XCTAssertEqual(field.cancellationCount, 1)
+        XCTAssertEqual(field.textQueuedCount, 0)
+        XCTAssertFalse(field.posted.contains(.insertReplacement))
+    }
+
+    @MainActor
+    func testPersistentWrongFinalCaretSelectionOrWholeTextIsUncertainWithoutSecondBatch() {
+        for failure in 0..<3 {
             let field = Field()
             field.onPost = { operation in
-                if operation == .insertReplacement {
-                    if nonCollapsed { field.selection = 1 } else { field.caret -= 1 }
+                if operation == .right {
+                    if failure == 0 { field.caret -= 1 }
+                    if failure == 1 { field.selection = 1 }
+                    if failure == 2 { field.text += "programmatic change" }
                 }
             }
             XCTAssertEqual(field.run(), .uncertain(observation: field.snapshot))
-            XCTAssertEqual(field.posted, [.insertReplacement])
-            XCTAssertEqual(field.pauseCount, 0)
+            XCTAssertEqual(field.batchCount, 2)
+            XCTAssertGreaterThan(field.pauseCount, 0)
+            XCTAssertLessThanOrEqual(field.clock, VerifiedNativeFieldEditor.maximumDuration)
         }
     }
 
     @MainActor
-    func testPartialDeletionKeepsActualObservedWholeStateAndNeverRetries() {
+    func testFinalReadIdentityLossCannotConfirmEvenWhenTextMatches() {
         let field = Field()
-        var deletionCount = 0
-        field.onPost = { operation in
-            if operation == .backspace { deletionCount += 1 }
-            if deletionCount == 2 { field.postResponse = false }
-        }
-        let result = field.run()
-        XCTAssertEqual(field.text, "ghприв")
-        XCTAssertEqual(result, .uncertain(observation: field.snapshot))
-        XCTAssertEqual(field.posted.filter { $0 == .backspace }.count, 2)
-        XCTAssertFalse(field.posted.contains(.right))
-    }
-
-    @MainActor
-    func testSamePIDProgrammaticWholeFieldChangeCannotAuthorizeAnotherWrite() {
-        let field = Field()
-        field.onPost = { if $0 == .left { field.text = "other field same PID" } }
-        XCTAssertEqual(field.run(), .uncertain(observation: field.snapshot))
-        XCTAssertEqual(field.posted, [.insertReplacement, .left])
-        XCTAssertFalse(field.posted.contains(.backspace))
-    }
-
-    @MainActor
-    func testGateLossOrIdentityLossAfterInsertionStopsWithoutAdditionalPair() {
-        for gateLoss in [false, true] {
-            let field = Field()
-            field.onPost = { _ in if gateLoss { field.barrier = false } else { field.valid = false } }
-            guard case .uncertain = field.run() else { return XCTFail("Mutation must remain uncertain") }
-            XCTAssertEqual(field.posted, [.insertReplacement])
-        }
-    }
-
-    @MainActor
-    func testIdentityLossDuringReadCannotAuthorizeNavigation() {
-        let field = Field()
-        field.onObserve = { if field.text == "ghbdприв" { field.valid = false } }
+        field.onObserve = { if field.observeCount == 5 { field.valid = false } }
         guard case .uncertain = field.run() else { return XCTFail("Identity changed") }
-        XCTAssertEqual(field.posted, [.insertReplacement])
+        XCTAssertEqual(field.text, "прив")
+        XCTAssertEqual(field.batchCount, 2)
     }
 
     @MainActor
-    func testDeadlineSharedAcrossAllStepsAndNoWriteOrRetryAfterExpiry() {
+    func testReadThatFinishesAfterDeadlineCannotConfirm() {
         let field = Field()
-        field.onPost = { if $0 == .left { field.clock = 0.180 } }
-        guard case .uncertain = field.run() else { return XCTFail("Expired mutation") }
-        XCTAssertEqual(field.posted, [.insertReplacement, .left])
-        XCTAssertEqual(field.pauseCount, 0)
-    }
-
-    @MainActor
-    func testReadThatCompletesAfterDeadlineCannotAuthorizeNextPair() {
-        let field = Field()
-        field.onObserve = { if field.text == "ghbdприв" { field.clock = 0.181 } }
+        field.onObserve = { if field.observeCount == 5 { field.clock = 0.181 } }
         guard case .uncertain = field.run() else { return XCTFail("Late read") }
-        XCTAssertEqual(field.posted, [.insertReplacement])
+        XCTAssertEqual(field.posted.count, 7)
     }
 
     @MainActor
-    func testFrozenClockAndUnavailableObservationAreBounded() {
+    func testFrozenClockAndUnavailableAcknowledgementAreBounded() {
         let field = Field()
         field.deliverImmediately = false
         field.frozenClock = true
+        field.onPost = { _ in field.observationUnavailable = true }
         guard case .uncertain = field.run() else { return XCTFail("Missing delivery") }
         XCTAssertLessThanOrEqual(field.observeCount, VerifiedNativeFieldEditor.maximumObservations)
         XCTAssertLessThanOrEqual(field.pauseCount, VerifiedNativeFieldEditor.maximumObservations)
-        XCTAssertEqual(field.posted, [.insertReplacement])
+        XCTAssertEqual(field.batchCount, 1)
     }
 
     @MainActor
@@ -242,70 +410,88 @@ final class VerifiedNativeFieldEditorTests: XCTestCase {
     }
 
     @MainActor
-    func testPhysicalInputModelRemainsPendingUntilCallerReleasesFenceAfterConfirmation() {
-        let field = Field()
-        field.physicalInput("before")
-        field.onPost = { _ in field.physicalInput("during") }
-        XCTAssertEqual(field.run(), .confirmed)
-        field.physicalInput("after text confirmation, before source confirmation")
-        XCTAssertEqual(field.physicalDelivered, [])
-        XCTAssertEqual(field.physicalPending.count, 15)
-        field.releasePhysicalInput()
-        XCTAssertEqual(field.physicalDelivered.count, 15)
-        XCTAssertEqual(field.physicalPending, [])
-    }
-    @MainActor
-    func testPostedKeyDownAlwaysReceivesKeyUpWhenGateDrops() {
-        var gate = true
-        var edges: [String] = []
-        XCTAssertFalse(NativeFieldKeyPairPoster.post(mayContinue: { gate }, keyDown: {
-            edges.append("down")
-            gate = false
-        }, keyUp: { edges.append("up") }))
-        XCTAssertEqual(edges, ["down", "up"])
-        XCTAssertFalse(NativeFieldKeyPairPoster.post(mayContinue: { gate }, keyDown: {
-            edges.append("unexpected down")
-        }, keyUp: { edges.append("unexpected up") }))
-        XCTAssertEqual(edges, ["down", "up"])
+    func testChangedFinalPreflightWholeTextCaretRevisionOrDeadlineNeverPosts() {
+        for failure in 0..<4 {
+            let field = Field()
+            field.onObserve = {
+                if field.observeCount == 2 {
+                    if failure == 0 { field.text = "other same-PID field" }
+                    if failure == 1 { field.caret = 3 }
+                    if failure == 2 { field.valid = false }
+                    if failure == 3 { field.clock = 0.180 }
+                }
+            }
+            XCTAssertEqual(field.run(), .refused)
+            XCTAssertTrue(field.posted.isEmpty)
+        }
     }
 
     @MainActor
-    func testCallerAbsoluteDeadlineIsNotExtendedByPreflightOrRetries() {
+    func testRejectedBatchAdmissionMeansNoEventsAndLeavesOldText() {
+        let field = Field()
+        field.postResponse = false
+        XCTAssertEqual(field.run(), .refused)
+        XCTAssertEqual(field.text, "ghbd")
+        XCTAssertEqual(field.selection, 0)
+        XCTAssertTrue(field.posted.isEmpty)
+    }
+
+    @MainActor
+    func testCallerAbsoluteDeadlineIsNotExtendedAndClockRegressionCannotConfirm() {
         let field = Field()
         field.clock = 10
         field.deliverImmediately = false
         let result = VerifiedNativeFieldEditor.execute(original: "ghbd", replacement: "прив", start: 0,
             access: field.access(), absoluteDeadline: 10.002)
-        guard case .uncertain = result else { return XCTFail("Undelivered insertion") }
-        XCTAssertEqual(field.posted, [.insertReplacement])
+        XCTAssertEqual(result, .refused)
+        XCTAssertFalse(field.posted.contains(.insertReplacement))
+        XCTAssertEqual(field.cancellationCount, 1)
         XCTAssertLessThanOrEqual(field.clock, 10.002)
         let fresh = Field()
         XCTAssertEqual(VerifiedNativeFieldEditor.execute(original: "ghbd", replacement: "прив", start: 0,
             access: fresh.access(), absoluteDeadline: 1), .refused)
         XCTAssertTrue(fresh.posted.isEmpty)
+        let backwards = Field()
+        backwards.clock = 1
+        backwards.onPost = { operation in if operation == .insertReplacement { backwards.clock = 0.9 } }
+        guard case .uncertain = backwards.run() else { return XCTFail("Clock regression") }
+        XCTAssertEqual(backwards.text, "прив")
     }
 
     @MainActor
-    func testClockMovingBackwardsAfterInsertionStopsWithoutNavigation() {
-        let field = Field()
-        field.clock = 1
-        field.onPost = { _ in field.clock = 0.9 }
-        guard case .uncertain = field.run() else { return XCTFail("Clock regression") }
-        XCTAssertEqual(field.posted, [.insertReplacement])
-    }
-
-    @MainActor
-    func testDeadlineCrossedInsideLastCheapGateCannotPostFirstPair() {
-        let field = Field()
-        var gatesAfterSecondRead = 0
-        field.onCheapGate = {
-            if field.observeCount == 2 {
-                gatesAfterSecondRead += 1
-                if gatesAfterSecondRead == 4 { field.clock = 0.180 }
-            }
+    func testCommittedBatchQueuesAllKeyUpsEvenAfterEveryPossibleGateLossEdge() {
+        for lostAfter in 0..<54 {
+            var gate = true
+            var checks = 0
+            var edges: [Int] = []
+            XCTAssertTrue(NativeFieldBatchPoster.post(eventCount: 54, mayBegin: { checks += 1; return gate }) {
+                edges.append($0)
+                if $0 == lostAfter { gate = false }
+            })
+            XCTAssertEqual(edges, Array(0..<54))
+            XCTAssertEqual(checks, 1)
         }
-        XCTAssertEqual(field.run(), .refused)
-        XCTAssertTrue(field.posted.isEmpty)
     }
 
+    @MainActor
+    func testInvalidOrUnadmittedBatchNeverPostsAnyEdge() {
+        for count in [-2, 0, 1, 3, 55, 56, Int.max] {
+            var events = 0
+            XCTAssertFalse(NativeFieldBatchPoster.post(eventCount: count, mayBegin: { true }) { _ in events += 1 })
+            XCTAssertEqual(events, 0)
+        }
+        var events = 0
+        XCTAssertFalse(NativeFieldBatchPoster.post(eventCount: 2, mayBegin: { false }) { _ in events += 1 })
+        XCTAssertEqual(events, 0)
+    }
+
+    @MainActor
+    func testLegacyPairStillReleasesItsKeyUpAfterGateDrops() {
+        var gate = true
+        var edges: [String] = []
+        XCTAssertFalse(NativeFieldKeyPairPoster.post(mayContinue: { gate }, keyDown: {
+            edges.append("down"); gate = false
+        }, keyUp: { edges.append("up") }))
+        XCTAssertEqual(edges, ["down", "up"])
+    }
 }
