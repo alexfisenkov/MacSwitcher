@@ -158,15 +158,32 @@ final class DiagnosticFixtureInputDriver {
         }
         let fixtures = NSRunningApplication.runningApplications(withBundleIdentifier: diagnosticFixtureBundleID)
         guard fixtures.count == 1, let fixture = fixtures.first,
-              diagnosticFixtureProcessIsKnown(fixture.processIdentifier),
-              fixture.activate(options: []) else {
+              diagnosticFixtureProcessIsKnown(fixture.processIdentifier) else {
             finish(Report(plan: plan, outcome: .fixtureUnavailable, postedEvents: 0))
             return true
         }
-        let worker = DiagnosticFixtureWorker(plan: plan, processID: fixture.processIdentifier,
+        let processID = fixture.processIdentifier
+        let worker = DiagnosticFixtureWorker(plan: plan, processID: processID,
                                              processEvent: processEvent, completion: finish)
         self.worker = worker
-        worker.start()
+        // Leave the button action first, then allow the UI client's foreground
+        // restoration to finish before the one permitted fixture activation.
+        DispatchQueue.main.async {
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(300)) {
+                if worker.isCancelled {
+                    worker.start() // Its existing cancelled path completes once without activation.
+                    return
+                }
+                let fixtures = NSRunningApplication.runningApplications(withBundleIdentifier: diagnosticFixtureBundleID)
+                guard fixtures.count == 1, let fixture = fixtures.first,
+                      fixture.processIdentifier == processID, diagnosticFixtureProcessIsKnown(processID),
+                      fixture.activate(options: []) else {
+                    finish(Report(plan: plan, outcome: .fixtureUnavailable, postedEvents: 0))
+                    return
+                }
+                worker.start()
+            }
+        }
         return true
     }
 
@@ -203,7 +220,7 @@ private final class DiagnosticFixtureWorker: @unchecked Sendable {
         lock.unlock()
     }
 
-    private var isCancelled: Bool {
+    fileprivate var isCancelled: Bool {
         lock.lock()
         defer { lock.unlock() }
         return cancelled
