@@ -132,6 +132,9 @@ def main(argv=None):
             command += ["--options", "runtime", "--timestamp"]
         command += ["--entitlements", str(ROOT / "macos/RuSwitcher.entitlements"), str(staged)]
         run(command)
+        # Finder/File Provider can reattach metadata while codesign runs.
+        # Clear it again before verification; this does not alter sealed bytes.
+        run(["/usr/bin/xattr", "-cr", str(staged)])
         run(["/usr/bin/codesign", "--verify", "--strict", "--deep", str(staged)])
         run([str(contents / "MacOS/RuSwitcher"), "--self-test-resources"])
         if output.exists():
