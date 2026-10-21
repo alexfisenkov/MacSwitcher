@@ -143,4 +143,69 @@ final class DiagnosticFixtureInputDriverTests: XCTestCase {
         XCTAssertEqual(DiagnosticFixtureFocus.failure(expectedPID: 42, expectedWindowID: 0,
             frontmostPID: 42, frontWindowPID: 42, frontWindowID: 0), .frontWindowIdentity)
     }
+
+    func testReadinessRequiresSameWindowForFull100Milliseconds() {
+        var readiness = DiagnosticFixtureWindowReadiness(processID: 42)
+        XCTAssertNil(readiness.observe(frontmostPID: 42, frontWindowPID: 42, frontWindowID: 77,
+                                      at: 1_000_000_000))
+        XCTAssertNil(readiness.observe(frontmostPID: 42, frontWindowPID: 42, frontWindowID: 77,
+                                      at: 1_099_999_999))
+        XCTAssertEqual(readiness.observe(frontmostPID: 42, frontWindowPID: 42, frontWindowID: 77,
+                                        at: 1_100_000_000), 77)
+    }
+
+    func testReadinessRestarts100MillisecondsWhenWindowIdentityChanges() {
+        var readiness = DiagnosticFixtureWindowReadiness(processID: 42)
+        XCTAssertNil(readiness.observe(frontmostPID: 42, frontWindowPID: 42, frontWindowID: 77,
+                                      at: 1_000_000_000))
+        XCTAssertNil(readiness.observe(frontmostPID: 42, frontWindowPID: 42, frontWindowID: 78,
+                                      at: 1_050_000_000))
+        XCTAssertNil(readiness.observe(frontmostPID: 42, frontWindowPID: 42, frontWindowID: 78,
+                                      at: 1_100_000_000))
+        XCTAssertEqual(readiness.observe(frontmostPID: 42, frontWindowPID: 42, frontWindowID: 78,
+                                        at: 1_150_000_000), 78)
+    }
+
+    func testReadinessRestartsAfterTransientMissingWindow() {
+        var readiness = DiagnosticFixtureWindowReadiness(processID: 42)
+        XCTAssertNil(readiness.observe(frontmostPID: 42, frontWindowPID: 42, frontWindowID: 77,
+                                      at: 1_000_000_000))
+        XCTAssertNil(readiness.observe(frontmostPID: 42, frontWindowPID: nil, frontWindowID: nil,
+                                      at: 1_090_000_000))
+        XCTAssertNil(readiness.observe(frontmostPID: 42, frontWindowPID: 42, frontWindowID: 77,
+                                      at: 1_100_000_000))
+        XCTAssertNil(readiness.observe(frontmostPID: 42, frontWindowPID: 42, frontWindowID: 77,
+                                      at: 1_199_999_999))
+        XCTAssertEqual(readiness.observe(frontmostPID: 42, frontWindowPID: 42, frontWindowID: 77,
+                                        at: 1_200_000_000), 77)
+    }
+
+    func testReadinessRestartsAfterInvalidFixtureOrForegroundSample() {
+        for (known, foreground, owner, window): (Bool, Int32?, Int32?, UInt32?) in [
+            (false, 42, 42, 77), (true, 43, 42, 77), (true, nil, 42, 77),
+            (true, 42, 43, 77), (true, 42, 42, nil), (true, 42, 42, 0)
+        ] {
+            var readiness = DiagnosticFixtureWindowReadiness(processID: 42)
+            XCTAssertNil(readiness.observe(frontmostPID: 42, frontWindowPID: 42, frontWindowID: 77,
+                                          at: 1_000_000_000))
+            XCTAssertNil(readiness.observe(fixtureIdentityMatches: known, frontmostPID: foreground,
+                                          frontWindowPID: owner, frontWindowID: window, at: 1_090_000_000))
+            XCTAssertNil(readiness.observe(frontmostPID: 42, frontWindowPID: 42, frontWindowID: 77,
+                                          at: 1_100_000_000))
+            XCTAssertEqual(readiness.observe(frontmostPID: 42, frontWindowPID: 42, frontWindowID: 77,
+                                            at: 1_200_000_000), 77)
+        }
+    }
+
+    func testReadinessCancellationRejectsAndClearsPendingWindow() {
+        var readiness = DiagnosticFixtureWindowReadiness(processID: 42)
+        XCTAssertNil(readiness.observe(frontmostPID: 42, frontWindowPID: 42, frontWindowID: 77,
+                                      at: 1_000_000_000))
+        XCTAssertNil(readiness.observe(frontmostPID: 42, frontWindowPID: 42, frontWindowID: 77,
+                                      at: 1_100_000_000, cancelled: true))
+        XCTAssertNil(readiness.observe(frontmostPID: 42, frontWindowPID: 42, frontWindowID: 77,
+                                      at: 1_110_000_000))
+        XCTAssertEqual(readiness.observe(frontmostPID: 42, frontWindowPID: 42, frontWindowID: 77,
+                                        at: 1_210_000_000), 77)
+    }
 }

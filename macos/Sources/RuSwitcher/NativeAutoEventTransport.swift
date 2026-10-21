@@ -271,7 +271,7 @@ extension NativeAutoEventTransport {
                                        postOperation: @escaping (NativeFieldEditOperation, () -> Bool) -> Bool)
         -> VerifiedNativeFieldEditResult {
         let focus = execution.focus
-        AXUIElementSetMessagingTimeout(focus.element, 0.003)
+        let configuredTimeout = NativeAXMessagingPolicy.configuredTimeout(arguments: CommandLine.arguments)
         defer { AXUIElementSetMessagingTimeout(focus.element, 0.05) }
 
         func cheapGate() -> Bool {
@@ -280,18 +280,30 @@ extension NativeAutoEventTransport {
                 && NSWorkspace.shared.frontmostApplication?.processIdentifier == focus.processID
                 && !AutoSwitchPolicy.secureInputActive
         }
+        func prepareRead() -> Bool {
+            guard cheapGate(), let timeout = NativeAXMessagingPolicy.remainingTimeout(until: deadline,
+                now: ProcessInfo.processInfo.systemUptime, configuredTimeout: configuredTimeout) else { return false }
+            return AXUIElementSetMessagingTimeout(focus.element, timeout) == .success && cheapGate()
+        }
         func validateFocus(until sharedDeadline: TimeInterval) -> Bool {
             NativeFocusRevalidation.validate(until: min(deadline, sharedDeadline),
                 now: { ProcessInfo.processInfo.systemUptime }, mayContinue: cheapGate,
-                read: { execution.validationFailure(timeout: 0.003) },
+                read: {
+                    guard let timeout = NativeAXMessagingPolicy.remainingTimeout(until: min(deadline, sharedDeadline),
+                        now: ProcessInfo.processInfo.systemUptime, configuredTimeout: configuredTimeout) else {
+                        return .focusUnavailable
+                    }
+                    return execution.validationFailure(timeout: timeout)
+                },
                 pause: { seconds in usleep(useconds_t(max(0, seconds) * 1_000_000)) })
         }
         let access = NativeFieldAccess(
             validateOriginalIdentity: validateFocus,
             cheapGate: cheapGate,
-            isEditable: { cheapGate() && focus.nativeFieldIsEditable() && cheapGate() },
+            isEditable: { cheapGate() && focus.nativeFieldIsEditable(prepareRead: prepareRead) && cheapGate() },
             observe: {
-                guard cheapGate(), let observed = focus.nativeWholeFieldObservation(), cheapGate() else { return nil }
+                guard cheapGate(), let observed = focus.nativeWholeFieldObservation(prepareRead: prepareRead),
+                      cheapGate() else { return nil }
                 return observed
             },
             post: { operation in
@@ -316,7 +328,8 @@ private extension CombinedShiftFocus {
     /// Secure text fields are refused before any whole-value read, including
     /// applications that do not enable macOS Secure Event Input. Missing optional
     /// subroles are allowed; a failed supported read is not an eligibility signal.
-    func nativeFieldHasNoSecureSubrole() -> Bool {
+    func nativeFieldHasNoSecureSubrole(prepareRead: () -> Bool) -> Bool {
+        guard prepareRead() else { return false }
         var raw: AnyObject?
         switch AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &raw) {
         case .success:
@@ -331,13 +344,14 @@ private extension CombinedShiftFocus {
 
     /// Capability queries only. An absent explicit editable signal requires a
     /// settable text capability; no setter is called by this native transport.
-    func nativeFieldIsEditable() -> Bool {
-        guard nativeFieldHasNoSecureSubrole() else { return false }
+    func nativeFieldIsEditable(prepareRead: () -> Bool) -> Bool {
+        guard nativeFieldHasNoSecureSubrole(prepareRead: prepareRead), prepareRead() else { return false }
         var rawRole: AnyObject?
         guard AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &rawRole) == .success,
               let role = rawRole as? String,
               [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole].contains(role) else { return false }
         func flag(_ name: String) -> NativeFieldBooleanSignal {
+            guard prepareRead() else { return .invalid }
             var raw: AnyObject?
             let status = AXUIElementCopyAttributeValue(element, name as CFString, &raw)
             return NativeFieldBooleanSignal.attribute(status: status, raw: raw)
@@ -347,6 +361,7 @@ private extension CombinedShiftFocus {
         let editable = flag("AXEditable")
         var selectedTextSettable = NativeFieldBooleanSignal.unavailable
         if editable == .unavailable {
+            guard prepareRead() else { return false }
             var settable = DarwinBoolean(false)
             let status = AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable)
             selectedTextSettable = .capability(status: status, settable: settable.boolValue)
@@ -357,11 +372,12 @@ private extension CombinedShiftFocus {
 
     /// Whole bounded raw UTF-16 read from the original AX object. Checking the
     /// raw CFString first avoids silently repairing malformed surrogate units.
-    func nativeWholeFieldObservation() -> NativeFieldObservation? {
-        guard nativeFieldHasNoSecureSubrole(), !AutoSwitchPolicy.secureInputActive,
+    func nativeWholeFieldObservation(prepareRead: () -> Bool) -> NativeFieldObservation? {
+        guard nativeFieldHasNoSecureSubrole(prepareRead: prepareRead), !AutoSwitchPolicy.secureInputActive,
+              prepareRead(),
               let before = selectionRange() else { return nil }
         var raw: AnyObject?
-        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &raw) == .success,
+        guard prepareRead(), AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &raw) == .success,
               let raw, CFGetTypeID(raw) == CFStringGetTypeID() else { return nil }
         let value = raw as! CFString
         let count = CFStringGetLength(value)
@@ -373,7 +389,7 @@ private extension CombinedShiftFocus {
                 CFStringGetCharacters(value, CFRange(location: 0, length: count), $0.baseAddress!)
             }
         }
-        guard NativeFieldEditPlan.isWellFormedUTF16(units),
+        guard NativeFieldEditPlan.isWellFormedUTF16(units), prepareRead(),
               let after = selectionRange(), before.location == after.location,
               before.length == after.length else { return nil }
         return NativeFieldObservation(text: String(decoding: units, as: UTF16.self),

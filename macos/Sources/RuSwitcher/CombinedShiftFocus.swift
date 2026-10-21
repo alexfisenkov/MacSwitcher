@@ -69,8 +69,12 @@ struct CombinedShiftFocus: @unchecked Sendable {
     }
 
     static func capture(processID: Int32, timeout: Float = 0.05, includeSelection: Bool = true) -> CombinedShiftFocus? {
+        guard timeout.isFinite, timeout > 0 else { return nil }
         let app = AXUIElementCreateApplication(processID)
-        AXUIElementSetMessagingTimeout(app, timeout)
+        guard AXUIElementSetMessagingTimeout(app, timeout) == .success else {
+            RuntimeDiagnostics.record(.focusReadOtherError)
+            return nil
+        }
         var raw: AnyObject?
         let error = AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &raw)
         guard error == .success else {
@@ -87,7 +91,10 @@ struct CombinedShiftFocus: @unchecked Sendable {
             RuntimeDiagnostics.record(.focusReadUnexpectedType); return nil
         }
         let element = raw as! AXUIElement
-        AXUIElementSetMessagingTimeout(element, timeout)
+        guard AXUIElementSetMessagingTimeout(element, timeout) == .success else {
+            RuntimeDiagnostics.record(.focusReadOtherError)
+            return nil
+        }
         let focus = CombinedShiftFocus(processID: processID, element: element)
         return CombinedShiftFocus(processID: processID, element: element,
             initialSelection: includeSelection ? focus.selectionRange() : nil)

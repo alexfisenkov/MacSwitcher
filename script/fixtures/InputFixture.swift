@@ -13,6 +13,7 @@ final class InputFixtureApplication: NSApplication {
     private var delayed: [(event: NSEvent, readyAt: DispatchTime)] = []
     private var deliveryScheduled = false
     private var markedCount = 0
+    private var countRefreshScheduled = false
     var delayMilliseconds = 0
     var markedCountDidChange: ((Int) -> Void)?
 
@@ -27,7 +28,20 @@ final class InputFixtureApplication: NSApplication {
             return
         }
         markedCount += 1
-        markedCountDidChange?(markedCount)
+        if CommandLine.arguments.contains("--coalesce-counter-display") {
+            // An opt-in A/B for observer overhead. Counting and event delivery
+            // remain exact; only the diagnostic label is refreshed less often.
+            if !countRefreshScheduled {
+                countRefreshScheduled = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
+                    guard let self else { return }
+                    self.countRefreshScheduled = false
+                    self.markedCountDidChange?(self.markedCount)
+                }
+            }
+        } else {
+            markedCountDidChange?(markedCount)
+        }
         if delayMilliseconds == 0, delayed.isEmpty, !deliveryScheduled {
             super.sendEvent(event)
             return

@@ -125,6 +125,32 @@ enum DiagnosticFixtureFocus {
     }
 }
 
+/// Pin a window only after consecutive valid samples span 100 ms. Activation
+/// can briefly expose another window from the same process before settling.
+struct DiagnosticFixtureWindowReadiness: Sendable {
+    private let processID: Int32
+    private var candidate: (windowID: UInt32, since: UInt64)?
+
+    init(processID: Int32) { self.processID = processID }
+
+    mutating func observe(fixtureIdentityMatches: Bool = true, frontmostPID: Int32?,
+                          frontWindowPID: Int32?, frontWindowID: UInt32?,
+                          at now: UInt64, cancelled: Bool = false) -> UInt32? {
+        guard !cancelled, let frontWindowID,
+              DiagnosticFixtureFocus.failure(expectedPID: processID, expectedWindowID: frontWindowID,
+                  fixtureIdentityMatches: fixtureIdentityMatches, frontmostPID: frontmostPID,
+                  frontWindowPID: frontWindowPID, frontWindowID: frontWindowID) == nil else {
+            candidate = nil
+            return nil
+        }
+        if let candidate, candidate.windowID == frontWindowID, now >= candidate.since {
+            return now - candidate.since >= 100_000_000 ? frontWindowID : nil
+        }
+        candidate = (frontWindowID, now)
+        return nil
+    }
+}
+
 enum DiagnosticFixtureOutcome: String, Sendable {
     case completed, postingPermissionUnavailable, fixtureUnavailable, focusLost
     case sourceUnavailable, eventUnavailable, cancelled
@@ -301,9 +327,17 @@ private final class DiagnosticFixtureWorker: @unchecked Sendable {
 
     private func waitForReadyWindow() -> UInt32? {
         let deadline = DispatchTime.now().uptimeNanoseconds + 1_000_000_000
+        var readiness = DiagnosticFixtureWindowReadiness(processID: processID)
         while !isCancelled, DispatchTime.now().uptimeNanoseconds < deadline {
-            if isKnownFixture(), NSWorkspace.shared.frontmostApplication?.processIdentifier == processID,
-               let front = frontWindow(), front.pid == processID, front.id > 0 { return front.id }
+            let knownFixture = isKnownFixture()
+            let foreground = knownFixture ? NSWorkspace.shared.frontmostApplication?.processIdentifier : nil
+            let front = knownFixture && foreground == processID ? frontWindow() : nil
+            let now = DispatchTime.now().uptimeNanoseconds
+            guard now < deadline else { return nil }
+            if let windowID = readiness.observe(fixtureIdentityMatches: knownFixture, frontmostPID: foreground,
+                frontWindowPID: front?.pid, frontWindowID: front?.id, at: now, cancelled: isCancelled) {
+                return windowID
+            }
             Thread.sleep(forTimeInterval: 0.005)
         }
         return nil
