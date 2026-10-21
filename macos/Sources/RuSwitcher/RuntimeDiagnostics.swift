@@ -29,6 +29,7 @@ enum RuntimeDiagnosticEvent: String, CaseIterable, Sendable {
     case selectionAXUnsupported, selectionAXMutationUnknown, autoAXUnsupported, autoAXMutationUnknown, unconfirmedEditBlocked
     case harnessSelectionStarted, harnessSelectionPassed, harnessSelectionFailed
     case harnessAutoStarted, harnessAutoPassed, harnessAutoFailed
+    case autoWorkStarted, sourceNotificationPreserved, sourceNotificationInvalidated
 
     var logOnce: Bool { rawValue.hasPrefix("auto") || rawValue.hasPrefix("native") }
 }

@@ -44,6 +44,7 @@ final class PredictionCoordinator {
         }
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
+            RuntimeDiagnostics.record(.autoWorkStarted)
             self.evaluation = Task { [weak self] in await self?.evaluate(snapshot) }
         }
         debounce = work

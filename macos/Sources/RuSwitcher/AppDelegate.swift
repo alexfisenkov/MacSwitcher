@@ -714,7 +714,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func systemInputSourceChanged() {
         updateStatusIcon()
         keyboardMonitor.soundArmed = true  // issue #7: следующая буква даст звук раскладки
-        keyboardMonitor.resetLineBuffer()  // скептик 3.2.0: не декодировать строку старой раскладкой
+        keyboardMonitor.resetLineBuffer(sourceLayoutID: LayoutSwitcher.currentLayoutID())
     }
 
     /// Собирает меню статус-бара. Вызывается заново при смене языка интерфейса,

@@ -90,6 +90,8 @@ enum LayoutSwitcher {
     /// переключение. Наш `installedLayouts()` через TISCreateInputSourceList(_, false)
     /// и так отдаёт только включённые источники, так что обычно enable не нужен вовсе.
     private static func select(_ source: TISInputSource) {
+        let requestedID = sourceID(source)
+        if !requestedID.isEmpty && currentLayoutID() == requestedID { return }
         if let ptr = TISGetInputSourceProperty(source, kTISPropertyInputSourceIsEnabled),
            Unmanaged<CFBoolean>.fromOpaque(ptr).takeUnretainedValue() != kCFBooleanTrue {
             TISEnableInputSource(source)

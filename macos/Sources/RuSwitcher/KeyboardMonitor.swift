@@ -161,6 +161,7 @@ final class KeyboardMonitor: @unchecked Sendable {
     private var prevWordSourceID: String?
     private var lineSourceID: String?
     private var predictionBuffer = PredictionInputBuffer()
+    private var predictionSourceLayoutID: String?
     var predictionSessionID: UInt64 { predictionBuffer.sessionID }
     private(set) var predictionGeneration: UInt64 = 0
     var onPredictionInput: (@MainActor (PredictionSnapshot) -> Void)?
@@ -268,6 +269,7 @@ final class KeyboardMonitor: @unchecked Sendable {
     func stop() {
         interruptCombinedShift()
         predictionBuffer.reset()
+        predictionSourceLayoutID = nil
         if let observer = combinedFocusObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
             combinedFocusObserver = nil
@@ -295,6 +297,7 @@ final class KeyboardMonitor: @unchecked Sendable {
     func markConverted() {
         interruptCombinedShift()
         predictionBuffer.reset()
+        predictionSourceLayoutID = nil
         currentWordLength = 0
         wordBeforeBoundaryLength = 0
         boundaryCount = 0
@@ -310,14 +313,24 @@ final class KeyboardMonitor: @unchecked Sendable {
     /// issue #24 / скептик 3.2.0: системная смена раскладки (globe / Ctrl-Space) не проходит через
     /// наш обработчик клавиш, поэтому буфер строки декодировался бы старой раскладкой. Сбрасываем
     /// его (только строку — словный буфер трогаем как раньше).
-    func resetLineBuffer() {
-        invalidatePrediction()
+    func resetLineBuffer(sourceLayoutID: String = LayoutSwitcher.currentLayoutID()) {
         lineKeys = []
         lineSourceID = nil
+        // TIS delivers source-change notifications after the source is already
+        // selectable. Fast typing may have started under that source before its
+        // acknowledgement arrives; it must not cancel that new pending snapshot.
+        guard !sourceLayoutID.isEmpty, !predictionBuffer.text.isEmpty,
+              predictionSourceLayoutID == sourceLayoutID else {
+            RuntimeDiagnostics.record(.sourceNotificationInvalidated)
+            resetPredictionContext()
+            return
+        }
+        RuntimeDiagnostics.record(.sourceNotificationPreserved)
     }
 
     private func fullReset() {
         predictionBuffer.reset()
+        predictionSourceLayoutID = nil
         invalidatePrediction()
         currentWordLength = 0
         wordBeforeBoundaryLength = 0
@@ -337,6 +350,7 @@ final class KeyboardMonitor: @unchecked Sendable {
 
     func resetPredictionContext() {
         predictionBuffer.reset()
+        predictionSourceLayoutID = nil
         invalidatePrediction()
     }
 
@@ -358,11 +372,26 @@ final class KeyboardMonitor: @unchecked Sendable {
               !(keyCode >= KC.left && keyCode <= KC.up),
               let renderedText, !renderedText.isEmpty,
               let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else {
-            predictionBuffer.reset(); return
+            predictionBuffer.reset(); predictionSourceLayoutID = nil; return
         }
-        predictionBuffer.append(renderedText, processID: pid)
-        guard let snapshot = predictionBuffer.snapshot(sourceLayoutID: LayoutSwitcher.currentLayoutID(),
+        recordPredictionText(renderedText, processID: pid, sourceLayoutID: LayoutSwitcher.currentLayoutID())
+    }
+
+    /// Shared input boundary: receives the actual event text and its observed
+    /// source identity. Keeping this boundary independent of HID/AX lets delivery
+    /// ordering regressions exercise the monitor's real buffering and callbacks.
+    func recordPredictionText(_ text: String, processID: Int32, sourceLayoutID: String) {
+        guard !sourceLayoutID.isEmpty else { resetPredictionContext(); return }
+        // The first character can beat the system notification too. Do not
+        // attach it to text from a different, manually selected source.
+        if let previous = predictionSourceLayoutID, previous != sourceLayoutID {
+            resetPredictionContext()
+        }
+        predictionSourceLayoutID = nil
+        predictionBuffer.append(text, processID: processID)
+        guard let snapshot = predictionBuffer.snapshot(sourceLayoutID: sourceLayoutID,
             inputRevision: inputRevision, generation: predictionGeneration) else { return }
+        predictionSourceLayoutID = sourceLayoutID
         RuntimeDiagnostics.record(.autoSnapshotSubmitted)
         MainActor.assumeIsolated { onPredictionInput?(snapshot) }
     }
@@ -375,6 +404,7 @@ final class KeyboardMonitor: @unchecked Sendable {
         guard predictionBuffer.replaceSuffix(original: original, replacement: replacement) else {
             fullReset(); keysTypedSinceConversion = false; return
         }
+        predictionSourceLayoutID = resultLayoutID
         let text = predictionBuffer.text
         let trailingSpaces = text.reversed().prefix(while: { $0 == " " }).count
         let tokens = text.split(whereSeparator: \.isWhitespace)

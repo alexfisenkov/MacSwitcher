@@ -1,8 +1,8 @@
 {
-  "version": "0.1.0-alpha.2",
+  "version": "0.1.0-alpha.3",
   "short_version": "0.1.0",
-  "build": 2,
+  "build": 3,
   "channel": "alpha",
   "url": "https://github.com/alexfisenkov/MacSwitcher/releases",
-  "notes": "Candidate fixes for first-key caret delivery and selected-text conversion; live integration verification in progress."
+  "notes": "Preserve current prediction across delayed acknowledgements of the same input source; retain cancellation for genuine source changes."
 }
