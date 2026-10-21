@@ -2,6 +2,32 @@ import XCTest
 @testable import RuSwitcher
 
 final class DiagnosticFixtureInputDriverTests: XCTestCase {
+    func testLocationAcceptsKnownFixtureThroughTmpAlias() {
+        XCTAssertTrue(DiagnosticFixtureLocation.matches(actual: URL(fileURLWithPath:
+            "/tmp/MacSwitcherInputFixture.app/Contents/MacOS/InputFixture")))
+    }
+
+    func testLocationNormalizesBothSidesWithSymlinkSpacesAndEmoji() throws {
+        let manager = FileManager.default
+        let root = manager.temporaryDirectory.appendingPathComponent("fixture-location-" + UUID().uuidString)
+        let real = root.appendingPathComponent("Fixture Space 😀")
+        let alias = root.appendingPathComponent("Fixture Alias 🚀")
+        try manager.createDirectory(at: real, withIntermediateDirectories: true)
+        defer { try? manager.removeItem(at: root) }
+        let executable = real.appendingPathComponent("InputFixture")
+        try Data("synthetic fixture".utf8).write(to: executable)
+        try manager.createSymbolicLink(at: alias, withDestinationURL: real)
+        let aliasedExecutable = alias.appendingPathComponent("InputFixture")
+        XCTAssertTrue(DiagnosticFixtureLocation.matches(actual: executable, expectedURL: aliasedExecutable))
+        XCTAssertTrue(DiagnosticFixtureLocation.matches(actual: aliasedExecutable, expectedURL: executable))
+    }
+
+    func testLocationRejectsMissingURLAndDifferentExecutable() {
+        XCTAssertFalse(DiagnosticFixtureLocation.matches(actual: nil))
+        XCTAssertFalse(DiagnosticFixtureLocation.matches(actual: URL(fileURLWithPath:
+            "/tmp/MacSwitcherInputFixture.app/Contents/MacOS/OtherFixture")))
+    }
+
     func testFastTypesExactlySixPhysicalKeysAt15msIntervals() {
         let downs = DiagnosticFixturePlan.fast.edges.filter(\.isDown)
         XCTAssertEqual(downs.map(\.keyCode), [5, 4, 11, 2, 17, 45])

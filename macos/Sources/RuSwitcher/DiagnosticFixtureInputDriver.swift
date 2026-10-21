@@ -6,12 +6,20 @@ import Carbon
 let diagnosticFixtureBundleID = "com.alexfisenkov.macswitcher.inputfixture"
 let diagnosticFixtureEventMarker: Int64 = 0x4D534658
 
+enum DiagnosticFixtureLocation {
+    static func matches(actual: URL?, expectedURL: URL = URL(fileURLWithPath:
+        "/private/tmp/MacSwitcherInputFixture.app/Contents/MacOS/InputFixture")) -> Bool {
+        guard let actual else { return false }
+        return actual.resolvingSymlinksInPath().standardizedFileURL.path
+            == expectedURL.resolvingSymlinksInPath().standardizedFileURL.path
+    }
+}
+
 /// A local diagnostic scope guard, not a signature/security trust boundary.
 func diagnosticFixtureProcessIsKnown(_ processID: Int32) -> Bool {
     guard processID > 0, let app = NSRunningApplication(processIdentifier: processID),
           app.bundleIdentifier == diagnosticFixtureBundleID else { return false }
-    return app.executableURL?.resolvingSymlinksInPath().path
-        == "/private/tmp/MacSwitcherInputFixture.app/Contents/MacOS/InputFixture"
+    return DiagnosticFixtureLocation.matches(actual: app.executableURL)
 }
 
 struct DiagnosticFixtureEdge: Equatable, Sendable {
