@@ -24,9 +24,18 @@ final class DiagnosticFixtureInputDriverTests: XCTestCase {
         if let payload = snapshot.payload { XCTAssertFalse(payload.isEmpty) }
     }
 
-    func testLocationAcceptsKnownFixtureThroughTmpAlias() {
-        XCTAssertTrue(DiagnosticFixtureLocation.matches(actual: URL(fileURLWithPath:
-            "/tmp/MacSwitcherInputFixture.app/Contents/MacOS/InputFixture")))
+    func testLocationAcceptsKnownFixtureThroughTmpAlias() throws {
+        // Foundation need not resolve aliases through nonexistent components.
+        // A runner has no installed GUI fixture; create an isolated executable
+        // instead of accidentally depending on the developer's local app.
+        let folder = "macswitcher-tmp-alias-" + UUID().uuidString
+        let root = URL(fileURLWithPath: "/private/tmp").appendingPathComponent(folder)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executable = root.appendingPathComponent("InputFixture")
+        try Data("synthetic fixture".utf8).write(to: executable)
+        let alias = URL(fileURLWithPath: "/tmp").appendingPathComponent(folder).appendingPathComponent("InputFixture")
+        XCTAssertTrue(DiagnosticFixtureLocation.matches(actual: alias, expectedURL: executable))
     }
 
     func testLocationNormalizesBothSidesWithSymlinkSpacesAndEmoji() throws {
