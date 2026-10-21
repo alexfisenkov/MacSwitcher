@@ -340,7 +340,8 @@ final class KeyboardMonitor: @unchecked Sendable {
         invalidatePrediction()
     }
 
-    /// No AX, dictionaries or text conversion on the event-tap path.
+    /// Dictionary/scoring stay off the tap. The first event of a new session
+    /// performs one bounded original-field capture before deferred prediction.
     private func recordPredictionKey(keyCode: UInt16, flags: CGEventFlags, renderedText: String?) {
         if SettingsManager.shared.autoSwitchEnabled, SettingsManager.shared.autoConvert,
            !AutoSwitchPolicy.secureInputActive,
@@ -389,6 +390,16 @@ final class KeyboardMonitor: @unchecked Sendable {
         lineKeys = []  // a mixed-language predictive window is not a reliable line mapping
         lineSourceID = nil
         keysTypedSinceConversion = false
+    }
+
+    /// Developer fixture only: the operator prepares this exact synthetic prefix
+    /// in TextEdit. The fixture never renders text itself or accepts arbitrary input.
+    func diagnosticReplayTextEditPrefix() -> Bool {
+        guard CommandLine.arguments.contains("--diagnostic-panel"),
+              NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.TextEdit",
+              LayoutSwitcher.currentLayoutID() == "com.apple.keylayout.US" else { return false }
+        handleKeyDown(keyCode: 5, flags: [], renderedText: "ghbd")
+        return true
     }
 
     /// Сброс буфера при клике мышью — иначе backspace перепечатки сотрёт не то

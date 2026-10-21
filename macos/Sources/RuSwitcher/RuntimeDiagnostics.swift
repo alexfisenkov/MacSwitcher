@@ -22,6 +22,13 @@ enum RuntimeDiagnosticEvent: String, CaseIterable, Sendable {
     case autoProposalRejected, autoTargetUnavailable, autoFocusAnchorUnavailable, autoFocusMismatch
     case autoCaretUnavailable, autoCaretMismatch, autoEditRefused, autoEditPosted
     case nativeInvalidExecution, nativeSuffixMismatch, nativeEditPosted, syntheticEventUnavailable
+    case executionRevisionChanged, executionWrongProcess, executionSecureInput
+    case executionFocusUnavailable, executionFocusChanged
+    case selectionSnapshotUnavailable, selectionAXWriteRefused, selectionAXWritePosted
+    case selectionAXWriteVerified, selectionAXReadbackMismatch, selectionClipboardFallback, selectionCancelled
+    case selectionAXUnsupported, selectionAXMutationUnknown, autoAXUnsupported, autoAXMutationUnknown, unconfirmedEditBlocked
+    case harnessSelectionStarted, harnessSelectionPassed, harnessSelectionFailed
+    case harnessAutoStarted, harnessAutoPassed, harnessAutoFailed
 
     var logOnce: Bool { rawValue.hasPrefix("auto") || rawValue.hasPrefix("native") }
 }
@@ -98,7 +105,10 @@ enum AXCapabilityDiagnostics {
                           "AXSelectedTextMarkerRange"] {
             var raw: AnyObject?
             let error = AXUIElementCopyAttributeValue(element, attribute as CFString, &raw)
-            attributes[attribute] = ["error": error.rawValue, "present": raw != nil, "type": valueType(raw)]
+            var settable = DarwinBoolean(false)
+            let settableError = AXUIElementIsAttributeSettable(element, attribute as CFString, &settable)
+            attributes[attribute] = ["error": error.rawValue, "present": raw != nil, "type": valueType(raw),
+                                     "settableError": settableError.rawValue, "settable": settable.boolValue]
         }
         result["attributes"] = attributes
         var names: CFArray?

@@ -4,5 +4,5 @@
   "build": 2,
   "channel": "alpha",
   "url": "https://github.com/alexfisenkov/MacSwitcher/releases",
-  "notes": "Opt-in metadata diagnostics for conversion failures. Double Shift and automatic correction remain under investigation."
+  "notes": "Candidate fixes for first-key caret delivery and selected-text conversion; live integration verification in progress."
 }

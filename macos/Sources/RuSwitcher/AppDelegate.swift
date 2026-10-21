@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let secureNotice = SecureInputNotice()  // issue #27: подсказка о защ. вводе без кражи фокуса
     private var lastFlagShown: String?            // идентичность раскладки для детекта смены (не title!)
     private var badgeCache: [String: NSImage] = [:]  // монохромные плашки, чтобы не перерисовывать 2с-опросом
+    private var diagnosticRepro: DiagnosticReproController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
@@ -48,6 +49,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // (флаг login-item в oapp Apple event) остаётся тихим, как и положено.
         if SettingsManager.shared.hideMenuBarIcon && !Self.launchedAsLoginItem() {
             settingsController.showWindow()
+        }
+        if CommandLine.arguments.contains("--diagnostic-panel") {
+            diagnosticRepro = DiagnosticReproController(monitor: keyboardMonitor, converter: textConverter)
+            diagnosticRepro?.show()
         }
     }
 
@@ -108,6 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// стандартный для menu-bar-утилит путь добраться до настроек при СКРЫТОЙ иконке.
     /// Открываем настройки и при видимой иконке: reopen без реакции выглядит как «не работает».
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if let diagnosticRepro { diagnosticRepro.show(); return false }
         settingsController.showWindow()
         return false
     }
@@ -433,6 +439,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.predictionCoordinator.invalidate()
         }
         predictionCoordinator.onApplied = { [weak self] original in
+            self?.diagnosticRepro?.noteAutomaticApplication()
             self?.lastAutoConverted = (original, Date())
             self?.updateStatusIcon()
         }
@@ -554,6 +561,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             currentInputRevision: { [weak self] in self?.keyboardMonitor.inputRevision ?? UInt64.max })
         guard execution.isValid() else { RuntimeDiagnostics.record(.doubleInvalidExecution); return }
 
+        // An uncertain automatic edit has not marked the typing buffer converted.
+        // A new explicit gesture may reconcile its exact original field even
+        // when request.reconvert is false; other fields keep their normal route.
+        if textConverter.hasUnconfirmedAXEdit(in: focus) {
+            let succeeded = textConverter.reconvert(context: context, execution: execution)
+            finishCombinedShift(succeeded: succeeded, request: request, context: context)
+            return
+        }
+
+        // Explicit selection belongs to its AX range, independently of a stale
+        // word buffer or the previous conversion's reconvert flag. The converter
+        // verifies the range directly, without a preliminary Cmd+C round trip.
+        if (focus.initialSelection?.length ?? 0) > 0 {
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let succeeded = await self.textConverter.convertSelection(context: context,
+                    execution: execution, restorePrevious: request.reconvert)
+                self.finishCombinedShift(succeeded: succeeded, request: request, context: context)
+            }
+            return
+        }
+
         let succeeded: Bool
         if request.reconvert {
             guard textConverter.hasReconversionState else { RuntimeDiagnostics.record(.doubleNoReconversionState); return }
@@ -586,7 +615,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     boundaryCount: request.boundaryCount, context: wordContext, execution: execution)
             }
         }
-        guard succeeded else { RuntimeDiagnostics.record(.doubleFailed); return }  // empty/no-op doubles never issue a second toggle
+        finishCombinedShift(succeeded: succeeded, request: request, context: context)
+    }
+
+    private func finishCombinedShift(succeeded: Bool, request: CombinedShiftRequest, context: CombinedShiftContext) {
+        guard succeeded else { RuntimeDiagnostics.record(.doubleFailed); return }
         RuntimeDiagnostics.record(.doubleSucceeded)
         keyboardMonitor.markConverted()
         let resultID = textConverter.lastResultLayoutID ?? context.targetLayoutID

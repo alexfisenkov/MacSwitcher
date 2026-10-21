@@ -194,6 +194,7 @@ final class PredictionEngineTests: XCTestCase {
         XCTAssertGreaterThan(lexicon.frequency(of: "привет", language: "ru"), 0)
         XCTAssertGreaterThan(lexicon.frequency(of: "что-то", language: "ru"), 0)
         let realEngine = PredictionEngine(lexicon: lexicon)
+        XCTAssertEqual(realEngine.evaluate(suffix: "ghbd", sourceLanguage: "en")?.replacementSuffix, "прив")
         XCTAssertEqual(realEngine.evaluate(suffix: "ghbdtn", sourceLanguage: "en")?.replacementSuffix, "привет")
         XCTAssertEqual(realEngine.evaluate(suffix: "levf.", sourceLanguage: "en", atBoundary: true)?.replacementSuffix, "думаю")
         XCTAssertEqual(realEngine.evaluate(suffix: "xnj-nj", sourceLanguage: "en", atBoundary: true)?.replacementSuffix, "что-то")

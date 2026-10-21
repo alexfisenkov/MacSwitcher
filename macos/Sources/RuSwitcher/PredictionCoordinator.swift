@@ -1,7 +1,9 @@
 import AppKit
 
-/// The HID callback only submits immutable values. Dictionary loading/scoring runs
-/// outside that callback; AX is consulted only for a concrete, still-current edit.
+/// Dictionary loading/scoring runs outside the HID callback. The first event of
+/// each session captures its original AX field once (existing 50 ms timeouts);
+/// later AX reads are limited to a concrete, still-current edit. A deferred first
+/// capture could attach a burst's caret to the wrong event or adopt another field.
 @MainActor
 final class PredictionCoordinator {
     private let monitor: KeyboardMonitor
@@ -11,7 +13,7 @@ final class PredictionCoordinator {
     private var evaluation: Task<Void, Never>?
     private var anchorSessionID: UInt64?
     private var anchorFocus: CombinedShiftFocus?
-    private var caretAnchor: PredictionCaretAnchor?
+    private var pendingCaretAnchor: PredictionPendingCaretAnchor?
     var onApplied: ((String) -> Void)?
 
     init(monitor: KeyboardMonitor, converter: TextConverter) {
@@ -37,33 +39,8 @@ final class PredictionCoordinator {
             RuntimeDiagnostics.record(.autoAnchorSessionChanged)
             anchorSessionID = snapshot.sessionID
             anchorFocus = nil
-            caretAnchor = nil
-            // Capture once per uninterrupted typing session, after the first key
-            // is delivered. Unknown initial focus stays unavailable for this session.
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.anchorSessionID == snapshot.sessionID,
-                      self.monitor.predictionSessionID == snapshot.sessionID,
-                      snapshot.isCurrent(processID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
-                          revision: self.monitor.inputRevision, generation: self.monitor.predictionGeneration),
-                      NSWorkspace.shared.frontmostApplication?.processIdentifier == snapshot.processID,
-                      !AutoSwitchPolicy.secureInputActive else {
-                    RuntimeDiagnostics.record(.autoAnchorStale); return
-                }
-                guard let focus = CombinedShiftFocus.capture(processID: snapshot.processID) else {
-                    RuntimeDiagnostics.record(.autoAnchorUnavailable); return
-                }
-                guard let selection = focus.initialSelection, selection.length == 0 else {
-                    RuntimeDiagnostics.record(.autoAnchorSelectionUnavailable); return
-                }
-                guard snapshot.isCurrent(processID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
-                          revision: self.monitor.inputRevision, generation: self.monitor.predictionGeneration) else {
-                    RuntimeDiagnostics.record(.autoAnchorStale); return
-                }
-                self.anchorFocus = focus
-                self.caretAnchor = PredictionCaretAnchor(caretUTF16Location: selection.location,
-                    inputUTF16Offset: snapshot.cumulativeUTF16Offset)
-                RuntimeDiagnostics.record(.autoAnchorAccepted)
-            }
+            pendingCaretAnchor = nil
+            captureOriginalAnchor(snapshot)
         }
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
@@ -72,6 +49,42 @@ final class PredictionCoordinator {
         debounce = work
         // The original key must reach the destination before AX suffix verification.
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(snapshot.atBoundary ? 12 : 70), execute: work)
+    }
+
+    private func captureOriginalAnchor(_ snapshot: PredictionSnapshot) {
+        // Capture before returning the first callback, rather than letting a later
+        // queued capture become stale after a burst. Unknown focus stays unavailable;
+        // a subsequent proposal must never establish a different field as baseline.
+        guard snapshot.sessionID == monitor.predictionSessionID,
+              snapshot.isCurrent(processID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
+                  revision: monitor.inputRevision, generation: monitor.predictionGeneration),
+              !AutoSwitchPolicy.secureInputActive else {
+            RuntimeDiagnostics.record(.autoAnchorStale); return
+        }
+        guard let focus = CombinedShiftFocus.capture(processID: snapshot.processID) else {
+            RuntimeDiagnostics.record(.autoAnchorUnavailable); return
+        }
+        guard let selection = focus.initialSelection, selection.length == 0,
+              let pending = PredictionPendingCaretAnchor(sessionID: snapshot.sessionID,
+                  caretUTF16Location: selection.location, inputUTF16Offset: snapshot.cumulativeUTF16Offset,
+                  eventUTF16Length: snapshot.eventUTF16Length) else {
+            RuntimeDiagnostics.record(.autoAnchorSelectionUnavailable); return
+        }
+        anchorFocus = focus
+        pendingCaretAnchor = pending
+        RuntimeDiagnostics.record(.autoAnchorAccepted)
+    }
+
+    private func retryRenderVerification(_ snapshot: PredictionSnapshot, attempt: Int) {
+        // AX may briefly lag the event queue. Retry only this current snapshot and
+        // original field; a new key, focus reset or explicit cancellation stops it.
+        guard attempt < 3, isCurrent(snapshot) else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.evaluation = Task { [weak self] in await self?.evaluate(snapshot, renderAttempt: attempt + 1) }
+        }
+        debounce = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(15), execute: work)
     }
 
     private func isCurrent(_ snapshot: PredictionSnapshot) -> Bool {
@@ -87,7 +100,7 @@ final class PredictionCoordinator {
                 revision: monitor.inputRevision, generation: monitor.predictionGeneration)
     }
 
-    private func evaluate(_ snapshot: PredictionSnapshot) async {
+    private func evaluate(_ snapshot: PredictionSnapshot, renderAttempt: Int = 0) async {
         guard isCurrent(snapshot) else { RuntimeDiagnostics.record(.autoEvaluationStale); return }
         guard let engine = await engineTask.value else { RuntimeDiagnostics.record(.autoEngineUnavailable); return }
         guard isCurrent(snapshot) else { RuntimeDiagnostics.record(.autoEvaluationStale); return }
@@ -123,19 +136,28 @@ final class PredictionCoordinator {
         guard let originalFocus = anchorFocus else { RuntimeDiagnostics.record(.autoFocusAnchorUnavailable); return }
         guard PredictionFocusAnchorPolicy.permits(originalSession: anchorSessionID,
                   currentSession: snapshot.sessionID, capturedOriginalField: true,
-                  sameField: originalFocus.isCurrent()) else { RuntimeDiagnostics.record(.autoFocusMismatch); return }
-        guard let caretAnchor, let currentSelection = originalFocus.selectionRange() else {
+                  sameField: originalFocus.isCurrent()) else {
+            pendingCaretAnchor = nil
+            RuntimeDiagnostics.record(.autoFocusMismatch); return
+        }
+        guard var pending = pendingCaretAnchor, let currentSelection = originalFocus.selectionRange() else {
             RuntimeDiagnostics.record(.autoCaretUnavailable); return
         }
-        guard caretAnchor.permits(location: currentSelection.location, selectionLength: currentSelection.length,
-                  cumulativeOffset: snapshot.cumulativeUTF16Offset) else {
-            RuntimeDiagnostics.record(.autoCaretMismatch); return
-        }
-        guard isCurrent(snapshot) else { RuntimeDiagnostics.record(.autoEvaluationStale); return }
         // Retain the first session's field identity; only its current collapsed
         // caret is refreshed. A same-PID different field is never a new baseline.
         let focus = CombinedShiftFocus(processID: originalFocus.processID, element: originalFocus.element,
             initialSelection: currentSelection)
+        let suffixMatches = focus.hasOriginalSuffixBeforeCaret(snapshot.suffix)
+        let resolved = pending.resolve(sessionID: snapshot.sessionID, location: currentSelection.location,
+            selectionLength: currentSelection.length, cumulativeOffset: snapshot.cumulativeUTF16Offset,
+            sameField: originalFocus.isCurrent(), snapshotIsCurrent: isCurrent(snapshot), suffixMatches: suffixMatches)
+        pendingCaretAnchor = pending
+        guard resolved != nil else {
+            RuntimeDiagnostics.record(.autoCaretMismatch)
+            retryRenderVerification(snapshot, attempt: renderAttempt)
+            return
+        }
+        guard isCurrent(snapshot) else { RuntimeDiagnostics.record(.autoEvaluationStale); return }
         guard let edit = PredictionSuffixEdit(original: proposal.originalSuffix,
             replacement: proposal.replacementSuffix) else { return }
         let resultID = LayoutSwitcher.sourceID(target)

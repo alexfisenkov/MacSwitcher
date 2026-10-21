@@ -11,6 +11,7 @@ struct PredictionSnapshot: Sendable, Equatable {
     let generation: UInt64
     let sessionID: UInt64
     let cumulativeUTF16Offset: Int
+    let eventUTF16Length: Int
     let atBoundary: Bool
 
     func isCurrent(processID: Int32?, revision: UInt64, generation: UInt64) -> Bool {
@@ -27,9 +28,10 @@ struct PredictionInputBuffer: Sendable {
     private(set) var processID: Int32?
     private(set) var sessionID: UInt64 = 0
     private(set) var cumulativeUTF16Offset = 0
+    private var eventUTF16Length = 0
 
     mutating func reset() {
-        text = ""; processID = nil; sessionID &+= 1; cumulativeUTF16Offset = 0
+        text = ""; processID = nil; sessionID &+= 1; cumulativeUTF16Offset = 0; eventUTF16Length = 0
     }
 
     mutating func append(_ characters: String, processID: Int32) {
@@ -41,6 +43,7 @@ struct PredictionInputBuffer: Sendable {
         let (offset, overflow) = cumulativeUTF16Offset.addingReportingOverflow(characters.utf16.count)
         guard !overflow else { reset(); return }
         cumulativeUTF16Offset = offset
+        eventUTF16Length = characters.utf16.count
         self.processID = processID
         text.append(characters)
         if text.count > Self.maximumCharacters {
@@ -85,6 +88,7 @@ struct PredictionInputBuffer: Sendable {
             inputRevision: inputRevision, generation: generation,
             sessionID: sessionID,
             cumulativeUTF16Offset: cumulativeUTF16Offset,
+            eventUTF16Length: eventUTF16Length,
             atBoundary: text.last?.isWhitespace == true)
     }
 }
@@ -112,6 +116,45 @@ struct PredictionCaretAnchor: Sendable {
 
     func permits(location: Int, selectionLength: Int, cumulativeOffset: Int) -> Bool {
         selectionLength == 0 && expectedLocation(for: cumulativeOffset) == location
+    }
+}
+
+/// A first-event observation is not an acknowledgement that its glyph has
+/// reached the target process. Resolve only against the same original field,
+/// a current snapshot and the exact rendered suffix.
+struct PredictionPendingCaretAnchor: Sendable {
+    private let sessionID: UInt64
+    private let candidates: [PredictionCaretAnchor]
+    private var cancelled = false
+    private(set) var resolved: PredictionCaretAnchor?
+
+    init?(sessionID: UInt64, caretUTF16Location: Int, inputUTF16Offset: Int, eventUTF16Length: Int) {
+        guard caretUTF16Location >= 0, eventUTF16Length > 0,
+              inputUTF16Offset >= eventUTF16Length else { return nil }
+        self.sessionID = sessionID
+        candidates = [
+            PredictionCaretAnchor(caretUTF16Location: caretUTF16Location,
+                inputUTF16Offset: inputUTF16Offset),
+            PredictionCaretAnchor(caretUTF16Location: caretUTF16Location,
+                inputUTF16Offset: inputUTF16Offset - eventUTF16Length)
+        ]
+    }
+
+    mutating func resolve(sessionID: UInt64, location: Int, selectionLength: Int,
+                          cumulativeOffset: Int, sameField: Bool, snapshotIsCurrent: Bool,
+                          suffixMatches: Bool) -> PredictionCaretAnchor? {
+        guard !cancelled else { return nil }
+        guard self.sessionID == sessionID, sameField else { cancelled = true; return nil }
+        guard snapshotIsCurrent, suffixMatches else { return nil }
+        if let resolved {
+            return resolved.permits(location: location, selectionLength: selectionLength,
+                cumulativeOffset: cumulativeOffset) ? resolved : nil
+        }
+        guard let candidate = candidates.first(where: {
+            $0.permits(location: location, selectionLength: selectionLength, cumulativeOffset: cumulativeOffset)
+        }) else { return nil }
+        resolved = candidate
+        return candidate
     }
 }
 

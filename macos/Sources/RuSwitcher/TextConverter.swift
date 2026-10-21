@@ -76,6 +76,98 @@ final class ClipboardRestoreSession {
     private func discard() { savedItems = nil; ownedChangeCount = nil }
 }
 
+/// Only a confirmed read-back may update conversion or prediction history.
+/// AX errors after a setter are ambiguous: the caller retains the source for an
+/// explicit recovery gesture, and never tries a second delivery mechanism.
+enum CombinedShiftAXEditResult: Equatable {
+    case refused, confirmed, unknown
+}
+
+@MainActor
+struct CombinedShiftSelectionAccess {
+    let isValid: () -> Bool
+    let selection: () -> CombinedShiftSelectionSnapshot?
+    let writeSelection: (String) -> Bool?
+    let replacementIsCurrent: (CombinedShiftSelectionSnapshot, String) -> Bool
+}
+
+@MainActor
+enum CombinedShiftSelectionEditor {
+    static func replace(original: CombinedShiftSelectionSnapshot, replacement: String,
+                        access: CombinedShiftSelectionAccess) -> CombinedShiftAXEditResult {
+        guard !replacement.isEmpty, replacement != original.text,
+              access.isValid(), let selected = access.selection(),
+              original.matches(range: selected.range, text: selected.text), access.isValid() else { return .refused }
+        guard let written = access.writeSelection(replacement) else {
+            RuntimeDiagnostics.record(.selectionAXUnsupported)
+            return .refused
+        }
+        RuntimeDiagnostics.record(written ? .selectionAXWritePosted : .selectionAXWriteRefused)
+        // AX success is not proof of delivery. Conversely, an error does not
+        // prove that the receiving editor left the field untouched.
+        guard access.isValid(), access.replacementIsCurrent(original, replacement), access.isValid() else {
+            RuntimeDiagnostics.record(.selectionAXMutationUnknown)
+            return .unknown
+        }
+        RuntimeDiagnostics.record(.selectionAXWriteVerified)
+        return .confirmed
+    }
+}
+
+/// A suffix edit first verifies the original collapsed caret and exact source,
+/// then selects only that fixed range on the captured AX element. No key queue,
+/// clipboard transaction or whole-field AXValue setter is involved.
+@MainActor
+struct CombinedShiftSuffixAccess {
+    let isValid: () -> Bool
+    let selectionRange: () -> CFRange?
+    let text: (CFRange) -> String?
+    let canWriteSelection: () -> Bool
+    let select: (CFRange) -> Bool
+    let selected: CombinedShiftSelectionAccess
+}
+
+@MainActor
+enum CombinedShiftSuffixEditor {
+    static func replace(original: CombinedShiftSelectionSnapshot, replacement: String,
+                        expectedSelection: CFRange, access: CombinedShiftSuffixAccess) -> CombinedShiftAXEditResult {
+        guard access.isValid(), let selection = access.selectionRange(),
+              selection.location == expectedSelection.location, selection.length == expectedSelection.length,
+              access.text(original.range) == original.text, access.canWriteSelection(), access.isValid() else { return .refused }
+        var attemptedSelection = false
+        if selection.location != original.range.location || selection.length != original.range.length {
+            attemptedSelection = true
+            guard access.select(original.range) else {
+                return reconcileRefusedSelection(original: original, expected: expectedSelection, access: access)
+            }
+        }
+        let result = CombinedShiftSelectionEditor.replace(original: original, replacement: replacement, access: access.selected)
+        guard result != .confirmed, attemptedSelection else { return result }
+        let reconciled = reconcileRefusedSelection(original: original, expected: expectedSelection, access: access)
+        // A text setter has already been attempted on UNKNOWN. Even when the
+        // unchanged source lets us safely restore its caret, retain that unknown
+        // transaction rather than authorizing another automatic write.
+        return result == .unknown ? .unknown : reconciled
+    }
+
+    /// A failed/unsupported text write must not leave an automatic word selected,
+    /// since the next ordinary keystroke could overwrite it. Never roll back a
+    /// selection blindly: a changed field, source or revision means UNKNOWN.
+    private static func reconcileRefusedSelection(original: CombinedShiftSelectionSnapshot,
+                                                   expected: CFRange, access: CombinedShiftSuffixAccess) -> CombinedShiftAXEditResult {
+        guard access.isValid(), let current = access.selectionRange(),
+              access.text(original.range) == original.text, access.isValid() else { return .unknown }
+        if current.location == expected.location && current.length == expected.length { return .refused }
+        guard current.location == original.range.location, current.length == original.range.length,
+              access.isValid() else { return .unknown }
+        _ = access.select(expected) // a false AX response can still have moved the caret
+        guard access.isValid(), let restored = access.selectionRange(),
+              restored.location == expected.location, restored.length == expected.length,
+              access.text(original.range) == original.text, access.isValid() else { return .unknown }
+        return .refused
+    }
+}
+
 /// Конвертация текста между раскладками
 @MainActor
 final class TextConverter {
@@ -95,23 +187,81 @@ final class TextConverter {
     private var lastWasBuffer = false
     private var lastLayoutContext: CombinedShiftContext?
     private var predictionLayouts: (source: String, target: String)?
+    private var lastSelectionOrigin: CombinedShiftFocus?
+    private var lastSelectionRange: CFRange?
+    private var lastWasAXEdit = false
+    private struct UnconfirmedAXEdit {
+        let focus: CombinedShiftFocus
+        let original: CombinedShiftSelectionSnapshot
+        let replacement: String
+        let layoutContext: CombinedShiftContext?
+        let predictionLayouts: (source: String, target: String)?
+    }
+    // Kept separately from confirmed history. clearState intentionally does not
+    // erase an ambiguous write's source. Only an explicit matching-field manual
+    // gesture may reconcile/recover it; automatic editing remains blocked.
+    private var unconfirmedAXEdits: [UnconfirmedAXEdit] = []
+    private static let maximumUnconfirmedFields = 8
+    private static let maximumRecoveryUTF16Units = 1_048_576
+    private func canRetainAXSource(original: String, replacement: String) -> Bool {
+        let retained = unconfirmedAXEdits.reduce(0) { $0 + $1.original.text.utf16.count + $1.replacement.utf16.count }
+        let proposed = original.utf16.count + replacement.utf16.count
+        return proposed <= Self.maximumRecoveryUTF16Units - retained
+    }
+    var hasUnconfirmedAXEdit: Bool { !unconfirmedAXEdits.isEmpty }
+    func hasUnconfirmedAXEdit(in focus: CombinedShiftFocus) -> Bool {
+        unconfirmedAXEdits.contains { $0.focus.processID == focus.processID && CFEqual($0.focus.element, focus.element) }
+    }
+    private func retainUnconfirmed(_ edit: UnconfirmedAXEdit) {
+        removeUnconfirmed(in: edit.focus)
+        unconfirmedAXEdits.append(edit)
+    }
+    private func removeUnconfirmed(in focus: CombinedShiftFocus) {
+        unconfirmedAXEdits.removeAll { $0.focus.processID == focus.processID && CFEqual($0.focus.element, focus.element) }
+    }
     /// Exact layout of the inserted result, also after undo; callers must not toggle active source.
     var lastResultLayoutID: String? { predictionLayouts?.target ?? lastLayoutContext?.targetLayoutID }
-    var hasReconversionState: Bool { !lastConverted.isEmpty || lastConvertedCount > 0 }
+    var hasReconversionState: Bool { hasUnconfirmedAXEdit || !lastConverted.isEmpty || lastConvertedCount > 0 }
 
     /// The only automatic edit entry point. It cannot fall back to clipboard,
     /// a global key queue or deletion based solely on a remembered character count.
     func replaceVerifiedSuffix(original: String, replacement: String, sourceLayoutID: String,
                                resultLayoutID: String, execution: CombinedShiftExecutionContext) -> Bool {
-        guard original != replacement, !sourceLayoutID.isEmpty, !resultLayoutID.isEmpty,
-              performNativeBufferEdit(original: original, replacement: replacement, execution: execution) else { return false }
+        guard !hasUnconfirmedAXEdit(in: execution.focus),
+              unconfirmedAXEdits.count < Self.maximumUnconfirmedFields else {
+            RuntimeDiagnostics.record(.unconfirmedEditBlocked); return false
+        }
+        guard !isConverting, original != replacement, !sourceLayoutID.isEmpty, !resultLayoutID.isEmpty,
+              let caret = execution.focus.initialSelection, caret.length == 0,
+              caret.location >= original.utf16.count,
+              let snapshot = CombinedShiftSelectionSnapshot(
+                  range: CFRange(location: caret.location - original.utf16.count, length: original.utf16.count), text: original)
+        else { return false }
+        guard canRetainAXSource(original: original, replacement: replacement) else {
+            RuntimeDiagnostics.record(.unconfirmedEditBlocked); return false
+        }
+        isConverting = true
+        defer { isConverting = false }
+        let result = replaceAXRange(original: snapshot, replacement: replacement,
+            expectedSelection: caret, execution: execution)
+        guard result == .confirmed else {
+            if result == .unknown {
+                retainUnconfirmed(UnconfirmedAXEdit(focus: execution.focus, original: snapshot,
+                    replacement: replacement, layoutContext: nil, predictionLayouts: (sourceLayoutID, resultLayoutID)))
+                RuntimeDiagnostics.record(.autoAXMutationUnknown)
+            } else if !execution.focus.canWriteSelectedText() { RuntimeDiagnostics.record(.autoAXUnsupported) }
+            return false
+        }
         lastOriginal = original
         lastConverted = replacement
         lastWasBuffer = true
+        lastWasAXEdit = true
         lastConvertedCount = 0
         lastBoundaryCount = 0
         lastLayoutContext = nil
         predictionLayouts = (sourceLayoutID, resultLayoutID)
+        lastSelectionOrigin = execution.focus
+        lastSelectionRange = CFRange(location: snapshot.range.location, length: replacement.utf16.count)
         return true
     }
     /// Последняя clipboard-конверсия содержала RTL — реконверт стрелками небезопасен.
@@ -206,12 +356,131 @@ final class TextConverter {
         return false
     }
 
-    private func selectionConversion(_ text: String, context: CombinedShiftContext?, normalize: Bool = true) -> String {
+    func selectionConversion(_ text: String, context: CombinedShiftContext?, normalize: Bool = true) -> String {
         let settings = SettingsManager.shared
-        let converted = settings.convertByText ? DynamicKeyMapping.convertBidirectional(text, context: context)
+        var converted = settings.convertByText ? DynamicKeyMapping.convertBidirectional(text, context: context)
             : settings.smartConversion ? SmartConvert.selection(text, context: context)
             : DynamicKeyMapping.convert(text, context: context)
+        // Pasted selections have no reliable relationship to the active input
+        // source. An explicit manual request may flip their actual script when
+        // the requested direction leaves every character unchanged.
+        if context != nil && converted == text {
+            converted = DynamicKeyMapping.convertBidirectional(text, context: context)
+        }
         return normalize ? TextConverter.normalizedForInsert(converted) : converted
+    }
+
+    /// Explicit selections use their immutable first-tap AX range, without
+    /// Cmd+C, Cmd+V, or a delayed clipboard-restore transaction.
+    func convertSelection(context: CombinedShiftContext, execution: CombinedShiftExecutionContext,
+                          restorePrevious: Bool = false) async -> Bool {
+        guard !isConverting else { return false }
+        if hasUnconfirmedAXEdit(in: execution.focus) { return recoverUnconfirmedAXEdit(execution: execution) }
+        guard unconfirmedAXEdits.count < Self.maximumUnconfirmedFields else {
+            RuntimeDiagnostics.record(.unconfirmedEditBlocked); return false
+        }
+        guard execution.isValid(), let original = execution.focus.selectionSnapshot() else {
+            RuntimeDiagnostics.record(.selectionSnapshotUnavailable); return false
+        }
+        let restoring = restorePrevious && lastWasAXEdit && !lastOriginal.isEmpty && original.text == lastConverted
+            && lastSelectionOrigin.map { $0.processID == execution.focus.processID
+                && CFEqual($0.element, execution.focus.element) } == true
+            && lastSelectionRange.map { $0.location == original.range.location
+                && $0.length == original.range.length } == true
+        let replacement = restoring ? lastOriginal : selectionConversion(original.text, context: context)
+        guard replacement != original.text, !replacement.isEmpty else { return false }
+        guard canRetainAXSource(original: original.text, replacement: replacement) else {
+            RuntimeDiagnostics.record(.unconfirmedEditBlocked); return false
+        }
+        let resultContext = restoring ? (lastLayoutContext?.reversed ?? context)
+            : DynamicKeyMapping.resultContext(for: replacement, requested: context)
+        isConverting = true
+        defer { isConverting = false }
+        let result = CombinedShiftSelectionEditor.replace(original: original, replacement: replacement,
+            access: selectionAccess(execution))
+        guard result == .confirmed else {
+            if result == .unknown {
+                retainUnconfirmed(UnconfirmedAXEdit(focus: execution.focus, original: original,
+                    replacement: replacement, layoutContext: resultContext, predictionLayouts: nil))
+            }
+            return false
+        }
+        commitAXEdit(original: original, replacement: replacement, focus: execution.focus,
+            context: resultContext, layouts: nil)
+        return true
+    }
+
+    private func selectionAccess(_ execution: CombinedShiftExecutionContext) -> CombinedShiftSelectionAccess {
+        CombinedShiftSelectionAccess(isValid: { execution.isValid() },
+            selection: { execution.focus.currentSelectionSnapshot() },
+            writeSelection: { execution.focus.writeSelectedText($0) },
+            replacementIsCurrent: { execution.focus.replacementIsCurrent(original: $0, replacement: $1) })
+    }
+
+    private func replaceAXRange(original: CombinedShiftSelectionSnapshot, replacement: String,
+                                expectedSelection: CFRange, execution: CombinedShiftExecutionContext) -> CombinedShiftAXEditResult {
+        CombinedShiftSuffixEditor.replace(original: original, replacement: replacement,
+            expectedSelection: expectedSelection,
+            access: CombinedShiftSuffixAccess(isValid: { execution.isValid() },
+                selectionRange: { execution.focus.selectionRange() },
+                text: { execution.focus.text(in: $0) },
+                canWriteSelection: { execution.focus.canWriteSelectedText() },
+                select: { execution.focus.select(range: $0) }, selected: selectionAccess(execution)))
+    }
+
+    private func commitAXEdit(original: CombinedShiftSelectionSnapshot, replacement: String,
+                              focus: CombinedShiftFocus, context: CombinedShiftContext?,
+                              layouts: (source: String, target: String)?) {
+        lastOriginal = original.text
+        lastConverted = replacement
+        lastWasBuffer = true
+        lastWasAXEdit = true
+        lastConvertedCount = 0
+        lastBoundaryCount = 0
+        lastClipboardRTL = TextConverter.containsRTL(original.text) || TextConverter.containsRTL(replacement)
+        predictionLayouts = layouts
+        lastLayoutContext = context
+        lastSelectionOrigin = focus
+        lastSelectionRange = CFRange(location: original.range.location, length: replacement.utf16.count)
+    }
+
+    /// An uncertain source is never discarded or automatically written again.
+    /// A new explicit gesture may restore it only at that same exact AX range.
+    private func recoverUnconfirmedAXEdit(execution: CombinedShiftExecutionContext) -> Bool {
+        guard !isConverting, let pending = unconfirmedAXEdits.first(where: {
+            $0.focus.processID == execution.focus.processID && CFEqual($0.focus.element, execution.focus.element)
+        }),
+              pending.focus.processID == execution.focus.processID,
+              CFEqual(pending.focus.element, execution.focus.element), execution.isValid(),
+              let current = execution.focus.selectionRange() else { return false }
+        let resultRange = CFRange(location: pending.original.range.location, length: pending.replacement.utf16.count)
+        let observed = execution.focus.text(in: resultRange)
+        guard let result = pending.original.resultSnapshot(replacement: pending.replacement,
+            selection: current, observedText: observed) else {
+            // A read-back of the exact unchanged source resolves a refused write,
+            // but this gesture itself never follows it with another mutation.
+            if pending.original.resultSnapshot(replacement: pending.original.text, selection: current,
+                observedText: execution.focus.text(in: pending.original.range)) != nil,
+                execution.isValid() { removeUnconfirmed(in: execution.focus) }
+            return false
+        }
+        isConverting = true
+        defer { isConverting = false }
+        let outcome = replaceAXRange(original: result, replacement: pending.original.text,
+            expectedSelection: current, execution: execution)
+        guard outcome == .confirmed else {
+            if outcome == .unknown {
+                retainUnconfirmed(UnconfirmedAXEdit(focus: execution.focus, original: result,
+                    replacement: pending.original.text, layoutContext: pending.layoutContext?.reversed,
+                    predictionLayouts: pending.predictionLayouts.map { ($0.target, $0.source) }))
+            }
+            return false
+        }
+        removeUnconfirmed(in: execution.focus)
+        commitAXEdit(original: result, replacement: pending.original.text, focus: execution.focus,
+            context: pending.layoutContext?.reversed,
+            layouts: pending.predictionLayouts.map { ($0.target, $0.source) })
+        return true
     }
 
     /// Движок перепечатки: стираем набранное и впечатываем конвертированное через
@@ -266,6 +535,7 @@ final class TextConverter {
             lastOriginal = original
             lastConverted = insert
             lastWasBuffer = true
+        lastWasAXEdit = false
             predictionLayouts = nil
             lastLayoutContext = context.map { DynamicKeyMapping.resultContext(for: insert, requested: $0) }
             return true  // native history is committed only after the bounded batch was posted
@@ -274,6 +544,7 @@ final class TextConverter {
         lastOriginal = pair.original + originalSuffix + spaces
         lastConverted = pair.converted + passthroughSuffix + spaces
         lastWasBuffer = true
+        lastWasAXEdit = false
         predictionLayouts = nil
         lastLayoutContext = context
         rslog("buffer convert: \(keys.count) keys (+\(passthroughSuffix.count) punct, +\(trailingSpaces) sp)")
@@ -359,6 +630,7 @@ final class TextConverter {
         if let execution {
             guard performNativeBufferEdit(original: original, replacement: converted, execution: execution) else { return false }
             lastWasBuffer = true
+        lastWasAXEdit = false
             lastOriginal = original
             lastConverted = converted
             predictionLayouts = nil
@@ -367,6 +639,7 @@ final class TextConverter {
         }
         isConverting = true
         lastWasBuffer = true
+        lastWasAXEdit = false
         lastOriginal = original
         lastConverted = converted
         predictionLayouts = nil
@@ -576,7 +849,8 @@ final class TextConverter {
             predictionLayouts = nil
             lastLayoutContext = restoring ? (lastLayoutContext?.reversed ?? context)
                 : context.map { DynamicKeyMapping.resultContext(for: converted, requested: $0) }
-            lastOriginal = text
+            lastWasAXEdit = false
+        lastOriginal = text
             lastConverted = converted
         }
         conversionSucceeded = true
@@ -614,6 +888,34 @@ final class TextConverter {
     func reconvert(context: CombinedShiftContext? = nil, execution: CombinedShiftExecutionContext? = nil) -> Bool {
         guard context == nil || execution != nil else { return false }
         guard !isConverting else { return false }
+        if let execution, hasUnconfirmedAXEdit(in: execution.focus) {
+            return recoverUnconfirmedAXEdit(execution: execution)
+        }
+        if lastWasAXEdit {
+            guard let execution, let origin = lastSelectionOrigin, let resultRange = lastSelectionRange,
+                  origin.processID == execution.focus.processID, CFEqual(origin.element, execution.focus.element),
+                  execution.isValid(), let current = execution.focus.selectionRange(),
+                  let original = CombinedShiftSelectionSnapshot(range: resultRange, text: lastConverted),
+                  original.resultSnapshot(replacement: lastConverted, selection: current,
+                      observedText: execution.focus.text(in: resultRange)) != nil else { return false }
+            isConverting = true
+            defer { isConverting = false }
+            let replacement = lastOriginal
+            let reverseContext = lastLayoutContext?.reversed ?? context
+            let reverseLayouts = predictionLayouts.map { ($0.target, $0.source) }
+            let result = replaceAXRange(original: original, replacement: replacement,
+                expectedSelection: current, execution: execution)
+            guard result == .confirmed else {
+                if result == .unknown {
+                    retainUnconfirmed(UnconfirmedAXEdit(focus: execution.focus, original: original,
+                        replacement: replacement, layoutContext: reverseContext, predictionLayouts: reverseLayouts))
+                }
+                return false
+            }
+            commitAXEdit(original: original, replacement: replacement, focus: execution.focus,
+                context: reverseContext, layouts: reverseLayouts)
+            return true
+        }
         if lastWasBuffer {
             guard !lastConverted.isEmpty else { return false }
             if let execution {
@@ -697,7 +999,8 @@ final class TextConverter {
             // issue #22: сохраняем пару до/после — реконверт восстанавливает ТОЧНО,
             // а не пере-конвертирует (умный/тотальный флип односторонней convert не
             // инвертируется, особенно смешанный результат).
-            lastOriginal = text
+            lastWasAXEdit = false
+        lastOriginal = text
             lastConverted = converted
             predictionLayouts = nil
             lastLayoutContext = context.map { DynamicKeyMapping.resultContext(for: converted, requested: $0) }
@@ -767,6 +1070,7 @@ final class TextConverter {
 
         lastConvertedCount = converted.count
         lastBoundaryCount = usedBoundary
+        lastWasAXEdit = false
         lastOriginal = text          // issue #22: точное восстановление в reconvert
         lastConverted = converted
         predictionLayouts = nil
@@ -862,6 +1166,9 @@ final class TextConverter {
         lastClipboardRTL = false
         lastLayoutContext = nil
         predictionLayouts = nil
+        lastSelectionOrigin = nil
+        lastSelectionRange = nil
+        lastWasAXEdit = false
     }
 
     // MARK: - Private
@@ -871,7 +1178,7 @@ final class TextConverter {
     /// There is no queued job that can delete a subsequently typed character or another field.
     private func performNativeBufferEdit(original: String, replacement: String,
                                          execution: CombinedShiftExecutionContext) -> Bool {
-        guard !isConverting, !original.isEmpty, original.count <= 512,
+        guard !hasUnconfirmedAXEdit(in: execution.focus), !isConverting, !original.isEmpty, original.count <= 512,
               !replacement.isEmpty, replacement.utf16.count <= 4096, let source = makeSource() else { return false }
         isConverting = true
         defer { isConverting = false }
