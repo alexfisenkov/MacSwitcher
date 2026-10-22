@@ -53,13 +53,20 @@ struct PredictionEngine: Sendable {
         let hasDomainContext = domainCues.contains { Self.domainContext.contains(contextKey($0)) }
         let hasPeopleCollocation = domainCues.last.map { Self.peopleModifiers.contains(contextKey($0)) } ?? false
         let previousWord = words.count >= 2 ? String(suffix[words[words.count - 2]]) : nil
-        let priorityContext = precedingWords + words.dropLast(previousWord == "f" && current == "yt" ? 2 : 1)
+        let pairedShortWord = previousWord == "f" && ["yt", "to\\", "to`"].contains(current)
+        let priorityContext = precedingWords + words.dropLast(pairedShortWord ? 2 : 1)
             .map { String(suffix[$0]) }
-        let priority = russianPriority && !protectedToken(current)
+        // Only these exact physical-key spellings may cross the backslash guard.
+        // Paths, commands and every other token retain the general protection.
+        let exactYoWord = source == "en" && (current == "to\\" || current == "to`")
+        let priority = russianPriority && (exactYoWord || !protectedToken(current))
             ? RussianPriorityPolicy.replacement(for: current, previous: previousWord,
                 sourceLanguage: source, precedingWords: priorityContext,
                 atBoundary: atBoundary || suffix.last?.isWhitespace == true,
                 mapping: characterMapping, lexicon: lexicon) : nil
+        // A rejected backtick spelling must not fall through to the broad
+        // dictionary path in code/technical context.
+        if russianPriority && exactYoWord && priority == nil { return nil }
         let corrected: String?
         do {
             corrected = try (priority ?? correction(for: current, source: source, target: target,
@@ -80,14 +87,17 @@ struct PredictionEngine: Sendable {
             let letterMatchesLayout = characterMapping.map {
                 source == "en" ? $0["f"] == "а" : $0["а"] == "f"
             } ?? true
-            if previous == "f", !technical, letterMatchesLayout, strongRussianContext(resultingWord) {
+            if previous == "f", !technical, letterMatchesLayout,
+               (!russianPriority || !lexicon.isPersonalWord(previous, language: "en")),
+               strongRussianContext(resultingWord) {
                 let result = String(suffix[..<previousRange.lowerBound]) + "а"
                     + String(suffix[previousRange.upperBound..<currentRange.lowerBound]) + resultingWord
                     + String(suffix[currentRange.upperBound...])
                 return PredictionProposal(originalSuffix: suffix, replacementSuffix: result,
                                           targetLanguage: "ru", reason: .contextWord)
             }
-            if priority == "не", previous == "f", !technical {
+            if priority == "не", previous == "f", !technical,
+               (!russianPriority || !lexicon.isPersonalWord(previous, language: "en")) {
                 let result = String(suffix[..<previousRange.lowerBound]) + "а"
                     + String(suffix[previousRange.upperBound..<currentRange.lowerBound]) + "не"
                     + String(suffix[currentRange.upperBound...])

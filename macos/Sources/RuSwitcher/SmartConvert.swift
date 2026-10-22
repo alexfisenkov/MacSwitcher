@@ -28,10 +28,15 @@ enum SmartConvert {
     /// Умная по-словная конверсия выделения. Возвращает обычную одностороннюю конверсию, если
     /// пара не латиница+кириллица или словари недоступны.
     @MainActor
-    static func selection(_ text: String, context: CombinedShiftContext? = nil) -> String {
+    static func selection(_ text: String, context: CombinedShiftContext? = nil,
+                          russianPriority: Bool = SettingsManager.shared.russianPriorityEnabled) -> String {
         guard let (latLang, cyrLang) = classifyPair(context: context),
               Dict.isAvailable(latLang), Dict.isAvailable(cyrLang) else {
             return DynamicKeyMapping.convert(text, context: context)   // не Lat+Cyr пара — обычный путь
+        }
+        if let explicitShortWords = russianPrioritySelection(text, context: context,
+                                                              enabled: russianPriority) {
+            return explicitShortWords
         }
         let toks = tokenize(text)
         var results = [String?](repeating: nil, count: toks.count)
@@ -63,6 +68,30 @@ enum SmartConvert {
         // Пас 2 — неразрешённые по сигналу.
         for i in pending { results[i] = signalFlip(toks[i].str, target: target, latLang: latLang, cyrLang: cyrLang, context: context) }
         return results.map { $0 ?? "" }.joined()
+    }
+
+    /// A manual selection consisting entirely of the owner's exact short RU
+    /// collisions is explicit enough to resolve them. A mixed selection still
+    /// follows the conservative per-word policy, preserving English prose and
+    /// names such as "press f" and "ghbdtn MacSwitcher".
+    private static func russianPrioritySelection(_ text: String, context: CombinedShiftContext?,
+                                                  enabled: Bool) -> String? {
+        guard enabled, context != nil,
+              let languages = LayoutSwitcher.currentAndOppositeLanguage(context: context),
+              languages.current == "en", languages.opposite == "ru" else { return nil }
+        let tokens = tokenize(text)
+        let words = tokens.filter { $0.isWord }
+        guard !words.isEmpty else { return nil }
+        let expected: [String: String] = ["f": "а", "to\\": "ещё", "to`": "ещё"]
+        for word in words {
+            guard let target = expected[word.str],
+                  DynamicKeyMapping.convertBidirectional(word.str, context: context) == target else {
+                return nil
+            }
+        }
+        return tokens.map { token in
+            token.isWord ? expected[token.str]! : token.str
+        }.joined()
     }
 
     /// Решение по слову. .flip несёт письменность РЕЗУЛЬТАТА (сигнал для пасса 2); .unresolved —

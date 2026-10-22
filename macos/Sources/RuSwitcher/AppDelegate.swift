@@ -86,6 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.keyboardMonitor.resetCombinedShift()
             self?.textConverter.clearState()
             self?.reconfigureTap()
+            self?.configurePredictionPreferences()
         }
         settingsController.onAutoConvertChanged = { [weak self] _ in
             self?.predictionCoordinator.invalidate()

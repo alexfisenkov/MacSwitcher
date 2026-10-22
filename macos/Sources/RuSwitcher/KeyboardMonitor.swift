@@ -197,9 +197,25 @@ final class KeyboardMonitor: @unchecked Sendable {
         }
     }
     func beginNativeInputTransaction(processID: Int32) -> InputEventFence.Lease? {
-        guard nativeInputTransportAvailable, !sourceTransitions.hasPending else { return nil }
+        guard nativeInputGateConfigured else {
+            RuntimeDiagnostics.record(.fenceGateNotConfigured); return nil
+        }
+        guard let eventTap else {
+            RuntimeDiagnostics.record(.fenceTapMissing); return nil
+        }
+        guard CGEvent.tapIsEnabled(tap: eventTap) else {
+            RuntimeDiagnostics.record(.fenceTapDisabled); return nil
+        }
+        guard inputFence.isAvailable else {
+            RuntimeDiagnostics.record(.fenceInterrupted); return nil
+        }
+        guard !sourceTransitions.hasPending else {
+            RuntimeDiagnostics.record(.fencePendingSource); return nil
+        }
         let startedAt = DispatchTime.now().uptimeNanoseconds
-        guard let lease = inputFence.begin(processID: processID, maximumDuration: 0.250) else { return nil }
+        guard let lease = inputFence.begin(processID: processID, maximumDuration: 0.250) else {
+            RuntimeDiagnostics.record(.fenceBusy); return nil
+        }
         nativeTransactionStart = (lease, startedAt)
         return lease
     }
@@ -1041,6 +1057,7 @@ private func keyboardCallback(
     fence: InputEventFence
 ) -> Unmanaged<CGEvent>? {
     if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+        RuntimeDiagnostics.record(type == .tapDisabledByTimeout ? .tapDisabledTimeout : .tapDisabledUserInput)
         fence.interrupt()
         DispatchQueue.main.async { [weak monitor] in
             guard let monitor, monitor.inputFence === fence else { return }

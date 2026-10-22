@@ -34,6 +34,8 @@ enum RuntimeDiagnosticEvent: String, CaseIterable, Sendable {
     case nativeAutoBlocked, nativeAutoInsertPosted, nativeAutoRemovalPosted, nativeAutoVerified, nativeAutoUncertain
     case nativeAutoFocusRetry, nativeAutoFocusRecovered, nativeAutoFocusRecheckFailed
     case nativeFenceHeldInput, nativeFenceInterrupted, nativeFenceUnavailable
+    case fenceGateNotConfigured, fenceTapMissing, fenceTapDisabled, fenceInterrupted, fencePendingSource, fenceBusy
+    case tapDisabledTimeout, tapDisabledUserInput
     case autoTextConfirmed, autoTextUnconfirmed, autoSourceConfirmed, autoSourceFailed, autoSourceUnconfirmed, heldInputRecoded
     case focusReadCannotComplete, focusReadNoValue, focusReadInvalidElement
     case focusReadOtherError, focusReadMissingValue, focusReadUnexpectedType
@@ -42,7 +44,12 @@ enum RuntimeDiagnosticEvent: String, CaseIterable, Sendable {
 }
 
 enum RuntimeDiagnostics {
-    static let enabled = isEnabled(arguments: CommandLine.arguments)
+    // Local opt-in complements the existing launch flag; no input payload
+    // reaches this closed-vocabulary logger.
+    static var enabled: Bool {
+        isEnabled(arguments: CommandLine.arguments)
+            || UserDefaults.standard.bool(forKey: "com.macswitcher.metadataDiagnosticsEnabled")
+    }
     private static let logger = Logger(subsystem: "com.alexfisenkov.macswitcher", category: "Diagnostics")
     private static let seen = SeenEvents()
 

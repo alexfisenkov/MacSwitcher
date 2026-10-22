@@ -1,9 +1,9 @@
 {
-  "version": "0.1.0-alpha.11",
+  "version": "0.1.0-alpha.12",
   "short_version": "0.1.0",
-  "build": 11,
+  "build": 12,
   "channel": "alpha",
   "url": "https://github.com/alexfisenkov/MacSwitcher/releases",
-  "notes": "Compact native settings: readable tab labels and pane-specific window height. UI cleanup only; saved preferences, dictionaries and input implementation are preserved.",
+  "notes": "Fix RU-priority f / to-backslash and exact short selections; apply double-Shift timing changes immediately. Local opt-in metadata diagnostics distinguish edit gate failures; general reported physical gesture failure is still under investigation.",
   "native_backend_accepted": false
 }

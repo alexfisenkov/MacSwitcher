@@ -5,10 +5,12 @@ import Foundation
 enum RussianPriorityPolicy {
     private static let technicalCues: Set<String> = [
         "press", "key", "keys", "keyboard", "button", "function", "variable", "symbol",
-        "code", "script", "command", "shortcut", "url", "domain", "host"
+        "code", "script", "command", "shortcut", "url", "domain", "host",
+        "path", "file", "folder", "directory", "нажми", "нажмите", "клавиша",
+        "клавишу", "буква", "букву", "символ", "символа", "переменная", "путь", "файл"
     ]
     private static let commonRussianWords: Set<String> = [
-        "ну", "не", "да", "нет", "но", "же", "бы", "ли", "вот", "уже", "ещё",
+        "а", "ну", "не", "да", "нет", "но", "же", "бы", "ли", "вот", "уже", "ещё",
         "это", "как", "что", "или", "где", "там", "тут", "без", "для"
     ]
 
@@ -27,7 +29,8 @@ enum RussianPriorityPolicy {
             guard let replacement = effective[letter] else { return nil }
             mapped.append(replacement)
         }
-        guard commonRussianWords.contains(mapped), current == "ye" || atBoundary else { return nil }
+        let exactYoWord = (current == "to\\" || current == "to`") && mapped == "ещё"
+        guard commonRussianWords.contains(mapped), current == "ye" || exactYoWord || atBoundary else { return nil }
         // Preserve real English prose, commands and named entities. A single
         // ambiguous token remains eligible only in genuinely neutral context.
         for word in precedingWords.suffix(3) {
