@@ -175,10 +175,11 @@ enum L10n {
         let own: [String: (String, String)] = [
             "whatsnew.body": ("MacSwitcher: один Shift меняет раскладку, двойной исправляет слово или выделение. Добавлена ранняя локальная RU/EN-коррекция. Это альфа-версия; неоднозначные случаи требуют проверки.", "MacSwitcher: one Shift changes layout, a double Shift fixes a word or selection. Early local RU/EN correction is available. This is an alpha; ambiguous cases still need testing."),
             "onboard.autoConvert.text": ("Включить локальную автоматическую RU/EN-коррекцию при наборе? По умолчанию она выключена. Один Shift меняет раскладку, двойной исправляет слово или выделение. Автокоррекцию можно отключить в настройках.", "Enable local automatic RU/EN correction while typing? It is off by default. One Shift changes layout; a double Shift fixes a word or selection. Automatic correction can be turned off in Settings."),
-            "settings.checkUpdates.hint": ("Проверять выпуски MacSwitcher на GitHub раз в сутки. Скачивание и установка пока вручную.", "Check MacSwitcher releases on GitHub once a day. Downloading and installation are currently manual."),
+            "settings.checkUpdates.hint": ("Новая версия устанавливается из приложения после вашего подтверждения.", "New versions are installed from the app after your confirmation."),
             "settings.betaChannel": ("Включать альфа- и бета-выпуски", "Include alpha and beta releases"),
-            "settings.betaChannel.hint": ("Предлагать предварительные выпуски MacSwitcher с GitHub. Установка вручную.", "Include MacSwitcher prereleases from GitHub. Installation is manual."),
-            "settings.autoConvert.hint": ("Локальная RU/EN-коррекция при наборе и на границе слова. Неоднозначный текст может остаться без изменений.", "Local RU/EN correction during typing and at word boundaries. Ambiguous text may be left unchanged.")
+            "settings.betaChannel.hint": ("Предлагать предварительные выпуски MacSwitcher. Установка — после подтверждения.", "Include MacSwitcher prereleases. Installation requires confirmation."),
+            "settings.autoConvert.hint": ("Локальная RU/EN-коррекция при наборе и на границе слова. Неоднозначный текст может остаться без изменений.", "Local RU/EN correction during typing and at word boundaries. Ambiguous text may be left unchanged."),
+            "settings.version": ("Переключение раскладки и коррекция RU/EN", "Keyboard layout switching and RU/EN correction")
         ]
         if let pair = own[key] { return currentLang == "ru" ? pair.0 : pair.1 }
         return strings[currentLang]?[key] ?? strings["en"]![key] ?? key

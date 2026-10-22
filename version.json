@@ -1,9 +1,9 @@
 {
-  "version": "0.1.0-alpha.9",
+  "version": "0.1.0-alpha.10",
   "short_version": "0.1.0",
-  "build": 9,
+  "build": 10,
   "channel": "alpha",
   "url": "https://github.com/alexfisenkov/MacSwitcher/releases",
-  "notes": "RU-priority short words, correction Undo and exact phrase exceptions, personal RU/EN dictionary, configurable quick double Shift and signed in-app updates. Practical alpha; full regression and physical editor acceptance were not repeated for this release.",
+  "notes": "Interface cleanup: remove promotional sharing and GitHub star actions, simplify Shift settings, and align native styling with MacDictate. Existing dictionary, exceptions, saved preferences and input implementation are preserved.",
   "native_backend_accepted": false
 }

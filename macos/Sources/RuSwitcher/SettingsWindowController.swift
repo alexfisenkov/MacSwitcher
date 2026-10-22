@@ -269,14 +269,19 @@ final class SettingsWindowController {
         autoSwitchCheckbox = autoSwitch
         y -= 30
 
-        let combinedShift = NSButton(checkboxWithTitle: "Один Shift — раскладка, два — исправить текст",
+        let combinedShift = NSButton(checkboxWithTitle: L10n.languageCode == "ru"
+            ? "Один Shift — раскладка, два — исправить текст"
+            : "One Shift changes layout; two fix the text",
                                      target: self, action: #selector(combinedShiftChanged))
         combinedShift.frame = NSRect(x: 20, y: y, width: 420, height: 22)
         combinedShift.state = SettingsManager.shared.combinedShiftEnabled ? .on : .off
-        combinedShift.toolTip = "Оба Shift. Короткое нажатие сразу меняет раскладку; двойное исправляет последнее слово или выделение. Обычные сочетания и удержание работают как раньше."
+        combinedShift.toolTip = L10n.languageCode == "ru"
+            ? "Оба Shift: короткое нажатие меняет раскладку, двойное исправляет последнее слово или выделение. Обычные сочетания и удержание работают как раньше."
+            : "Press either Shift briefly to change layout; double-press to fix the last word or selection. Other shortcuts and holding Shift work as usual."
         view.addSubview(combinedShift)
         y -= 30
 
+        if SettingsManager.shared.combinedShiftEnabled {
         let intervalTitle = NSTextField(labelWithString: L10n.languageCode == "ru" ? "Интервал двух Shift" : "Double Shift interval")
         intervalTitle.frame = NSRect(x: 20, y: y, width: 175, height: 22)
         view.addSubview(intervalTitle)
@@ -292,7 +297,9 @@ final class SettingsWindowController {
         view.addSubview(value)
         intervalValueLabel = value
         y -= 34
+        }
 
+        if !SettingsManager.shared.combinedShiftEnabled {
         // Триггер конвертации
         let triggerLabel = NSTextField(labelWithString: L10n.settingsTrigger)
         triggerLabel.frame = NSRect(x: 20, y: y, width: 150, height: 22)
@@ -316,6 +323,7 @@ final class SettingsWindowController {
         doubleTapCheckbox.state = SettingsManager.shared.triggerDoubleTap ? .on : .off
         view.addSubview(doubleTapCheckbox)
         y -= 30
+        }
 
         // issue #14: отдельный хоткей чистого переключения раскладки (без конверсии) —
         // в т.ч. Ctrl+Shift и другие модификаторные комбо, недоступные системным настройкам.
@@ -371,12 +379,14 @@ final class SettingsWindowController {
         view.addSubview(caseDoubleTapCheckbox)
         y -= 32
 
+        if !SettingsManager.shared.combinedShiftEnabled {
         let triggerHint = NSTextField(wrappingLabelWithString: L10n.settingsTriggerHint)
         triggerHint.frame = NSRect(x: 40, y: y - 22, width: 400, height: 36)
         triggerHint.font = .systemFont(ofSize: 11)
         triggerHint.textColor = .secondaryLabelColor
         view.addSubview(triggerHint)
         y -= 48
+        }
 
         // Запуск при логине
         let loginCheckbox = NSButton(checkboxWithTitle: L10n.settingsLaunchAtLogin, target: self, action: #selector(launchAtLoginChanged))
@@ -449,12 +459,14 @@ final class SettingsWindowController {
         layout2Popup = popup2
         y -= 50
 
-        // Описание хоткея
-        let hotkeyLabel = NSTextField(wrappingLabelWithString: L10n.settingsHotkey)
-        hotkeyLabel.frame = NSRect(x: 20, y: y - 40, width: 420, height: 55)
-        hotkeyLabel.font = .systemFont(ofSize: 12)
-        hotkeyLabel.textColor = .secondaryLabelColor
-        view.addSubview(hotkeyLabel)
+        if !SettingsManager.shared.combinedShiftEnabled {
+            // Описание хоткея
+            let hotkeyLabel = NSTextField(wrappingLabelWithString: L10n.settingsHotkey)
+            hotkeyLabel.frame = NSRect(x: 20, y: y - 40, width: 420, height: 55)
+            hotkeyLabel.font = .systemFont(ofSize: 12)
+            hotkeyLabel.textColor = .secondaryLabelColor
+            view.addSubview(hotkeyLabel)
+        }
 
         fitToText(view)
         item.view = topAligned(view)
@@ -578,26 +590,36 @@ final class SettingsWindowController {
         let item = NSTabViewItem()
         item.label = L10n.settingsTabAbout
 
-        let view = NSView(frame: NSRect(x: 0, y: 0, width: 460, height: 360))
-        var y: CGFloat = 310
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 460, height: 400))
 
-        // Название и версия
+        let appIcon = NSImageView(image: NSApp.applicationIconImage)
+        appIcon.imageScaling = .scaleProportionallyUpOrDown
+        appIcon.frame = NSRect(x: 190, y: 300, width: 80, height: 80)
+        view.addSubview(appIcon)
+
         let titleLabel = NSTextField(labelWithString: "MacSwitcher")
-        titleLabel.font = .boldSystemFont(ofSize: 20)
-        titleLabel.frame = NSRect(x: 20, y: y, width: 420, height: 28)
+        titleLabel.font = .systemFont(ofSize: 20, weight: .semibold)
+        titleLabel.alignment = .center
+        titleLabel.frame = NSRect(x: 20, y: 256, width: 420, height: 28)
         view.addSubview(titleLabel)
-        y -= 25
 
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-        let devTag = Bundle.main.infoDictionary?["RSDevTag"] as? String ?? ""
-        let versionLabel = NSTextField(labelWithString: "v\(version)\(devTag) — \(L10n.settingsVersion)")
-        versionLabel.frame = NSRect(x: 20, y: y, width: 420, height: 20)
+        let releaseVersion = Bundle.main.object(forInfoDictionaryKey: "MacSwitcherReleaseVersion") as? String
+            ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+            ?? "?"
+        let versionLabel = NSTextField(labelWithString: releaseVersion)
+        versionLabel.frame = NSRect(x: 20, y: 232, width: 420, height: 18)
+        versionLabel.alignment = .center
         versionLabel.font = .systemFont(ofSize: 12)
         versionLabel.textColor = .secondaryLabelColor
         view.addSubview(versionLabel)
-        y -= 22
 
-        // Сайт — ссылкой под версией. Подпись — сам адрес: переводить нечего.
+        let purpose = NSTextField(wrappingLabelWithString: L10n.settingsVersion)
+        purpose.frame = NSRect(x: 20, y: 190, width: 420, height: 32)
+        purpose.alignment = .center
+        purpose.font = .systemFont(ofSize: 12)
+        purpose.textColor = .secondaryLabelColor
+        view.addSubview(purpose)
+
         let siteLink = NSButton(title: "github.com/alexfisenkov/MacSwitcher", target: self, action: #selector(openWebsite))
         siteLink.isBordered = false
         siteLink.attributedTitle = NSAttributedString(string: "github.com/alexfisenkov/MacSwitcher", attributes: [
@@ -605,28 +627,17 @@ final class SettingsWindowController {
             .underlineStyle: NSUnderlineStyle.single.rawValue,
             .font: NSFont.systemFont(ofSize: 12),
         ])
-        siteLink.frame = NSRect(x: 9, y: y, width: 420, height: 18)   // у кнопки без рамки ~11 pt поля: текст ровно под заголовком
+        siteLink.frame = NSRect(x: 20, y: 150, width: 420, height: 22)
         view.addSubview(siteLink)
-        y -= 40
 
-        // Кнопка "Звезда на GitHub"
-        let starBtn = NSButton(title: L10n.settingsStarOnGithub, target: self, action: #selector(openGitHub))
-        starBtn.frame = NSRect(x: 20, y: y, width: 420, height: 32)
-        starBtn.bezelStyle = .rounded
-        view.addSubview(starBtn)
-        y -= 40
-
-        // No funding button until the project has an owner-controlled destination.
-        // Кнопка контакта
-        let contactBtn = NSButton(title: L10n.settingsContact, target: self, action: #selector(openContact))
-        contactBtn.frame = NSRect(x: 20, y: y, width: 420, height: 32)
+        let contactBtn = NSButton(title: L10n.languageCode == "ru" ? "Сообщить о проблеме" : "Report a problem",
+                                  target: self, action: #selector(openContact))
+        contactBtn.frame = NSRect(x: 20, y: 102, width: 420, height: 32)
         contactBtn.bezelStyle = .rounded
         view.addSubview(contactBtn)
-        y -= 40
 
-        // Проверить обновления
         let updateBtn = NSButton(title: L10n.menuCheckUpdates, target: self, action: #selector(checkUpdates))
-        updateBtn.frame = NSRect(x: 20, y: y, width: 200, height: 32)
+        updateBtn.frame = NSRect(x: 20, y: 58, width: 420, height: 32)
         updateBtn.bezelStyle = .rounded
         view.addSubview(updateBtn)
 
@@ -901,6 +912,24 @@ final class SettingsWindowController {
     @objc private func combinedShiftChanged(_ sender: NSButton) {
         SettingsManager.shared.combinedShiftEnabled = sender.state == .on
         onCombinedShiftChanged?()
+        refreshGeneralTabPresentation()
+    }
+
+    private func refreshGeneralTabPresentation() {
+        guard let tabView = window?.contentView as? NSTabView,
+              let oldItem = tabView.tabViewItems.first(where: { $0.label == L10n.settingsTabGeneral }) else { return }
+        let selectedGeneral = tabView.selectedTabViewItem === oldItem
+        let index = tabView.indexOfTabViewItem(oldItem)
+        let replacement = createGeneralTab()
+        tabView.removeTabViewItem(oldItem)
+        tabView.insertTabViewItem(replacement, at: index)
+        if selectedGeneral { tabView.selectTabViewItem(replacement) }
+        if let window {
+            let chrome = tabView.bounds.height - tabView.contentRect.height
+            let tallest = tabView.tabViewItems.compactMap { $0.view?.subviews.first?.frame.height }.max() ?? 700
+            let limit = (window.screen ?? NSScreen.main)?.visibleFrame.height ?? 900
+            window.setContentSize(NSSize(width: 480, height: min(tallest + chrome, limit - 60)))
+        }
         if let p = switchHotkeyPopup { populateSwitchHotkeyPopup(p) }
         if let p = caseHotkeyPopup { populateCaseHotkeyPopup(p) }
     }
@@ -1068,12 +1097,6 @@ final class SettingsWindowController {
 
     @objc private func secureNoticeChanged(_ sender: NSButton) {
         SettingsManager.shared.secureInputNoticeEnabled = sender.state == .on
-    }
-
-    @objc private func openGitHub() {
-        if let url = URL(string: SettingsManager.githubURL) {
-            NSWorkspace.shared.open(url)
-        }
     }
 
     @objc private func openWebsite() {

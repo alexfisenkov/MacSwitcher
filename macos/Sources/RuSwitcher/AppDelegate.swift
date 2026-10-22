@@ -885,34 +885,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
-        // Сайт: подпись — сам адрес, одинаково понятный на всех 16 языках, переводить нечего.
-        let siteItem = NSMenuItem(title: "MacSwitcher на GitHub", action: #selector(openWebsite), keyEquivalent: "")
-        siteItem.target = self
-        siteItem.image = NSImage(systemSymbolName: "globe", accessibilityDescription: nil)
-        menu.addItem(siteItem)
-
-        let starItem = NSMenuItem(title: L10n.menuStarOnGithub, action: #selector(openGitHub), keyEquivalent: "")
-        starItem.target = self
-        menu.addItem(starItem)
-
-        let shareItem = NSMenuItem(title: L10n.menuShare, action: nil, keyEquivalent: "")
-        shareItem.submenu = buildShareSubmenu()
-        menu.addItem(shareItem)
-
-        let contactItem = NSMenuItem(title: L10n.menuContactDeveloper, action: #selector(openContactEmail), keyEquivalent: "")
-        contactItem.target = self
-        contactItem.image = NSImage(systemSymbolName: "envelope", accessibilityDescription: nil)
-        menu.addItem(contactItem)
-
-        if !SettingsManager.telegramChatURL.isEmpty {
-            let tgItem = NSMenuItem(title: L10n.menuTelegramSupport, action: #selector(openTelegramSupport), keyEquivalent: "")
-            tgItem.target = self
-            tgItem.image = NSImage(systemSymbolName: "paperplane", accessibilityDescription: nil)
-            menu.addItem(tgItem)
-        }
-
-        menu.addItem(NSMenuItem.separator())
-
         let quitItem = NSMenuItem(title: L10n.menuQuit, action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
@@ -1177,18 +1149,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         UpdateChecker.checkNow()
     }
 
-    @objc private func openGitHub() {
-        if let url = URL(string: SettingsManager.githubURL) {
-            NSWorkspace.shared.open(url)
-        }
-    }
-
-    @objc private func openWebsite() {
-        if let url = SettingsManager.websiteLink(medium: "menu") {
-            NSWorkspace.shared.open(url)
-        }
-    }
-
     /// Окно «Что нового» — один раз после обновления, на языке приложения.
     /// НЕ показываем на свежей установке (там визард первого запуска): отличаем по
     /// launchAtLoginAsked — он выставляется на первом запуске, значит приложение уже
@@ -1252,95 +1212,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 NSWorkspace.shared.open(url)
             }
         }
-    }
-
-    /// Подменю «Поделиться» — прямые share-intent ссылки на площадки, актуальные для
-    /// аудитории (Telegram/VK — главные для RU), + копирование. Нативный NSSharingServicePicker
-    /// на macOS для этого слаб (нет соцсетей/мессенджеров), поэтому свои web-intent'ы.
-    private func buildShareSubmenu() -> NSMenu {
-        // Делимся сайтом (там кнопка скачивания и описание), с меткой площадки для Метрики.
-        func link(_ medium: String) -> String {
-            SettingsManager.websiteLink(source: "share", medium: medium)?.absoluteString ?? SettingsManager.websiteURL
-        }
-        let text = L10n.shareMessage
-        let menu = NSMenu()
-
-        let copyItem = NSMenuItem(title: L10n.menuShareCopy, action: #selector(copyShareLink), keyEquivalent: "")
-        copyItem.target = self
-        copyItem.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: nil)
-        menu.addItem(copyItem)
-        menu.addItem(NSMenuItem.separator())
-
-        // (заголовок, icon-slug, base, параметры). icon: ключ ShareIcons или "sf:<symbol>".
-        let targets: [(String, String, String, [(String, String)])] = [
-            ("Telegram", "telegram", "https://t.me/share/url",                 [("url", link("telegram")), ("text", text)]),
-            ("VK",       "vk",       "https://vk.com/share.php",                [("url", link("vk")), ("title", text)]),
-            ("X",        "x",        "https://twitter.com/intent/tweet",        [("text", text), ("url", link("x"))]),
-            ("WhatsApp", "whatsapp", "https://wa.me/",                          [("text", "\(text) \(link("whatsapp"))")]),
-            ("Facebook", "facebook", "https://www.facebook.com/sharer/sharer.php", [("u", link("facebook"))]),
-            ("Reddit",   "reddit",   "https://www.reddit.com/submit",           [("url", link("reddit")), ("title", text)]),
-            (L10n.menuShareEmail, "sf:envelope", "mailto:",                     [("subject", "MacSwitcher"), ("body", "\(text) \(link("email"))")]),
-        ]
-        for (title, icon, base, params) in targets {
-            guard let shareURL = Self.buildQueryURL(base, params) else { continue }
-            let item = NSMenuItem(title: title, action: #selector(openShareLink(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = shareURL
-            if icon.hasPrefix("sf:") {
-                item.image = NSImage(systemSymbolName: String(icon.dropFirst(3)), accessibilityDescription: nil)
-            } else {
-                item.image = ShareIcons.image(icon)
-            }
-            menu.addItem(item)
-        }
-        return menu
-    }
-
-    /// Собирает URL с корректно закодированными query-параметрами (в т.ч. mailto).
-    private static func buildQueryURL(_ base: String, _ params: [(String, String)]) -> String? {
-        var comps = URLComponents(string: base)
-        comps?.queryItems = params.map { URLQueryItem(name: $0.0, value: $0.1) }
-        // URLComponents кодирует пробел как %20 (не '+'), а литеральный '+' в значении
-        // оставляет как есть — но многие сервисы трактуют '+' как пробел. Поэтому
-        // однозначно кодируем именно '+' → %2B (пробелы уже %20, их не трогаем).
-        return comps?.url?.absoluteString.replacingOccurrences(of: "+", with: "%2B")
-    }
-
-    /// «Связаться с разработчиком»: открывает почту с предзаполненными темой и телом
-    /// (версия + macOS + активные раскладки — для полезного баг-репорта). Пока адрес не задан
-    /// (SettingsManager.contactEmail пуст) — фолбэк на GitHub Issues, чтобы кнопка не была мёртвой.
-    @objc private func openContactEmail() {
-        let ver = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-        guard !SettingsManager.contactEmail.isEmpty else {
-            if let url = URL(string: "\(SettingsManager.githubURL)/issues") { NSWorkspace.shared.open(url) }
-            return
-        }
-        let os = ProcessInfo.processInfo.operatingSystemVersionString
-        let layouts = LayoutSwitcher.currentAndOppositeLanguage().map { "\($0.current)/\($0.opposite)" } ?? "?"
-        let subject = "MacSwitcher \(ver) — \(L10n.contactSubject)"
-        let body = "\n\n\n———\nMacSwitcher \(ver)\nmacOS \(os)\nLayouts: \(layouts)"
-        if let s = Self.buildQueryURL("mailto:\(SettingsManager.contactEmail)",
-                                      [("subject", subject), ("body", body)]),
-           let url = URL(string: s) {
-            NSWorkspace.shared.open(url)
-        }
-    }
-
-    @objc private func openTelegramSupport() {
-        if let url = URL(string: SettingsManager.telegramChatURL) { NSWorkspace.shared.open(url) }
-    }
-
-    @objc private func openShareLink(_ sender: NSMenuItem) {
-        if let s = sender.representedObject as? String, let url = URL(string: s) {
-            NSWorkspace.shared.open(url)
-        }
-    }
-
-    @objc private func copyShareLink() {
-        let pb = NSPasteboard.general
-        pb.clearContents()
-        let link = SettingsManager.websiteLink(source: "share", medium: "copy")?.absoluteString ?? SettingsManager.websiteURL
-        pb.setString("\(L10n.shareMessage) \(link)", forType: .string)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
