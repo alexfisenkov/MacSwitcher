@@ -3,7 +3,7 @@ import Carbon
 
 /// Окно настроек с вкладками
 @MainActor
-final class SettingsWindowController {
+final class SettingsWindowController: NSObject, NSTabViewDelegate {
     private var window: NSWindow?
     private var autoSwitchCheckbox: NSButton?
     private var launchAtLoginCheckbox: NSButton?
@@ -56,13 +56,14 @@ final class SettingsWindowController {
         tabView.addTabViewItem(createExceptionsTab())
         tabView.addTabViewItem(createPersonalDictionaryTab())
         tabView.addTabViewItem(createAboutTab())
+        tabView.delegate = self
 
         win.contentView = tabView
-        // Высота окна — по самой высокой вкладке (после fitToText вкладки разной высоты на разных
-        // языках). Не выше экрана: на маленьком экране низ самой длинной вкладки уйдёт под край.
+        // Each pane uses its own content height. Keep the window within the visible screen;
+        // compact panes such as About do not inherit the height of the full settings form.
         let chrome = tabView.bounds.height - tabView.contentRect.height
-        let tallest = tabView.tabViewItems.compactMap { $0.view?.subviews.first?.frame.height }.max() ?? 700
-        var height = tallest + chrome
+        let paneHeight = tabView.selectedTabViewItem?.view?.subviews.first?.frame.height ?? 700
+        var height = paneHeight + chrome
         if let screen = NSScreen.main { height = min(height, screen.visibleFrame.height - 60) }
         win.setContentSize(NSSize(width: 480, height: height))
         win.center()
@@ -70,6 +71,26 @@ final class SettingsWindowController {
         NSApp.activate(ignoringOtherApps: true)
 
         window = win
+    }
+
+    func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
+        resizeSettingsWindow(for: tabView)
+    }
+
+    private func resizeSettingsWindow(for tabView: NSTabView) {
+        guard let window else { return }
+        let chrome = tabView.bounds.height - tabView.contentRect.height
+        let paneHeight = tabView.selectedTabViewItem?.view?.subviews.first?.frame.height ?? 700
+        let screen = window.screen ?? NSScreen.main
+        let height = min(paneHeight + chrome, (screen?.visibleFrame.height ?? 900) - 60)
+        let top = window.frame.maxY
+        window.setContentSize(NSSize(width: 480, height: height))
+        var origin = NSPoint(x: window.frame.minX, y: top - window.frame.height)
+        if let screen {
+            origin.y = max(screen.visibleFrame.minY,
+                min(origin.y, screen.visibleFrame.maxY - window.frame.height))
+        }
+        window.setFrameOrigin(origin)
     }
 
     /// Обновить состояние чекбокса автопереключения извне
@@ -577,7 +598,7 @@ final class SettingsWindowController {
 
     private func createPersonalDictionaryTab() -> NSTabViewItem {
         let item = NSTabViewItem()
-        item.label = L10n.languageCode == "ru" ? "Личный словарь" : "Personal dictionary"
+        item.label = L10n.languageCode == "ru" ? "Словарь" : "Dictionary"
         let view = PersonalDictionaryView(frame: NSRect(x: 0, y: 0, width: 460, height: 480))
         view.onChanged = { [weak self] in self?.onPredictionPreferencesChanged?() }
         item.view = topAligned(view)
@@ -924,12 +945,7 @@ final class SettingsWindowController {
         tabView.removeTabViewItem(oldItem)
         tabView.insertTabViewItem(replacement, at: index)
         if selectedGeneral { tabView.selectTabViewItem(replacement) }
-        if let window {
-            let chrome = tabView.bounds.height - tabView.contentRect.height
-            let tallest = tabView.tabViewItems.compactMap { $0.view?.subviews.first?.frame.height }.max() ?? 700
-            let limit = (window.screen ?? NSScreen.main)?.visibleFrame.height ?? 900
-            window.setContentSize(NSSize(width: 480, height: min(tallest + chrome, limit - 60)))
-        }
+        resizeSettingsWindow(for: tabView)
         if let p = switchHotkeyPopup { populateSwitchHotkeyPopup(p) }
         if let p = caseHotkeyPopup { populateCaseHotkeyPopup(p) }
     }

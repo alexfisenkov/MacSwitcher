@@ -173,6 +173,8 @@ enum L10n {
         // New product copy is explicit in Russian/English; inherited translations
         // still cover the remaining UI. No vendor changelog or install promises.
         let own: [String: (String, String)] = [
+            "settings.tab.general": ("Общие", "General"),
+            "settings.tab.exceptions": ("Автозамена", "Correction"),
             "whatsnew.body": ("MacSwitcher: один Shift меняет раскладку, двойной исправляет слово или выделение. Добавлена ранняя локальная RU/EN-коррекция. Это альфа-версия; неоднозначные случаи требуют проверки.", "MacSwitcher: one Shift changes layout, a double Shift fixes a word or selection. Early local RU/EN correction is available. This is an alpha; ambiguous cases still need testing."),
             "onboard.autoConvert.text": ("Включить локальную автоматическую RU/EN-коррекцию при наборе? По умолчанию она выключена. Один Shift меняет раскладку, двойной исправляет слово или выделение. Автокоррекцию можно отключить в настройках.", "Enable local automatic RU/EN correction while typing? It is off by default. One Shift changes layout; a double Shift fixes a word or selection. Automatic correction can be turned off in Settings."),
             "settings.checkUpdates.hint": ("Новая версия устанавливается из приложения после вашего подтверждения.", "New versions are installed from the app after your confirmation."),
