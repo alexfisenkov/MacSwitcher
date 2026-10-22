@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><!-- sparkle-sign-warning:
+IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
+--><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <title>MacSwitcher updates</title>
+    <link>https://github.com/alexfisenkov/MacSwitcher</link>
+    <description>Signed MacSwitcher releases</description>
+    <item>
+      <title>MacSwitcher 0.1.0-alpha.9</title>
+      <link>https://github.com/alexfisenkov/MacSwitcher/releases/tag/v0.1.0-alpha.9</link>
+      <pubDate>Thu, 22 Oct 2026 08:35:13 +0000</pubDate>
+      <description>Russian speech priority, correction Undo, personal RU/EN dictionary, phrase exceptions, configurable double Shift and signed updates. Preliminary release; full physical editor acceptance remains open.</description>
+      <sparkle:version>9</sparkle:version>
+      <sparkle:shortVersionString>0.1.0-alpha.9</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <sparkle:channel>alpha</sparkle:channel>
+      <enclosure url="https://github.com/alexfisenkov/MacSwitcher/releases/download/v0.1.0-alpha.9/MacSwitcher-0.1.0-alpha.9-universal.zip" length="23833330" type="application/octet-stream" sparkle:edSignature="z5q+hZaEwHW4TILDPZcmbLhqCWVPvodqbTuiIAVXJjtSdM0faT+h/ad3ScNgNfBQ1AMygywCYQlOvLzBig9JDg=="></enclosure>
+    </item>
+  </channel>
+</rss><!-- sparkle-signatures:
+edSignature: /NHwp+eXk+LW4xHhDaQSllp7fvmcN7WkCLCwiwXB/Lw51ORYTwYNPbbeg6Nf/0qM/5f51uWUQlq7P30VicISBg==
+length: 1574
+-->
