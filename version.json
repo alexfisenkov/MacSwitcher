@@ -1,9 +1,9 @@
 {
-  "version": "0.1.0-alpha.13",
+  "version": "0.1.0-alpha.14",
   "short_version": "0.1.0",
-  "build": 13,
+  "build": 14,
   "channel": "alpha",
   "url": "https://github.com/alexfisenkov/MacSwitcher/releases",
-  "notes": "Request the target layout only after native text acknowledgement; skip automatic leases in quarantined fields. Preserve uncertain originals and add closed ACK failure diagnostics. Codex physical delivery remains under investigation.",
+  "notes": "Defer manual double-Shift editing until its physical event-tap callback returns. Capture each gesture once and cancel stale requests after new input or tap replacement. Physical repeated-correction acceptance remains open.",
   "native_backend_accepted": false
 }

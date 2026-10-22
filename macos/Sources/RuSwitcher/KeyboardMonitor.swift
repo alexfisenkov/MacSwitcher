@@ -16,6 +16,37 @@ struct TypedKey: Sendable {
     var char: Character? = nil
 }
 
+/// A single immutable gesture handed off after its physical callback returns.
+/// Reconfiguration or intervening input retires it before any AX work begins.
+@MainActor
+final class DeferredCombinedShiftConversion {
+    private let request: CombinedShiftRequest
+    private let fenceIdentity: ObjectIdentifier
+    private let hostIdentity: ObjectIdentifier
+    private var consumed = false
+
+    init(request: CombinedShiftRequest, fenceIdentity: ObjectIdentifier,
+         hostIdentity: ObjectIdentifier) {
+        self.request = request
+        self.fenceIdentity = fenceIdentity
+        self.hostIdentity = hostIdentity
+    }
+
+    func deliver(currentFenceIdentity: ObjectIdentifier, currentHostIdentity: ObjectIdentifier?,
+                 currentRevision: UInt64, transportAvailable: Bool,
+                 onConversion: (CombinedShiftRequest) -> Void) {
+        guard !consumed else { return }
+        consumed = true
+        guard transportAvailable, currentFenceIdentity == fenceIdentity,
+              currentHostIdentity == hostIdentity else { return }
+        guard request.inputRevision == currentRevision else {
+            RuntimeDiagnostics.record(.doubleRevisionChanged)
+            return
+        }
+        onConversion(request)
+    }
+}
+
 /// Выделенная очередь для файлового I/O лога — чтобы запись на диск не блокировала
 /// поток обработки событий (event tap висит на главном run loop, а лог пишется
 /// для каждого нажатия при включённом debug).
@@ -651,13 +682,25 @@ final class KeyboardMonitor: @unchecked Sendable {
     }
 
     @MainActor
-    fileprivate func deliverPendingCombinedShiftConversion(after fence: InputEventFence) {
-        guard inputFence === fence, let request = pendingCombinedShiftConversion else { return }
+    fileprivate func schedulePendingCombinedShiftConversion(after fence: InputEventFence) {
+        guard inputFence === fence, let request = pendingCombinedShiftConversion,
+              let host = eventTapHost else { return }
         pendingCombinedShiftConversion = nil
-        guard request.inputRevision == inputRevision else {
-            RuntimeDiagnostics.record(.doubleRevisionChanged); return
+        let captured = DeferredCombinedShiftConversion(request: request,
+            fenceIdentity: ObjectIdentifier(fence), hostIdentity: ObjectIdentifier(host))
+        // The tap callback still owns the physical ShiftUp. Schedule on that
+        // same run loop so the conversion cannot start until it returns.
+        _ = host.performAfterCurrentCallback { [weak self, weak host] in
+            DispatchQueue.main.async { [weak self, weak host] in
+                guard let self, host != nil else { return }
+                captured.deliver(currentFenceIdentity: ObjectIdentifier(self.inputFence),
+                    currentHostIdentity: self.eventTapHost.map(ObjectIdentifier.init),
+                    currentRevision: self.inputRevision,
+                    transportAvailable: self.nativeInputTransportAvailable) { request in
+                    self.onCombinedShift?(request)
+                }
+            }
         }
-        onCombinedShift?(request)
     }
 
     func handleKeyDown(keyCode: UInt16, flags: CGEventFlags, char: Character? = nil,
@@ -1099,14 +1142,14 @@ private func processKeyboardInput(type: CGEventType, event: CGEvent, monitor: Ke
                                   fence: InputEventFence, diagnosticFixture: Bool = false) -> Unmanaged<CGEvent>? {
     let admission = fence.enterPhysicalEvent(eventTimestamp: event.timestamp)
     let handoff = KeyboardCallbackEvent(event)
-    let forwarded: (event: Unmanaged<CGEvent>?, needsConversion: Bool) = DispatchQueue.main.sync {
+    let forwarded: Unmanaged<CGEvent>? = DispatchQueue.main.sync {
         let event = handoff.event
         guard monitor.inputFence === fence else {
-            return (diagnosticFixture ? nil : Unmanaged.passUnretained(event), false)
+            return diagnosticFixture ? nil : Unmanaged.passUnretained(event)
         }
         if diagnosticFixture,
            (!monitor.nativeInputTransportAvailable || !diagnosticFixtureEventIsAdmitted(event)) {
-            return (nil, false)
+            return nil
         }
         if admission.wasHeld { RuntimeDiagnostics.record(.nativeFenceHeldInput) }
         if admission.interrupted { RuntimeDiagnostics.record(.nativeFenceInterrupted) }
@@ -1128,13 +1171,11 @@ private func processKeyboardInput(type: CGEventType, event: CGEvent, monitor: Ke
             observeSource: observeSourceOnce)
         let result = keyboardEventOnMain(type: type, event: event, monitor: monitor,
             renderedSourceLayoutID: renderedSourceLayoutID)
-        return (result, monitor.pendingCombinedShiftConversion != nil)
+        monitor.schedulePendingCombinedShiftConversion(after: fence)
+        return result
     }
-    fence.leavePhysicalEvent(admission, wasForwarded: forwarded.event != nil)
-    if forwarded.needsConversion {
-        DispatchQueue.main.sync { monitor.deliverPendingCombinedShiftConversion(after: fence) }
-    }
-    return forwarded.event
+    fence.leavePhysicalEvent(admission, wasForwarded: forwarded != nil)
+    return forwarded
 }
 
 /// The tap thread waits synchronously for main and never touches the event during

@@ -82,6 +82,27 @@ final class KeyboardEventTapHost: @unchecked Sendable {
         return stopping
     }
 
+    /// A block submitted from a source callback runs on the next run-loop pass,
+    /// after that callback has returned its OS-owned event to Quartz.
+    static func performAfterCurrentCallback(on loop: CFRunLoop, _ action: @escaping () -> Void) {
+        CFRunLoopPerformBlock(loop, CFRunLoopMode.commonModes.rawValue, action)
+        CFRunLoopWakeUp(loop)
+    }
+
+    func performAfterCurrentCallback(_ action: @escaping () -> Void) -> Bool {
+        lock.lock()
+        guard !stopping, let loop = runLoop else {
+            lock.unlock()
+            return false
+        }
+        lock.unlock()
+        Self.performAfterCurrentCallback(on: loop) { [weak self] in
+            guard self?.isStopping == false else { return }
+            action()
+        }
+        return true
+    }
+
     private func run() {
         let loop = CFRunLoopGetCurrent()
         lock.lock()
