@@ -6,6 +6,17 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/alexfisenkov/MacSwitcher</link>
     <description>Signed MacSwitcher releases</description>
     <item>
+      <title>MacSwitcher 0.1.0-alpha.12</title>
+      <link>https://github.com/alexfisenkov/MacSwitcher/releases/tag/v0.1.0-alpha.12</link>
+      <pubDate>Thu, 22 Oct 2026 15:11:10 +0000</pubDate>
+      <description>Fixes short RU-priority forms f and to-backslash, exact manual short selections, and immediate application of double-Shift timing preferences. Local opt-in metadata diagnostics; general physical gesture failure remains under investigation.</description>
+      <sparkle:version>12</sparkle:version>
+      <sparkle:shortVersionString>0.1.0-alpha.12</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <sparkle:channel>alpha</sparkle:channel>
+      <enclosure url="https://github.com/alexfisenkov/MacSwitcher/releases/download/v0.1.0-alpha.12/MacSwitcher-0.1.0-alpha.12-universal.zip" length="23815709" type="application/octet-stream" sparkle:edSignature="sKfD5b1yN6dECQ2JbOQliugNZHxdBGqcWS7AhDBpXMgZhvmjPVnDLcDWnjxW6sk3NxPH0FUH+BsIzOnLcjo6DQ=="></enclosure>
+    </item>
+    <item>
       <title>MacSwitcher 0.1.0-alpha.11</title>
       <link>https://github.com/alexfisenkov/MacSwitcher/releases/tag/v0.1.0-alpha.11</link>
       <pubDate>Thu, 22 Oct 2026 12:00:40 +0000</pubDate>
@@ -40,6 +51,6 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: cV1Ph8sJyZF9Du8H5KTaEpg0jRWi3R9QE4NSGtI/eW3V53Y2ZI2k6XLytFBdVi+toVVi3Zvls2ZtUJImrpj3Ag==
-length: 3569
+edSignature: AufS+0hBaefBdo0fUcRPeoOAkKKb1PH9yLCGSKgY/7Vwjz8h2HC5Q0QcrjwmL4JJlgR22r0WfrjwV3hCSieJAw==
+length: 4619
 -->
