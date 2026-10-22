@@ -16,6 +16,7 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         var sourceID: String
         var remainingBudget: TimeInterval = 0.250
         var activeLease: InputEventFence.Lease?
+        var beginLeaseAttempts = 0
         var generation: UInt64 = 0
         var sourceSelections: [String] = []
         var sourceOutcome: LayoutSelectionCommit.Outcome = .confirmed
@@ -39,6 +40,7 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
                     && CFEqual(currentField.element, focus.element)
             },
             beginLease: { [unowned self] pid in
+                beginLeaseAttempts += 1
                 guard activeLease == nil, !monitor.hasPendingInputSourceTransition else { return nil }
                 generation &+= 1
                 let lease = InputEventFence.Lease(generation: generation, processID: pid)
@@ -182,6 +184,59 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         rig.deliver("!")
         spin()
         XCTAssertEqual(field.queuedText, 1)
+    }
+
+    @MainActor
+    func testUnknownFieldSkipsLaterAutomaticLeaseButDifferentFieldCanStillEdit() throws {
+        let pair = try layoutIDs()
+        let unknown = Field(pid: 2020, text: "")
+        let other = Field(pid: 2020, text: "", element: AXUIElementCreateSystemWide())
+        let rig = Rig(fields: [unknown, other], englishID: pair.en, russianID: pair.ru)
+        _ = rig.coordinator
+        unknown.dropInsertion = true
+
+        rig.deliver("ghbd")
+        spin()
+        XCTAssertEqual(unknown.queuedText, 1)
+        XCTAssertTrue(rig.converter.hasUnconfirmedAXEdit(in: unknown.focus()))
+        XCTAssertEqual(rig.beginLeaseAttempts, 1)
+
+        // User input after the unknown delivery leaves the original quarantined.
+        rig.deliver("!")
+        rig.sourceID = pair.en
+        rig.monitor.resetPredictionContext()
+        rig.deliver("ghbd")
+        spin()
+        XCTAssertEqual(rig.beginLeaseAttempts, 1,
+            "The same quarantined field must not open another input lease")
+        XCTAssertEqual(unknown.queuedText, 1)
+
+        rig.currentField = other
+        rig.monitor.resetPredictionContext()
+        rig.deliver("ghbd")
+        spin()
+        XCTAssertEqual(other.text, "прив")
+        XCTAssertEqual(other.queuedText, 1)
+        XCTAssertTrue(rig.converter.hasUnconfirmedAXEdit(in: unknown.focus()))
+    }
+
+    @MainActor
+    func testUnknownAutomaticTextDoesNotSelectSourceBeforeTextAcknowledgement() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2021, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        _ = rig.coordinator
+        field.dropInsertion = true
+        rig.sourceOutcome = .unconfirmed
+
+        rig.deliver("ghbd")
+        spin()
+        XCTAssertEqual(field.queuedText, 1, "This is an unknown post-queue result")
+        XCTAssertTrue(rig.converter.hasUnconfirmedAXEdit(in: field.focus()))
+        XCTAssertEqual(rig.sourceSelections, [],
+            "An unconfirmed text delivery cannot justify selecting its result layout")
+        XCTAssertEqual(rig.sourceID, pair.en)
+        XCTAssertFalse(rig.monitor.hasPendingInputSourceTransition)
     }
 
     @MainActor

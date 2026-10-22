@@ -163,6 +163,14 @@ extension NativeAutoEventTransport {
         let focus = execution.focus
         let configuredTimeout = NativeAXMessagingPolicy.configuredTimeout(arguments: CommandLine.arguments)
         defer { AXUIElementSetMessagingTimeout(focus.element, 0.05) }
+        var textBatchQueued = false
+        var reportedAckFailures = Set<String>()
+
+        func recordAfterTextQueue(_ event: RuntimeDiagnosticEvent) {
+            guard textBatchQueued, RuntimeDiagnostics.enabled,
+                  reportedAckFailures.insert(event.rawValue).inserted else { return }
+            RuntimeDiagnostics.record(event)
+        }
 
         func cheapGate() -> Bool {
             ProcessInfo.processInfo.systemUptime < deadline && inputBarrierIsActive()
@@ -183,9 +191,19 @@ extension NativeAutoEventTransport {
                 read: {
                     guard let timeout = NativeAXMessagingPolicy.remainingTimeout(until: min(deadline, sharedDeadline),
                         now: ProcessInfo.processInfo.systemUptime, configuredTimeout: configuredTimeout) else {
+                        recordAfterTextQueue(.ackFocusUnavailable)
                         return .focusUnavailable
                     }
-                    return execution.validationFailure(timeout: timeout)
+                    let failure = execution.validationFailure(timeout: timeout)
+                    switch failure {
+                    case .focusUnavailable: recordAfterTextQueue(.ackFocusUnavailable)
+                    case .focusChanged: recordAfterTextQueue(.ackFocusChanged)
+                    case .revisionChanged: recordAfterTextQueue(.ackRevisionChanged)
+                    case .wrongProcess: recordAfterTextQueue(.ackWrongProcess)
+                    case .secureInput: recordAfterTextQueue(.ackSecureInput)
+                    case nil: break
+                    }
+                    return failure
                 },
                 pause: { seconds in usleep(useconds_t(max(0, seconds) * 1_000_000)) })
         }
@@ -206,7 +224,10 @@ extension NativeAutoEventTransport {
                 // Core has just checked the whole field and exact identity.
                 // The bridge admits once, then queues the complete fixed batch.
                 let posted = postBatch(operations, cheapGate)
-                if posted && operations.contains(.insertReplacement) { RuntimeDiagnostics.record(.nativeAutoInsertPosted) }
+                if posted && operations.contains(.insertReplacement) {
+                    textBatchQueued = true
+                    RuntimeDiagnostics.record(.nativeAutoInsertPosted)
+                }
                 return posted
             },
             cancelPreparedSelection: { phaseDeadline in

@@ -677,8 +677,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let succeeded = textConverter.withNativeInputBudget({ [weak self] in
             self?.keyboardMonitor.nativeInputTransactionRemainingDuration(lease)
         }) {
-            textConverter.withNativeTextQueuedHandler({ target in
-                sourceCommit.textQueued(targetID: target)
+            textConverter.withNativeTextQueuedHandler({ _ in
+                // The queued Unicode is not editor acknowledgement. Completion
+                // selects the result source after exact text ACK, under this lease.
             }) {
                 CombinedShiftEditing.perform(request: request, context: context, execution: execution,
                     converter: textConverter, inputBarrierIsActive: isCurrent,
@@ -701,8 +702,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             context: context, sourceCommit: sourceCommit, converter: textConverter,
             monitor: keyboardMonitor, isInputCurrent: isInputCurrent) {
         case .stopped:
-            // A queued edit already selected its source before AX acknowledgement.
-            if sourceCommit.confirmedLayoutID != nil { updateStatusIcon() }
+            break
         case .sourceNotConfirmed(let targetID, _):
             // The current handler's defer releases the lease before this runs.
             DispatchQueue.main.async { [weak self] in self?.presentSourceFailure(targetID: targetID) }

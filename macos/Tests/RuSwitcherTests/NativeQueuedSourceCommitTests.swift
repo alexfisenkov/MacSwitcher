@@ -3,14 +3,14 @@ import XCTest
 
 final class NativeQueuedSourceCommitTests: XCTestCase {
     @MainActor
-    func testQueuedTextSelectsItsSourceBeforeTextAcknowledgement() {
+    func testExplicitCommitRequestsObservedSource() {
         var source = "en"
         let commit = NativeQueuedSourceCommit(isCurrent: { true }, request: { target in
             source = target
             return .confirmed
         })
-        // A subsequent AX timeout cannot leave a complete queued Russian word
-        // followed by keys still decoded using the old English source.
+        // The production caller invokes this only after text ACK, while its
+        // input lease still holds physical events.
         commit.textQueued(targetID: "ru")
         XCTAssertEqual(source, "ru")
         XCTAssertEqual(commit.confirmedLayoutID, "ru")

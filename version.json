@@ -1,9 +1,9 @@
 {
-  "version": "0.1.0-alpha.12",
+  "version": "0.1.0-alpha.13",
   "short_version": "0.1.0",
-  "build": 12,
+  "build": 13,
   "channel": "alpha",
   "url": "https://github.com/alexfisenkov/MacSwitcher/releases",
-  "notes": "Fix RU-priority f / to-backslash and exact short selections; apply double-Shift timing changes immediately. Local opt-in metadata diagnostics distinguish edit gate failures; general reported physical gesture failure is still under investigation.",
+  "notes": "Request the target layout only after native text acknowledgement; skip automatic leases in quarantined fields. Preserve uncertain originals and add closed ACK failure diagnostics. Codex physical delivery remains under investigation.",
   "native_backend_accepted": false
 }

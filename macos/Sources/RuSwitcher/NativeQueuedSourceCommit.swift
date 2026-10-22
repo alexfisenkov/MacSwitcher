@@ -1,7 +1,7 @@
 import Foundation
 
-/// Source commitment follows the queued text operation, not a possibly stale
-/// AX acknowledgement. The receipt never claims that text was delivered.
+/// Callers select the source only after their text edit has an independent AX
+/// acknowledgement. A queued Unicode receipt never proves delivery.
 @MainActor
 final class NativeQueuedSourceCommit {
     private let isCurrent: () -> Bool

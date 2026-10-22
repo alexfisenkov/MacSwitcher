@@ -113,17 +113,43 @@ enum VerifiedNativeFieldEditor {
             lastValidatedObservation = valid ? observed : nil
             return (observed, valid)
         }
-        func awaitExact(_ expected: NativeFieldObservation, until limit: TimeInterval) -> Bool {
+        func awaitExact(_ expected: NativeFieldObservation, until limit: TimeInterval,
+                        diagnoseFailure: Bool = false) -> Bool {
+            var lastObservationFailure: RuntimeDiagnosticEvent?
+            func failed(_ reason: RuntimeDiagnosticEvent) -> Bool {
+                if diagnoseFailure {
+                    RuntimeDiagnostics.record(reason)
+                    if let lastObservationFailure { RuntimeDiagnostics.record(lastObservationFailure) }
+                }
+                return false
+            }
+            func deadlineOrGate() -> RuntimeDiagnosticEvent {
+                access.now() >= limit ? .ackDeadline : .ackGateInvalid
+            }
             while observationCount < maximumObservations {
                 let response = read(until: limit)
-                guard response.valid else { return false }
+                guard response.valid else { return failed(deadlineOrGate()) }
                 if response.value == expected { return true }
+                if diagnoseFailure {
+                    if let observed = response.value {
+                        if !observed.text.utf16.elementsEqual(expected.text.utf16) {
+                            lastObservationFailure = .ackTextMismatch
+                        } else if observed.caretUTF16Location != expected.caretUTF16Location {
+                            lastObservationFailure = .ackCaretMismatch
+                        } else {
+                            lastObservationFailure = .ackSelectionMismatch
+                        }
+                    } else {
+                        lastObservationFailure = .ackObservationUnavailable
+                    }
+                }
                 // AX text and selection can temporarily describe different
                 // moments. Waiting never authorizes a new write on its own.
-                guard cheapCheckpoint(until: limit), observationCount < maximumObservations else { return false }
+                guard cheapCheckpoint(until: limit) else { return failed(deadlineOrGate()) }
+                guard observationCount < maximumObservations else { return failed(.ackObservationLimit) }
                 access.pause(min(pollInterval, max(0, limit - lastTime)))
             }
-            return false
+            return failed(.ackObservationLimit)
         }
 
         guard checkpoint(until: deadline), access.isEditable(deadline),
@@ -174,10 +200,11 @@ enum VerifiedNativeFieldEditor {
         guard access.postBatch(plan.replacementOperations) else {
             return hasPreparation ? cancelPreparation() : .refused
         }
-        // This receipt is about data queued, never the preparatory selection or
-        // observed delivery. It lets the caller hand off layout before held keys.
+        // This receipt is about data queued, never observed delivery. Callers
+        // must wait for the exact result before selecting a new input source.
         onTextQueued()
-        return awaitExact(plan.resultSnapshot, until: deadline)
+        return awaitExact(plan.resultSnapshot, until: deadline,
+            diagnoseFailure: RuntimeDiagnostics.enabled)
             ? .confirmed : .uncertain(observation: lastObservation)
     }
 }

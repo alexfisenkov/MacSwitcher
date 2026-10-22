@@ -197,6 +197,15 @@ final class PredictionCoordinator {
             return
         }
         guard isCurrent(snapshot) else { RuntimeDiagnostics.record(.autoEvaluationStale); return }
+        // The converter must preserve an unknown edit in this exact AX field.
+        // Refuse before opening another input lease or recording a source window;
+        // a different field remains eligible for its own verified edit.
+        guard !converter.hasUnconfirmedAXEdit(in: focus) else {
+            RuntimeDiagnostics.record(.unconfirmedEditBlocked)
+            RuntimeDiagnostics.record(.autoEditRefused)
+            DispatchQueue.main.async { [weak self] in self?.onUnconfirmedEdit?() }
+            return
+        }
         guard let edit = PredictionSuffixEdit(original: proposal.originalSuffix,
             replacement: proposal.replacementSuffix) else { return }
         let resultID = LayoutSwitcher.sourceID(target)
@@ -222,12 +231,13 @@ final class PredictionCoordinator {
             self.platform.noteUnconfirmedSource(target, requestedAt)
         })
         defer { platform.finishLease(lease, sourceCommit.confirmedLayoutID) }
+        var textWasQueued = false
         let textConfirmed = converter.withNativeInputBudget({ [weak self] in
             self?.platform.leaseRemaining(lease)
         }) {
             converter.withNativeTextQueuedHandler({ target in
                 guard target == resultID else { return }
-                sourceCommit.textQueued(targetID: target)
+                textWasQueued = true
             }) {
                 converter.replaceVerifiedSuffix(original: edit.original,
                     replacement: edit.replacement, sourceLayoutID: snapshot.sourceLayoutID,
@@ -242,7 +252,7 @@ final class PredictionCoordinator {
                 // Let the lease finish before showing a nonactivating notice.
                 DispatchQueue.main.async { [weak self] in self?.onUnconfirmedEdit?() }
             }
-            if sourceCommit.targetLayoutID != nil {
+            if textWasQueued {
                 monitor.resetPredictionContext()
                 RuntimeDiagnostics.record(.autoTextUnconfirmed)
             } else {
@@ -251,9 +261,10 @@ final class PredictionCoordinator {
             return
         }
         RuntimeDiagnostics.record(.autoTextConfirmed)
-        // An older AX-only route has no native queue receipt. It changes the
-        // source only after its independent confirmed edit, as before.
-        if sourceCommit.targetLayoutID == nil { sourceCommit.textQueued(targetID: resultID) }
+        // Physical input is still held by this lease. Select the result source
+        // only after the complete field edit is independently acknowledged.
+        // Queued Unicode alone can still be dropped or delivered late.
+        sourceCommit.textQueued(targetID: resultID)
         let wholeField = converter.confirmedAutomaticField
         guard sourceCommit.outcome == .confirmed, platform.leaseIsCurrent(lease) else {
             // The field has the confirmed replacement. Keep TextConverter undo,
@@ -352,9 +363,8 @@ final class PredictionCoordinator {
         let result = converter.withNativeInputBudget({ [weak self] in
             self?.platform.leaseRemaining(lease)
         }) {
-            converter.withNativeTextQueuedHandler({ target in
-                guard target == receipt.sourceLayoutID else { return }
-                sourceCommit.textQueued(targetID: target)
+            converter.withNativeTextQueuedHandler({ _ in
+                // A queue receipt cannot select a source for an unknown undo.
             }) {
                 converter.undoConfirmedCorrection(receipt, execution: execution,
                     inputBarrierIsActive: { [weak self] in
@@ -364,22 +374,11 @@ final class PredictionCoordinator {
         }
         switch result {
         case .refused:
-            if sourceCommit.targetLayoutID != nil {
-                monitor.markConverted()
-                monitor.requireObservedInputSource(receipt.sourceLayoutID)
-                return .unknown
-            }
             return .refused
         case .unknown:
-            if sourceCommit.targetLayoutID != nil {
-                monitor.markConverted()
-                monitor.requireObservedInputSource(receipt.sourceLayoutID)
-            }
             return .unknown
         case .confirmed:
-            if sourceCommit.targetLayoutID == nil {
-                sourceCommit.textQueued(targetID: receipt.sourceLayoutID)
-            }
+            sourceCommit.textQueued(targetID: receipt.sourceLayoutID)
             monitor.markConverted()
             guard sourceCommit.outcome == .confirmed, platform.leaseIsCurrent(lease) else {
                 monitor.requireObservedInputSource(receipt.sourceLayoutID)

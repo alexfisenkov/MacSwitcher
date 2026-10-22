@@ -36,7 +36,7 @@ final class ProductionManualSourceCompletionTests: XCTestCase {
             inputRevision: first.inputRevision, currentInputRevision: { monitor.inputRevision })
         let sourceCommit = NativeQueuedSourceCommit(isCurrent: { true }, request: { _ in .refused })
         let changed = converter.withNativeInputBudget({ 0.250 }) {
-            converter.withNativeTextQueuedHandler({ sourceCommit.textQueued(targetID: $0) }) {
+            converter.withNativeTextQueuedHandler({ _ in }) {
                 CombinedShiftEditing.perform(request: first, context: pair.direction,
                     execution: execution, converter: converter, inputBarrierIsActive: { true },
                     convertWholeLine: false, contextForSource: { _ in pair.direction })
@@ -46,6 +46,7 @@ final class ProductionManualSourceCompletionTests: XCTestCase {
         XCTAssertEqual(field.text, "прив")
         XCTAssertEqual(field.queuedText, 1)
         XCTAssertTrue(converter.hasReconversionState)
+        XCTAssertNil(sourceCommit.targetLayoutID, "Source selection waits for text ACK")
         let completion = CombinedShiftCompletion.finish(succeeded: changed, request: first,
             context: pair.direction, sourceCommit: sourceCommit, converter: converter,
             monitor: monitor, isInputCurrent: { true })
@@ -68,7 +69,7 @@ final class ProductionManualSourceCompletionTests: XCTestCase {
             inputRevision: undo.inputRevision, currentInputRevision: { monitor.inputRevision })
         let undoCommit = NativeQueuedSourceCommit(isCurrent: { true }, request: { _ in .confirmed })
         let restored = converter.withNativeInputBudget({ 0.250 }) {
-            converter.withNativeTextQueuedHandler({ undoCommit.textQueued(targetID: $0) }) {
+            converter.withNativeTextQueuedHandler({ _ in }) {
                 CombinedShiftEditing.perform(request: undo, context: pair.direction.reversed,
                     execution: undoExecution, converter: converter, inputBarrierIsActive: { true },
                     convertWholeLine: false, contextForSource: { _ in pair.direction.reversed })
@@ -77,6 +78,10 @@ final class ProductionManualSourceCompletionTests: XCTestCase {
         XCTAssertTrue(restored)
         XCTAssertEqual(field.text, "ghbd")
         XCTAssertEqual(field.queuedText, 2)
+        XCTAssertNil(undoCommit.targetLayoutID, "Undo source selection also waits for text ACK")
+        XCTAssertEqual(CombinedShiftCompletion.finish(succeeded: restored, request: undo,
+            context: pair.direction.reversed, sourceCommit: undoCommit, converter: converter,
+            monitor: monitor, isInputCurrent: { true }), .confirmed(resultID: pair.en))
     }
 
     @MainActor
@@ -96,7 +101,7 @@ final class ProductionManualSourceCompletionTests: XCTestCase {
             onUnconfirmed: { target in monitor.noteUnconfirmedInputSource(target,
                 requestedAt: DispatchTime.now().uptimeNanoseconds) })
         let changed = converter.withNativeInputBudget({ 0.250 }) {
-            converter.withNativeTextQueuedHandler({ sourceCommit.textQueued(targetID: $0) }) {
+            converter.withNativeTextQueuedHandler({ _ in }) {
                 CombinedShiftEditing.perform(request: request, context: pair.direction,
                     execution: execution, converter: converter, inputBarrierIsActive: { true },
                     convertWholeLine: false, contextForSource: { _ in pair.direction })
@@ -104,7 +109,8 @@ final class ProductionManualSourceCompletionTests: XCTestCase {
         }
         XCTAssertTrue(changed)
         XCTAssertEqual(field.text, "прив")
-        XCTAssertTrue(monitor.hasPendingInputSourceTransition)
+        XCTAssertFalse(monitor.hasPendingInputSourceTransition,
+            "An unconfirmed source is not requested before text ACK")
         XCTAssertEqual(CombinedShiftCompletion.finish(succeeded: changed, request: request,
             context: pair.direction, sourceCommit: sourceCommit, converter: converter,
             monitor: monitor, isInputCurrent: { true }),
@@ -117,5 +123,42 @@ final class ProductionManualSourceCompletionTests: XCTestCase {
         XCTAssertFalse(monitor.hasPendingInputSourceTransition)
         XCTAssertEqual(field.queuedText, 1)
         XCTAssertTrue(converter.hasReconversionState)
+    }
+
+    @MainActor
+    func testUnknownManualTextKeepsSourceUnrequestedAndOriginalRetained() throws {
+        let pair = try layoutPair()
+        let monitor = KeyboardMonitor()
+        let field = Field(pid: 3013, text: "ghbd")
+        field.dropInsertion = true
+        let converter = ProductionCombinedShiftEditingTests.converter(for: [field])
+        for key in [UInt16(5), 4, 11, 2] {
+            monitor.handleKeyDown(keyCode: key, flags: [], renderedSourceLayoutID: pair.en)
+        }
+        _ = try request(.switchLayout(pair.direction), monitor: monitor, field: field, direction: pair.direction)
+        let second = try request(.convert(pair.direction), monitor: monitor, field: field, direction: pair.direction)
+        let execution = CombinedShiftExecutionContext(focus: try XCTUnwrap(second.focus),
+            inputRevision: second.inputRevision, currentInputRevision: { monitor.inputRevision })
+        var sourceRequests = 0
+        let sourceCommit = NativeQueuedSourceCommit(isCurrent: { true }, request: { _ in
+            sourceRequests += 1
+            return .confirmed
+        })
+        let changed = converter.withNativeInputBudget({ 0.250 }) {
+            converter.withNativeTextQueuedHandler({ _ in }) {
+                CombinedShiftEditing.perform(request: second, context: pair.direction,
+                    execution: execution, converter: converter, inputBarrierIsActive: { true },
+                    convertWholeLine: false, contextForSource: { _ in pair.direction })
+            }
+        }
+        XCTAssertFalse(changed)
+        XCTAssertEqual(field.queuedText, 1)
+        XCTAssertTrue(converter.hasUnconfirmedAXEdit(in: field.focus()))
+        XCTAssertEqual(sourceRequests, 0)
+        XCTAssertNil(sourceCommit.targetLayoutID)
+        XCTAssertEqual(CombinedShiftCompletion.finish(succeeded: changed, request: second,
+            context: pair.direction, sourceCommit: sourceCommit, converter: converter,
+            monitor: monitor, isInputCurrent: { true }), .stopped)
+        XCTAssertEqual(sourceRequests, 0)
     }
 }

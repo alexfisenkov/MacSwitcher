@@ -36,6 +36,9 @@ enum RuntimeDiagnosticEvent: String, CaseIterable, Sendable {
     case nativeFenceHeldInput, nativeFenceInterrupted, nativeFenceUnavailable
     case fenceGateNotConfigured, fenceTapMissing, fenceTapDisabled, fenceInterrupted, fencePendingSource, fenceBusy
     case tapDisabledTimeout, tapDisabledUserInput
+    case ackDeadline, ackGateInvalid, ackObservationLimit
+    case ackObservationUnavailable, ackTextMismatch, ackCaretMismatch, ackSelectionMismatch
+    case ackFocusUnavailable, ackFocusChanged, ackRevisionChanged, ackWrongProcess, ackSecureInput
     case autoTextConfirmed, autoTextUnconfirmed, autoSourceConfirmed, autoSourceFailed, autoSourceUnconfirmed, heldInputRecoded
     case focusReadCannotComplete, focusReadNoValue, focusReadInvalidElement
     case focusReadOtherError, focusReadMissingValue, focusReadUnexpectedType
