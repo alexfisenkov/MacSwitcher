@@ -9,6 +9,14 @@ struct InputSourceTransitionTracker: Sendable {
     private var completedWindows: [ClosedRange<UInt64>] = []
 
     var hasPending: Bool { pending != nil }
+    var pendingTargetID: String? { pending?.targetID }
+
+    /// A confirmed text edit can still have an unverified source, even when
+    /// the TIS request was refused. Only a later actual target observation
+    /// resolves this gate; time and requested values do not.
+    mutating func requireObserved(targetID: String, startingAt: UInt64) {
+        noteUnconfirmed(targetID: targetID, startingAt: startingAt)
+    }
 
     mutating func noteUnconfirmed(targetID: String, startingAt: UInt64) {
         guard !targetID.isEmpty, startingAt > 0 else { return }

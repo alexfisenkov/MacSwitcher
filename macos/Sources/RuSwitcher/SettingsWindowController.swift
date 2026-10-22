@@ -17,6 +17,7 @@ final class SettingsWindowController {
     private var switchHotkeyPopup: NSPopUpButton?   // issue #20/#3: пере-populate при смене триггера
     private var caseHotkeyPopup: NSPopUpButton?     // issue #29
     private var exceptionEditors: [ExceptionListEditor] = []
+    private var intervalValueLabel: NSTextField?
 
     /// Callback для обновления меню
     var onAutoSwitchChanged: ((Bool) -> Void)?
@@ -28,6 +29,7 @@ final class SettingsWindowController {
     var onRemoteDesktopChanged: ((Bool) -> Void)?
     var onCaretFlagChanged: ((Bool) -> Void)?
     var onHideIconChanged: ((Bool) -> Void)?
+    var onPredictionPreferencesChanged: (() -> Void)?
 
     func showWindow() {
         if let window {
@@ -52,6 +54,7 @@ final class SettingsWindowController {
         tabView.addTabViewItem(createGeneralTab())
         tabView.addTabViewItem(createAdvancedTab())     // «Расширенные» — сразу после «Основных»
         tabView.addTabViewItem(createExceptionsTab())
+        tabView.addTabViewItem(createPersonalDictionaryTab())
         tabView.addTabViewItem(createAboutTab())
 
         win.contentView = tabView
@@ -274,6 +277,22 @@ final class SettingsWindowController {
         view.addSubview(combinedShift)
         y -= 30
 
+        let intervalTitle = NSTextField(labelWithString: L10n.languageCode == "ru" ? "Интервал двух Shift" : "Double Shift interval")
+        intervalTitle.frame = NSRect(x: 20, y: y, width: 175, height: 22)
+        view.addSubview(intervalTitle)
+        let interval = NSSlider(frame: NSRect(x: 190, y: y - 2, width: 175, height: 25))
+        interval.minValue = 80
+        interval.maxValue = 400
+        interval.integerValue = SettingsManager.shared.doubleShiftIntervalMilliseconds
+        interval.target = self
+        interval.action = #selector(doubleShiftIntervalChanged)
+        view.addSubview(interval)
+        let value = NSTextField(labelWithString: "\(interval.integerValue) ms")
+        value.frame = NSRect(x: 370, y: y, width: 70, height: 22)
+        view.addSubview(value)
+        intervalValueLabel = value
+        y -= 34
+
         // Триггер конвертации
         let triggerLabel = NSTextField(labelWithString: L10n.settingsTrigger)
         triggerLabel.frame = NSRect(x: 20, y: y, width: 150, height: 22)
@@ -465,6 +484,17 @@ final class SettingsWindowController {
         view.addSubview(acHint)
         y -= 38
 
+        let russianPriority = NSButton(checkboxWithTitle: L10n.languageCode == "ru"
+            ? "Приоритет русского в неоднозначных фразах" : "Prefer Russian in ambiguous phrases",
+            target: self, action: #selector(russianPriorityChanged))
+        russianPriority.frame = NSRect(x: 20, y: y - 22, width: 420, height: 22)
+        russianPriority.state = SettingsManager.shared.russianPriorityEnabled ? .on : .off
+        russianPriority.toolTip = L10n.languageCode == "ru"
+            ? "Действует только при отдельно включённой автокоррекции."
+            : "Takes effect only when autocorrection is enabled separately."
+        view.addSubview(russianPriority)
+        y -= 32
+
         // Флаг у курсора (issue #10)
         let caretFlag = NSButton(checkboxWithTitle: L10n.settingsCaretFlag, target: self, action: #selector(caretFlagChanged))
         caretFlag.frame = NSRect(x: 20, y: y - 22, width: 420, height: 22)
@@ -527,6 +557,17 @@ final class SettingsWindowController {
             addWordPrompt: L10n.settingsAddWordPrompt))
 
         fitToText(view)
+        item.view = topAligned(view)
+        return item
+    }
+
+    // MARK: - About Tab
+
+    private func createPersonalDictionaryTab() -> NSTabViewItem {
+        let item = NSTabViewItem()
+        item.label = L10n.languageCode == "ru" ? "Личный словарь" : "Personal dictionary"
+        let view = PersonalDictionaryView(frame: NSRect(x: 0, y: 0, width: 460, height: 480))
+        view.onChanged = { [weak self] in self?.onPredictionPreferencesChanged?() }
         item.view = topAligned(view)
         return item
     }
@@ -819,6 +860,7 @@ final class SettingsWindowController {
 
     @objc private func checkUpdatesEnabledChanged(_ sender: NSButton) {
         SettingsManager.shared.checkUpdatesEnabled = sender.state == .on
+        UpdateChecker.setAutomaticChecks(SettingsManager.shared.checkUpdatesEnabled)
     }
 
     @objc private func languageChanged(_ sender: NSPopUpButton) {
@@ -861,6 +903,17 @@ final class SettingsWindowController {
         onCombinedShiftChanged?()
         if let p = switchHotkeyPopup { populateSwitchHotkeyPopup(p) }
         if let p = caseHotkeyPopup { populateCaseHotkeyPopup(p) }
+    }
+
+    @objc private func doubleShiftIntervalChanged(_ sender: NSSlider) {
+        SettingsManager.shared.doubleShiftIntervalMilliseconds = sender.integerValue
+        intervalValueLabel?.stringValue = "\(SettingsManager.shared.doubleShiftIntervalMilliseconds) ms"
+        onCombinedShiftChanged?()
+    }
+
+    @objc private func russianPriorityChanged(_ sender: NSButton) {
+        SettingsManager.shared.russianPriorityEnabled = sender.state == .on
+        onPredictionPreferencesChanged?()
     }
 
     /// issue #14: попап второго хоткея — «Выключен» + те же модификаторы/комбо (без Caps Lock).
@@ -998,6 +1051,7 @@ final class SettingsWindowController {
 
     @objc private func betaChannelChanged(_ sender: NSButton) {
         SettingsManager.shared.betaChannelEnabled = sender.state == .on
+        UpdateChecker.setBetaChannel(SettingsManager.shared.betaChannelEnabled)
     }
 
     @objc private func smartConversionChanged(_ sender: NSButton) {

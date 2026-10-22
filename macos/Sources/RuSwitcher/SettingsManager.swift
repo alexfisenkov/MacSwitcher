@@ -28,6 +28,8 @@ final class SettingsManager: @unchecked Sendable {
         static let triggerRightOnly = "com.ruswitcher.triggerRightOnly"
         static let triggerDoubleTap = "com.ruswitcher.triggerDoubleTap"
         static let combinedShift = "com.ruswitcher.combinedShiftEnabled"
+        static let doubleShiftIntervalMilliseconds = "com.macswitcher.doubleShiftIntervalMilliseconds"
+        static let russianPriorityEnabled = "com.macswitcher.russianPriorityEnabled"
         static let switchHotkey = "com.ruswitcher.switchHotkey"
         static let switchDoubleTap = "com.ruswitcher.switchDoubleTap"
         static let switchRightOnly = "com.ruswitcher.switchRightOnly"
@@ -174,6 +176,21 @@ final class SettingsManager: @unchecked Sendable {
         set { defaults.set(newValue, forKey: Keys.combinedShift) }
     }
 
+    /// A preference only. Automatic editing still requires its separate explicit enablement.
+    var russianPriorityEnabled: Bool {
+        get { defaults.object(forKey: Keys.russianPriorityEnabled) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Keys.russianPriorityEnabled) }
+    }
+
+    /// Inclusive double-Shift window, clamped on both read and write.
+    var doubleShiftIntervalMilliseconds: Int {
+        get {
+            let raw = defaults.object(forKey: Keys.doubleShiftIntervalMilliseconds) as? Int ?? 180
+            return min(400, max(80, raw))
+        }
+        set { defaults.set(min(400, max(80, newValue)), forKey: Keys.doubleShiftIntervalMilliseconds) }
+    }
+
     /// issue #14: отдельный хоткей «просто переключить раскладку» (без конверсии) —
     /// в т.ч. модификаторные комбо (Ctrl+Shift), которые системно назначить нельзя.
     /// Кодировка как у triggerKey; пустая строка — выключен (дефолт).
@@ -219,12 +236,12 @@ final class SettingsManager: @unchecked Sendable {
         get { defaults.object(forKey: Keys.autoConvert) as? Bool ?? false }
         set {
             defaults.set(newValue, forKey: Keys.autoConvert)
-            if newValue && nativeRolloutAccepted { nativeAutoEnabled = true }
+            if newValue { nativeAutoEnabled = true }
         }
     }
 
-    /// Existing installations enter the new backend only after explicit rollout.
-    /// The ordinary auto-convert choice enables it for a new installation.
+    /// Explicit user choice enables the native path even while formal acceptance stays false.
+    /// The default remains off; no stored preference is silently promoted.
     var nativeAutoEnabled: Bool {
         get { defaults.bool(forKey: Keys.nativeAutoEnabled) }
         set { defaults.set(newValue, forKey: Keys.nativeAutoEnabled) }

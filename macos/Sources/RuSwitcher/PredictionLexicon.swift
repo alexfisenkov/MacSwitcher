@@ -149,7 +149,12 @@ struct PredictionLexicon: Sendable {
     }
 
     func isProtectedTerm(_ word: String, language: String) -> Bool {
-        protectedTerms.contains(word, language: language)
+        protectedTerms.contains(word, language: language) || isPersonalWord(word, language: language)
+    }
+
+    /// Reads a bounded live snapshot; add/remove/import take effect without rebuilding the engine.
+    func isPersonalWord(_ word: String, language: String) -> Bool {
+        PersonalWordStore.shared.containsWord(word, language: Self.languageCode(language))
     }
 
     func frequency(of word: String, language: String) -> Int {

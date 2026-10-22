@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build an independently identified macOS bundle. Never installs or starts it."""
 import argparse
+import base64
 from datetime import datetime, timezone
 import json
 import os
@@ -14,6 +15,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 BUNDLE_ID = "com.alexfisenkov.macswitcher"
+UPDATE_FEED = "https://raw.githubusercontent.com/alexfisenkov/MacSwitcher/main/updates/appcast.xml"
 
 
 def run(arguments, **kwargs):
@@ -70,6 +72,72 @@ def validate_identity(identity):
         raise ValueError("Use a full Developer ID Application identity, or explicit --ad-hoc for development")
 
 
+def validate_updater_metadata(info):
+    if info.get("SUFeedURL") != UPDATE_FEED:
+        raise ValueError("Signed release requires the fixed MacSwitcher HTTPS appcast URL")
+    try:
+        public_key = base64.b64decode(info["SUPublicEDKey"], validate=True)
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("Signed release requires a valid Sparkle public EdDSA key") from error
+    if len(public_key) != 32:
+        raise ValueError("Sparkle public EdDSA key must decode to 32 bytes")
+    required = {
+        "SUEnableAutomaticChecks": True,
+        "SUAllowsAutomaticUpdates": False,
+        "SUAutomaticallyUpdate": False,
+        "SUEnableSystemProfiling": False,
+        "SUVerifyUpdateBeforeExtraction": True,
+        "SURequireSignedFeed": True,
+        "SUSignedFeedFailureExpirationInterval": 0,
+    }
+    for key, value in required.items():
+        if type(info.get(key)) is not type(value) or info[key] != value:
+            raise ValueError(f"Signed release requires {key}={value}")
+
+
+def sparkle_framework(root):
+    # SwiftPM expands Sparkle's signed binary target below .build/artifacts.
+    artifact_root = root / "macos/.build/artifacts"
+    candidates = sorted(artifact_root.rglob("Sparkle.framework"))
+    universal = [path for path in candidates if "macos-arm64_x86_64" in path.parts]
+    if len(universal) != 1:
+        raise RuntimeError("Expected one universal Sparkle 2.10 framework in SwiftPM artifacts")
+    return universal[0]
+
+
+def require_architectures(path, architectures):
+    actual = set(run(["/usr/bin/lipo", "-archs", str(path)], capture_output=True).stdout.split())
+    if not set(architectures).issubset(actual):
+        raise RuntimeError(f"Missing {', '.join(sorted(set(architectures) - actual))} slice in {path}")
+
+
+def sign_nested_sparkle(framework, identity, ad_hoc, architectures):
+    version = framework / "Versions/Current"
+    nested = [
+        version / "Autoupdate",
+        version / "XPCServices/Downloader.xpc",
+        version / "XPCServices/Installer.xpc",
+        version / "Updater.app",
+    ]
+    executables = [
+        version / "Sparkle",
+        version / "Autoupdate",
+        version / "XPCServices/Downloader.xpc/Contents/MacOS/Downloader",
+        version / "XPCServices/Installer.xpc/Contents/MacOS/Installer",
+        version / "Updater.app/Contents/MacOS/Updater",
+    ]
+    for executable in executables:
+        if not executable.is_file():
+            raise RuntimeError(f"Sparkle executable is missing: {executable}")
+        require_architectures(executable, architectures)
+    options = ["--timestamp=none"] if ad_hoc else ["--options", "runtime", "--timestamp"]
+    for path in nested:
+        run(["/usr/bin/codesign", "--force", "--sign", identity, *options,
+             "--preserve-metadata=entitlements", str(path)])
+    run(["/usr/bin/codesign", "--force", "--sign", identity, *options,
+         "--preserve-metadata=entitlements", str(framework)])
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     signing = parser.add_mutually_exclusive_group(required=True)
@@ -78,6 +146,8 @@ def main(argv=None):
     parser.add_argument("--allow-dirty", action="store_true", help="Mark an experimental build as containing uncommitted source")
     parser.add_argument("--output", type=Path, default=ROOT / ".сборки/MacSwitcher.app")
     parser.add_argument("--jobs", type=int, default=4)
+    parser.add_argument("--arch", choices=("universal", "arm64", "x86_64"), default="universal",
+                        help="Executable architecture; public releases default to both Mac architectures")
     args = parser.parse_args(argv)
     output = args.output.expanduser().absolute()
     validate_output(output)
@@ -89,16 +159,27 @@ def main(argv=None):
     if dirty and not args.allow_dirty:
         parser.error("Source has uncommitted changes; commit first or explicitly use --allow-dirty")
     info = metadata(ROOT, revision, dirty)
+    if not args.ad_hoc:
+        validate_updater_metadata(info)
     icon = ROOT / "assets/MacSwitcher.icns"
     if not args.ad_hoc and not icon.is_file():
         parser.error("Signed release requires assets/MacSwitcher.icns")
+    architectures = ("arm64", "x86_64") if args.arch == "universal" else (args.arch,)
+    arch_flags = [flag for arch in architectures for flag in ("--arch", arch)]
     run(["swift", "build", "--package-path", str(ROOT / "macos"), "-c", "release", "-j", str(args.jobs),
-         "-Xswiftc", "-DMACSWITCHER_APP_BUNDLE"])
+         *arch_flags, "-Xswiftc", "-DMACSWITCHER_APP_BUNDLE",
+         "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])
     binary_dir = Path(run(["swift", "build", "--package-path", str(ROOT / "macos"),
-                           "-c", "release", "--show-bin-path"], capture_output=True).stdout.strip())
+                           "-c", "release", *arch_flags, "--show-bin-path"], capture_output=True).stdout.strip())
     executable = binary_dir / "RuSwitcher"
     if not executable.is_file():
         raise RuntimeError("SwiftPM executable was not produced")
+    require_architectures(executable, architectures)
+    linked = run(["/usr/bin/otool", "-L", str(executable)], capture_output=True).stdout
+    runpaths = run(["/usr/bin/otool", "-l", str(executable)], capture_output=True).stdout
+    if "@rpath/Sparkle.framework/" not in linked or "@executable_path/../Frameworks" not in runpaths:
+        raise RuntimeError("SwiftPM executable does not link the bundled Sparkle framework via @rpath")
+    framework_source = sparkle_framework(ROOT)
     output.parent.mkdir(parents=True, exist_ok=True)
     # Sign in the system temporary directory: synchronized folders can attach
     # Finder metadata between xattr and codesign, making that check racy.
@@ -110,6 +191,10 @@ def main(argv=None):
         resources = contents / "Resources"
         resources.mkdir()
         shutil.copy2(executable, contents / "MacOS/RuSwitcher")
+        frameworks = contents / "Frameworks"
+        frameworks.mkdir()
+        framework = frameworks / "Sparkle.framework"
+        shutil.copytree(framework_source, framework, symlinks=True)
         if icon.is_file():
             shutil.copy2(icon, resources / "MacSwitcher.icns")
         # Release-only PredictionResources resolves Contents/Resources explicitly;
@@ -132,6 +217,7 @@ def main(argv=None):
         # copy2 and a synchronized workspace may carry them into the staged app.
         run(["/usr/bin/xattr", "-cr", str(staged)])
         identity = "-" if args.ad_hoc else args.identity
+        sign_nested_sparkle(framework, identity, args.ad_hoc, architectures)
         command = ["/usr/bin/codesign", "--force", "--sign", identity]
         if args.ad_hoc:
             command += ["--timestamp=none"]

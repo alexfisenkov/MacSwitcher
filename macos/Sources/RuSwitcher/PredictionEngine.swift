@@ -39,7 +39,8 @@ struct PredictionEngine: Sendable {
 
     func evaluate(suffix: String, sourceLanguage: String, atBoundary: Bool = false,
                   precedingWords: [String] = [], alwaysConvertWords: Set<String> = [],
-                  characterMapping: [Character: Character]? = nil) -> PredictionProposal? {
+                  characterMapping: [Character: Character]? = nil,
+                  russianPriority: Bool = false) -> PredictionProposal? {
         let source = String(sourceLanguage.lowercased().prefix(2))
         guard source == "ru" || source == "en", !suffix.isEmpty, suffix.count <= 512,
               !suffix.contains(where: { $0.isNewline || $0 == "\t" }) else { return nil }
@@ -51,12 +52,20 @@ struct PredictionEngine: Sendable {
         let domainCues = (precedingWords + words.dropLast().map { String(suffix[$0]) }).suffix(3)
         let hasDomainContext = domainCues.contains { Self.domainContext.contains(contextKey($0)) }
         let hasPeopleCollocation = domainCues.last.map { Self.peopleModifiers.contains(contextKey($0)) } ?? false
+        let previousWord = words.count >= 2 ? String(suffix[words[words.count - 2]]) : nil
+        let priorityContext = precedingWords + words.dropLast(previousWord == "f" && current == "yt" ? 2 : 1)
+            .map { String(suffix[$0]) }
+        let priority = russianPriority && !protectedToken(current)
+            ? RussianPriorityPolicy.replacement(for: current, previous: previousWord,
+                sourceLanguage: source, precedingWords: priorityContext,
+                atBoundary: atBoundary || suffix.last?.isWhitespace == true,
+                mapping: characterMapping, lexicon: lexicon) : nil
         let corrected: String?
         do {
-            corrected = try correction(for: current, source: source, target: target,
+            corrected = priority ?? (try correction(for: current, source: source, target: target,
                 atBoundary: atBoundary || suffix.last?.isWhitespace == true,
                 alwaysConvertWords: alwaysConvertWords, characterMapping: characterMapping,
-                hasDomainContext: hasDomainContext, hasPeopleCollocation: hasPeopleCollocation)
+                hasDomainContext: hasDomainContext, hasPeopleCollocation: hasPeopleCollocation))
         } catch { return nil }
         let resultingWord = corrected ?? current
 
@@ -74,6 +83,13 @@ struct PredictionEngine: Sendable {
             if previous == "f", !technical, letterMatchesLayout, strongRussianContext(resultingWord) {
                 let result = String(suffix[..<previousRange.lowerBound]) + "а"
                     + String(suffix[previousRange.upperBound..<currentRange.lowerBound]) + resultingWord
+                    + String(suffix[currentRange.upperBound...])
+                return PredictionProposal(originalSuffix: suffix, replacementSuffix: result,
+                                          targetLanguage: "ru", reason: .contextWord)
+            }
+            if priority == "не", previous == "f", !technical {
+                let result = String(suffix[..<previousRange.lowerBound]) + "а"
+                    + String(suffix[previousRange.upperBound..<currentRange.lowerBound]) + "не"
                     + String(suffix[currentRange.upperBound...])
                 return PredictionProposal(originalSuffix: suffix, replacementSuffix: result,
                                           targetLanguage: "ru", reason: .contextWord)
@@ -120,6 +136,15 @@ struct PredictionEngine: Sendable {
         // corpus is checked separately and must not freeze typos such as rfr.
         if lexicon.frequency(of: word, language: source) > 0
             || lexicon.frequency(of: stripped.core, language: source) > 0 { return nil }
+        if atBoundary, candidates.contains(where: {
+            $0.core.count >= 3 && lexicalToken($0.core)
+                && lexicon.isPersonalWord($0.core, language: target)
+        }) {
+            return candidates.first(where: {
+                $0.core.count >= 3 && lexicalToken($0.core)
+                    && lexicon.isPersonalWord($0.core, language: target)
+            }).map { $0.core + $0.suffix }
+        }
         guard let fullWordFrequency = lexicon.fullFrequency(of: word, language: source),
               let fullCoreFrequency = stripped.suffix.isEmpty ? fullWordFrequency
                 : lexicon.fullFrequency(of: stripped.core, language: source) else {

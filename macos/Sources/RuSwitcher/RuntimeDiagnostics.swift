@@ -53,6 +53,13 @@ enum RuntimeDiagnostics {
         logger.notice("\(event.rawValue, privacy: .public)")
     }
 
+    /// Opt-in outcome metadata only. All three fields come from closed enums;
+    /// no typed text, key, AX value, clipboard content or arbitrary app ID enters OSLog.
+    static func record(_ outcome: CombinedShiftDiagnostic) {
+        guard enabled else { return }
+        logger.notice("combined.\(outcome.application.rawValue, privacy: .public).\(outcome.operation.rawValue, privacy: .public).\(outcome.result.rawValue, privacy: .public)")
+    }
+
     static func beginNativeFocusReadAttempt() {
         seen.beginNativeFocusReadAttempt()
     }

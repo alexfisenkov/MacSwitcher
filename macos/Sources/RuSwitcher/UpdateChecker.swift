@@ -1,11 +1,11 @@
 import AppKit
 import Foundation
 
-/// Own public releases only. This alpha opens a release page for manual installation;
-/// it never downloads executables, invokes a shell, or replaces the running app.
+/// Stable entry points for the menu and settings. Sparkle owns update checks,
+/// verification, and installation when a trusted feed and public key are embedded.
 @MainActor
 enum UpdateChecker {
-    private static var busy = false
+    private static let provider = SparkleUpdateProvider()
 
     private struct Release: Decodable {
         let tag_name: String
@@ -45,34 +45,39 @@ enum UpdateChecker {
     }
 
     static func checkOnLaunch() {
-        guard shouldAutoCheck() else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-            Task { await check(silent: true) }
-        }
+        _ = provider // starts Sparkle once; its scheduler owns background checks
     }
 
     static func checkPeriodic() {
-        guard shouldAutoCheck() else { return }
-        Task { await check(silent: true) }
+        // Compatibility with the old timer until AppDelegate removes it.
+        // A second scheduler would duplicate update checks.
     }
 
-    static func checkNow() { Task { await check(silent: false) } }
-
-    private static func shouldAutoCheck() -> Bool {
-        let settings = SettingsManager.shared
-        guard settings.checkUpdatesEnabled else { return false }
-        return settings.lastUpdateCheck.map { Date().timeIntervalSince($0) >= 86400 } ?? true
+    static func checkNow() {
+        guard provider.isConfigured else {
+            let alert = NSAlert()
+            alert.messageText = "MacSwitcher"
+            alert.informativeText = L10n.languageCode == "ru"
+                ? "Встроенная установка обновлений пока недоступна. Откройте официальные выпуски MacSwitcher и установите новую версию вручную."
+                : "In-app updates are not configured yet. Open official MacSwitcher releases to install a new version manually."
+            alert.addButton(withTitle: L10n.languageCode == "ru" ? "Открыть выпуски" : "Open Releases")
+            alert.addButton(withTitle: L10n.updateLater)
+            if alert.runModal() == .alertFirstButtonReturn,
+               let url = URL(string: SettingsManager.githubURL + "/releases") {
+                NSWorkspace.shared.open(url)
+            }
+            return
+        }
+        provider.checkNow()
     }
+
+    static func setAutomaticChecks(_ enabled: Bool) { provider.setAutomaticChecks(enabled) }
+
+    static func setBetaChannel(_ enabled: Bool) { provider.setBetaChannel(enabled) }
 
     private static func currentVersion() -> String {
         Bundle.main.object(forInfoDictionaryKey: "MacSwitcherReleaseVersion") as? String
             ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
-    }
-
-    private static func releaseURL(tag: String) -> URL? {
-        guard Version(tag) != nil,
-              let encoded = tag.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else { return nil }
-        return URL(string: SettingsManager.githubURL + "/releases/tag/" + encoded)
     }
 
     private static func fetchReleases() async throws -> [Release] {
@@ -103,50 +108,4 @@ enum UpdateChecker {
             .max { Version($0.tag_name)! < Version($1.tag_name)! }
     }
 
-    private static func check(silent: Bool) async {
-        guard !busy else { return }
-        busy = true
-        defer { busy = false }
-        do {
-            let release = newest(in: try await fetchReleases(),
-                                 includePrereleases: SettingsManager.shared.betaChannelEnabled)
-            SettingsManager.shared.lastUpdateCheck = Date()
-            guard let release, let version = Version(release.tag_name),
-                  let installed = Version(currentVersion()), version > installed else {
-                if !silent {
-                    message(ru: "Более нового выпуска в выбранном канале пока нет.",
-                            en: "There is no newer release in the selected channel yet.")
-                }
-                return
-            }
-            if silent && SettingsManager.shared.skippedVersion == release.tag_name { return }
-            guard let url = releaseURL(tag: release.tag_name) else { return }
-            let alert = NSAlert()
-            alert.messageText = "MacSwitcher \(release.tag_name)"
-            alert.informativeText = L10n.languageCode == "ru"
-                ? "Доступен новый выпуск. Откроется страница MacSwitcher на GitHub; скачивание и установка выполняются вручную. Приложение не заменяет себя автоматически."
-                : "A new release is available. Open MacSwitcher on GitHub to download and install it manually. The app does not replace itself automatically."
-            alert.addButton(withTitle: L10n.languageCode == "ru" ? "Открыть выпуск" : "Open Release")
-            alert.addButton(withTitle: L10n.updateLater)
-            alert.addButton(withTitle: L10n.updateSkip)
-            switch alert.runModal() {
-            case .alertFirstButtonReturn: NSWorkspace.shared.open(url)
-            case .alertThirdButtonReturn: SettingsManager.shared.skippedVersion = release.tag_name
-            default: break
-            }
-        } catch {
-            if !silent {
-                message(ru: "Не удалось проверить выпуски на GitHub. Попробуйте позже или откройте страницу проекта.",
-                        en: "Could not check GitHub releases. Try again later or open the project page.")
-            }
-        }
-    }
-
-    private static func message(ru: String, en: String) {
-        let alert = NSAlert()
-        alert.messageText = "MacSwitcher"
-        alert.informativeText = L10n.languageCode == "ru" ? ru : en
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
-    }
 }

@@ -10,6 +10,17 @@ struct CombinedShiftContext: Equatable, Sendable {
 
 /// Pure gesture recognizer. Times are CGEvent's monotonic nanoseconds; no timers or event injection.
 struct CombinedShiftGesture {
+    struct Configuration: Equatable, Sendable {
+        static let defaultDoubleWindowNanoseconds: UInt64 = 180_000_000
+        static let allowedDoubleWindowNanoseconds: ClosedRange<UInt64> = 80_000_000...400_000_000
+        let doubleWindowNanoseconds: UInt64
+
+        init(doubleWindowNanoseconds: UInt64 = Self.defaultDoubleWindowNanoseconds) {
+            self.doubleWindowNanoseconds = Self.allowedDoubleWindowNanoseconds.contains(doubleWindowNanoseconds)
+                ? doubleWindowNanoseconds : Self.defaultDoubleWindowNanoseconds
+        }
+    }
+
     enum Side: Equatable { case left, right }
     enum Action: Equatable, Sendable {
         case switchLayout(CombinedShiftContext)
@@ -29,7 +40,11 @@ struct CombinedShiftGesture {
     private var firstTap: Tap?
     private let soloLimit: UInt64 = 250_000_000
     // A double must finish quickly; pauses belong to independent solo switches.
-    private let doubleWindow: UInt64 = 180_000_000
+    private let configuration: Configuration
+
+    init(configuration: Configuration = Configuration()) {
+        self.configuration = configuration
+    }
 
     mutating func press(_ side: Side, at timestamp: UInt64, context: CombinedShiftContext) {
         guard pressed == nil else { interrupt(); return }  // overlapping Shift keys are a chord
@@ -45,7 +60,7 @@ struct CombinedShiftGesture {
         }
         pressed = nil
         if let first = firstTap, timestamp >= first.time,
-           timestamp - first.time <= doubleWindow {
+           timestamp - first.time <= configuration.doubleWindowNanoseconds {
             firstTap = nil
             return .convert(first.context)  // no second generic layout toggle
         }

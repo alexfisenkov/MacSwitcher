@@ -11,14 +11,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let perAppLayoutManager = PerAppLayoutManager()
     private var permissionCheckTimer: Timer?
     private var iconRefreshTimer: Timer?
-    private var updateCheckTimer: Timer?   // периодическая авто-проверка обновлений, пока приложение работает
     private var monitoringActive = false
     private var caretIndicator: CaretIndicator?   // issue #10: флаг у каретки (бета, по умолчанию OFF)
     private let secureNotice = SecureInputNotice()  // issue #27: подсказка о защ. вводе без кражи фокуса
+    private let correctionToast = CorrectionToast()
     private var lastFlagShown: String?            // идентичность раскладки для детекта смены (не title!)
     private var badgeCache: [String: NSImage] = [:]  // монохромные плашки, чтобы не перерисовывать 2с-опросом
     private var diagnosticRepro: DiagnosticReproController?
     private static let recoveryCopyItemTag = 71003
+    private static let sourceRecoveryItemTag = 71004
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
@@ -32,12 +33,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         showWhatsNewIfNeeded(hasRunBefore: ranBefore)
         showBetaWhatsNewIfNeeded()   // отдельная витрина для бет (текст из бета-фида)
         UpdateChecker.checkOnLaunch()
-        // Периодическая авто-проверка обновлений, пока приложение работает (не только на старте).
-        // Тикает каждые 6ч; сам запрос к GitHub не чаще раза в сутки (троттл в UpdateChecker) и
-        // уважает настройку «Автоматически проверять обновления» (её можно снять, чтобы отключить).
-        updateCheckTimer = Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { _ in
-            Task { @MainActor in UpdateChecker.checkPeriodic() }
-        }
         // Прогрев NSSpellChecker: первый чек поднимает XPC AppleSpell (сотни мс на main) —
         // прогреваем в тихую паузу после старта, а не на первом пробеле пользователя.
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
@@ -98,6 +93,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.reconfigureTap()
             self?.rebuildMenu()  // синхронизировать галочку в меню
         }
+        settingsController.onPredictionPreferencesChanged = { [weak self] in
+            guard let self else { return }
+            self.configurePredictionPreferences()
+            self.predictionCoordinator.invalidate()
+            self.keyboardMonitor.resetPredictionContext()
+        }
         settingsController.onRemoteDesktopChanged = { [weak self] _ in
             self?.reconfigureTap()  // уровень tap зависит от режима
             self?.rebuildMenu()
@@ -108,6 +109,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         settingsController.onHideIconChanged = { [weak self] hide in
             self?.statusItem.isVisible = !hide
+        }
+    }
+
+    private func configurePredictionPreferences() {
+        keyboardMonitor.configureCombinedShiftTiming(.init(
+            doubleWindowNanoseconds: UInt64(SettingsManager.shared.doubleShiftIntervalMilliseconds) * 1_000_000))
+        predictionCoordinator.russianPriorityProvider = { SettingsManager.shared.russianPriorityEnabled }
+        predictionCoordinator.phraseExceptionLookup = { original, language in
+            PersonalWordStore.shared.containsPhrase(original: original, sourceLanguage: language)
         }
     }
 
@@ -144,6 +154,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // приложение и уводила фокус из поля пароля (пользователь терял место в терминале).
         secureNotice.show(title: L10n.securePausedTitle,
                           body: String(format: L10n.securePausedBody, holder))
+    }
+
+    /// Called after the edit lease finishes. Only a fresh TIS read may resolve
+    /// the requested source; a queued request is not selection evidence.
+    private func presentSourceFailure(targetID: String) {
+        keyboardMonitor.recordObservedInputSource(LayoutSwitcher.currentLayoutID())
+        guard keyboardMonitor.pendingInputSourceTargetID == targetID,
+              let message = CombinedShiftFailure.sourceNotConfirmed.userMessage else { return }
+        let name = LayoutSwitcher.installedLayouts().first(where: {
+            LayoutSwitcher.sourceID($0) == targetID
+        }).map(LayoutSwitcher.sourceName) ?? targetID
+        secureNotice.show(title: "MacSwitcher", body: "\(message) Нужная раскладка: \(name).")
     }
 
     private func offerExceptionAfterUndo() {
@@ -431,6 +453,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         monitoringActive = true
+        configurePredictionPreferences()
         keyboardMonitor.onCombinedShift = { [weak self] request in
             self?.handleCombinedShift(request)
         }
@@ -442,8 +465,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         predictionCoordinator.onApplied = { [weak self] original in
             self?.diagnosticRepro?.noteAutomaticApplication()
-            self?.lastAutoConverted = (original, Date())
             self?.updateStatusIcon()
+        }
+        predictionCoordinator.onCorrection = { [weak self] notice in
+            guard let self else { return }
+            self.correctionToast.show(original: notice.original, replacement: notice.replacement,
+                onUndo: { [weak self] in
+                    self?.predictionCoordinator.undoCorrection(id: notice.id) { [weak self] result in
+                        guard let self else { return }
+                        switch result {
+                        case .confirmed:
+                            self.updateStatusIcon()
+                        case .refused:
+                            self.secureNotice.show(title: "MacSwitcher",
+                                body: L10n.languageCode == "ru"
+                                    ? "Текст или поле уже изменились. Отмена этой замены недоступна."
+                                    : "The text or field has changed. This correction can no longer be undone.")
+                        case .unknown:
+                            if let message = CombinedShiftFailure.unconfirmedEdit.userMessage {
+                                self.secureNotice.show(title: "MacSwitcher", body: message)
+                            }
+                        }
+                    }
+                },
+                onNever: { [weak self] in
+                    do {
+                        try PersonalWordStore.shared.addPhrase(original: notice.original,
+                            replacement: notice.replacement, sourceLanguage: notice.sourceLanguage)
+                        self?.predictionCoordinator.invalidate()
+                    } catch {
+                        self?.secureNotice.show(title: "MacSwitcher",
+                            body: L10n.languageCode == "ru"
+                                ? "Не удалось сохранить исключение. Откройте личный словарь в настройках."
+                                : "Could not save the exception. Open the personal dictionary in Settings.")
+                    }
+                })
+        }
+        predictionCoordinator.onUnconfirmedEdit = { [weak self] in
+            guard let message = CombinedShiftFailure.unconfirmedEdit.userMessage else { return }
+            self?.secureNotice.show(title: "MacSwitcher", body: message)
+        }
+        predictionCoordinator.onSourceFailure = { [weak self] target, _ in
+            self?.presentSourceFailure(targetID: target)
         }
         keyboardMonitor.onUserInput = { [weak self] in self?.caretIndicator?.userTyped() }  // issue #10
         // issue #14: хоткей чистого переключения раскладки (без конверсии). Буфер после
@@ -579,6 +642,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let lease = keyboardMonitor.beginNativeInputTransaction(processID: execution.focus.processID) else {
             RuntimeDiagnostics.record(.nativeFenceUnavailable)
             RuntimeDiagnostics.record(.doubleFailed)
+            if let target = keyboardMonitor.pendingInputSourceTargetID {
+                DispatchQueue.main.async { [weak self] in self?.presentSourceFailure(targetID: target) }
+            }
             return
         }
         let isCurrent = { [weak self] in
@@ -595,38 +661,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }, onUnconfirmed: { [weak self] target in
             self?.keyboardMonitor.noteUnconfirmedInputSource(target, requestedAt: requestedAt)
         })
-        defer { keyboardMonitor.finishNativeInputTransaction(lease, replayLayoutID: sourceCommit.confirmedLayoutID) }
-        let succeeded = textConverter.withNativeTextQueuedHandler({ target in
-            sourceCommit.textQueued(targetID: target)
+        var failureNotice: CombinedShiftFailure?
+        defer {
+            keyboardMonitor.finishNativeInputTransaction(lease, replayLayoutID: sourceCommit.confirmedLayoutID)
+            if let failureNotice {
+                // Present only after releasing the input fence. This existing
+                // nonactivating panel does not take focus from the editor.
+                DispatchQueue.main.async { [weak self] in
+                    guard let message = failureNotice.userMessage else { return }
+                    self?.secureNotice.show(title: "MacSwitcher", body: message)
+                }
+            }
+        }
+        let succeeded = textConverter.withNativeInputBudget({ [weak self] in
+            self?.keyboardMonitor.nativeInputTransactionRemainingDuration(lease)
         }) {
-            if textConverter.hasUnconfirmedAXEdit(in: execution.focus) {
-                return textConverter.reconvert(context: context, execution: execution,
-                    inputBarrierIsActive: isCurrent)
-            } else if (execution.focus.initialSelection?.length ?? 0) > 0 {
-                return textConverter.convertSelection(context: context, execution: execution,
-                    restorePrevious: request.reconvert, inputBarrierIsActive: isCurrent)
-            } else if request.reconvert {
-                guard textConverter.hasReconversionState else {
-                    RuntimeDiagnostics.record(.doubleNoReconversionState); return false
-                }
-                return textConverter.reconvert(context: context, execution: execution,
-                    inputBarrierIsActive: isCurrent)
-            } else {
-                guard let wordContext = request.wordContext else {
-                    RuntimeDiagnostics.record(.doubleMissingWordContext); return false
-                }
-                guard !request.wordKeys.isEmpty || (!request.prevWordKeys.isEmpty && request.boundaryCount > 0) else {
-                    RuntimeDiagnostics.record(.doubleNoBufferOrSelection); return false
-                }
-                if SettingsManager.shared.convertWholeLine, !request.lineKeys.isEmpty,
-                   let source = request.lineSourceLayoutID,
-                   let lineContext = LayoutSwitcher.combinedShiftContext(sourceLayoutID: source) {
-                    return textConverter.convertLineBuffer(request.lineKeys, context: lineContext,
-                        execution: execution, inputBarrierIsActive: isCurrent)
-                }
-                return textConverter.convert(wordKeys: request.wordKeys, prevWordKeys: request.prevWordKeys,
-                    boundaryCount: request.boundaryCount, context: wordContext, execution: execution,
-                    inputBarrierIsActive: isCurrent)
+            textConverter.withNativeTextQueuedHandler({ target in
+                sourceCommit.textQueued(targetID: target)
+            }) {
+                CombinedShiftEditing.perform(request: request, context: context, execution: execution,
+                    converter: textConverter, inputBarrierIsActive: isCurrent,
+                    convertWholeLine: SettingsManager.shared.convertWholeLine,
+                    contextForSource: { LayoutSwitcher.combinedShiftContext(sourceLayoutID: $0) },
+                    onFailure: { failureNotice = $0 },
+                    onDiagnostic: { RuntimeDiagnostics.record($0) },
+                    application: CombinedShiftApplicationFamily.classify(
+                        bundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier))
             }
         }
         finishCombinedShift(succeeded: succeeded, request: request, context: context,
@@ -636,24 +696,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func finishCombinedShift(succeeded: Bool, request: CombinedShiftRequest,
         context: CombinedShiftContext, sourceCommit: NativeQueuedSourceCommit,
         isInputCurrent: () -> Bool) {
-        guard succeeded, isInputCurrent() else {
+        switch CombinedShiftCompletion.finish(succeeded: succeeded, request: request,
+            context: context, sourceCommit: sourceCommit, converter: textConverter,
+            monitor: keyboardMonitor, isInputCurrent: isInputCurrent) {
+        case .stopped:
             // A queued edit already selected its source before AX acknowledgement.
-            // Keep that receipt even when this field's result remains uncertain.
             if sourceCommit.confirmedLayoutID != nil { updateStatusIcon() }
-            RuntimeDiagnostics.record(.doubleFailed); return
+        case .sourceNotConfirmed(let targetID, _):
+            // The current handler's defer releases the lease before this runs.
+            DispatchQueue.main.async { [weak self] in self?.presentSourceFailure(targetID: targetID) }
+        case .confirmed:
+            updateStatusIcon()
+            // A modal question must never keep the native input lease open.
+            if request.reconvert { DispatchQueue.main.async { [weak self] in self?.offerExceptionAfterUndo() } }
+            else { lastAutoConverted = nil }
         }
-        let resultID = textConverter.lastResultLayoutID ?? context.targetLayoutID
-        if sourceCommit.targetLayoutID == nil { sourceCommit.textQueued(targetID: resultID) }
-        guard sourceCommit.confirmedLayoutID == resultID, isInputCurrent() else {
-            keyboardMonitor.resetPredictionContext()
-            RuntimeDiagnostics.record(.doubleFailed); return
-        }
-        RuntimeDiagnostics.record(.doubleSucceeded)
-        keyboardMonitor.markConverted()
-        updateStatusIcon()
-        // A modal question must never keep the native input lease open.
-        if request.reconvert { DispatchQueue.main.async { [weak self] in self?.offerExceptionAfterUndo() } }
-        else { lastAutoConverted = nil }
     }
 
     private func resetCombinedShiftAfterPause() {
@@ -739,6 +796,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func systemInputSourceChanged() {
+        keyboardMonitor.recordObservedInputSource(LayoutSwitcher.currentLayoutID())
         updateStatusIcon()
         keyboardMonitor.soundArmed = true  // issue #7: следующая буква даст звук раскладки
         keyboardMonitor.resetLineBuffer(sourceLayoutID: LayoutSwitcher.currentLayoutID())
@@ -761,6 +819,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Список раскладок как в системном меню ввода: флаг + имя, галочка на текущей,
         // клик — переключение. Актуализируется в menuWillOpen при каждом открытии.
         for item in layoutMenuItems() { menu.addItem(item) }
+        let sourceRecovery = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        sourceRecovery.tag = Self.sourceRecoveryItemTag
+        sourceRecovery.isEnabled = false
+        menu.addItem(sourceRecovery)
+        refreshSourceRecoveryMenu(sourceRecovery)
         menu.addItem(NSMenuItem.separator())
 
         let autoItem = NSMenuItem(title: L10n.menuAutoSwitch, action: #selector(toggleAutoSwitch), keyEquivalent: "")
@@ -886,6 +949,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         guard menu === statusItem.menu else { return }
         if let recovery = menu.item(withTag: Self.recoveryCopyItemTag) { refreshRecoveryMenu(recovery) }
+        if let recovery = menu.item(withTag: Self.sourceRecoveryItemTag) { refreshSourceRecoveryMenu(recovery) }
         let insertAt = menu.items.firstIndex { $0.tag == Self.layoutItemTag } ?? 2
         for old in menu.items where old.tag == Self.layoutItemTag { menu.removeItem(old) }
         for (offset, item) in layoutMenuItems().enumerated() {
@@ -893,9 +957,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    private func refreshSourceRecoveryMenu(_ item: NSMenuItem) {
+        guard let target = keyboardMonitor.pendingInputSourceTargetID else {
+            item.isHidden = true
+            return
+        }
+        item.isHidden = false
+        let name = LayoutSwitcher.installedLayouts().first(where: {
+            LayoutSwitcher.sourceID($0) == target
+        }).map(LayoutSwitcher.sourceName) ?? target
+        item.title = L10n.languageCode == "ru"
+            ? "Текст исправлен · подтвердите раскладку \(name)"
+            : "Text changed · confirm the \(name) input source"
+    }
+
     @objc private func selectLayout(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String,
-              id != LayoutSwitcher.currentLayoutID() else { return }
+        guard let id = sender.representedObject as? String else { return }
+        if keyboardMonitor.hasPendingInputSourceTransition {
+            if id != LayoutSwitcher.currentLayoutID() {
+                _ = LayoutSwitcher.switchToWithConfirmation(layoutID: id)
+            }
+            // A verified user choice is a source observation, not another text
+            // edit. Preserve the confirmed replacement and its undo history.
+            keyboardMonitor.recordObservedInputSource(LayoutSwitcher.currentLayoutID())
+            updateStatusIcon()
+            return
+        }
+        guard id != LayoutSwitcher.currentLayoutID() else { return }
         LayoutSwitcher.switchTo(layoutID: id)
         // Явная смена раскладки делает набранный буфер неактуальным — как при per-app restore.
         keyboardMonitor.markConverted()

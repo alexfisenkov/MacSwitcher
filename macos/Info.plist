@@ -36,5 +36,23 @@
 	<string>alpha</string>
 	<key>MacSwitcherReleaseVersion</key>
 	<string>0.1.0-alpha.1</string>
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/alexfisenkov/MacSwitcher/main/updates/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>Vky6Mt6Tl3mtwOl0VpeJDXBVHW8hFkBTh2CXfoeLt7U=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUAllowsAutomaticUpdates</key>
+	<false/>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
+	<key>SUEnableSystemProfiling</key>
+	<false/>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
+	<key>SURequireSignedFeed</key>
+	<true/>
+	<key>SUSignedFeedFailureExpirationInterval</key>
+	<integer>0</integer>
 </dict>
 </plist>

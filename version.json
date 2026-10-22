@@ -1,9 +1,9 @@
 {
-  "version": "0.1.0-alpha.8",
+  "version": "0.1.0-alpha.9",
   "short_version": "0.1.0",
-  "build": 8,
+  "build": 9,
   "channel": "alpha",
   "url": "https://github.com/alexfisenkov/MacSwitcher/releases",
-  "notes": "Published prerelease. Swift 323/323, Python 16/16, benchmark 495/495; headless matrix 15/15. Current selection series: 19 valid successes, one zero-event environmental abort. Physical Codex/TIS owner test pending.",
+  "notes": "RU-priority short words, correction Undo and exact phrase exceptions, personal RU/EN dictionary, configurable quick double Shift and signed in-app updates. Practical alpha; full regression and physical editor acceptance were not repeated for this release.",
   "native_backend_accepted": false
 }

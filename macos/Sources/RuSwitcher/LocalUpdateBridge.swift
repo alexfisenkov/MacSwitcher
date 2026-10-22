@@ -1,11 +1,11 @@
 import Foundation
 
-/// Compatibility marker for native combined Shift. Public MacSwitcher never calls
-/// the old personal Git/source updater or an upstream vendor installer.
+/// Compatibility entry point for native combined Shift. The retained facade
+/// delegates manual installation to MacSwitcher's own signed Sparkle feed.
 @MainActor
 enum LocalUpdateBridge {
     static var isLocalEdition: Bool { true }
-    static func recoverOnLaunch() { /* No install transaction in the first alpha. */ }
+    static func recoverOnLaunch() { /* Sparkle owns update recovery. */ }
     static func check(silent: Bool) async {
         if silent { UpdateChecker.checkPeriodic() } else { UpdateChecker.checkNow() }
     }

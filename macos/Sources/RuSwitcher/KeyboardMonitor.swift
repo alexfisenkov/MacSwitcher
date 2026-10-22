@@ -160,6 +160,13 @@ final class KeyboardMonitor: @unchecked Sendable {
     private var combinedShiftGesture = CombinedShiftGesture()
     private var combinedShiftProcessID: Int32?
     private var combinedShiftFirstRequest: CombinedShiftRequest?
+    /// T02 supplies its persisted preference here; the default recognizer still
+    /// uses 180 ms until an explicit validated configuration is passed.
+    @MainActor
+    func configureCombinedShiftTiming(_ configuration: CombinedShiftGesture.Configuration) {
+        interruptCombinedShift()
+        combinedShiftGesture = CombinedShiftGesture(configuration: configuration)
+    }
     private(set) var inputRevision: UInt64 = 0
     private var currentWordSourceID: String?
     private var prevWordSourceID: String?
@@ -207,6 +214,15 @@ final class KeyboardMonitor: @unchecked Sendable {
     func noteUnconfirmedInputSource(_ targetID: String, requestedAt: UInt64) {
         sourceTransitions.noteUnconfirmed(targetID: targetID, startingAt: requestedAt)
     }
+    var hasPendingInputSourceTransition: Bool { sourceTransitions.hasPending }
+    var pendingInputSourceTargetID: String? { sourceTransitions.pendingTargetID }
+    func requireObservedInputSource(_ targetID: String) {
+        sourceTransitions.requireObserved(targetID: targetID, startingAt: DispatchTime.now().uptimeNanoseconds)
+    }
+    /// The caller must supply a fresh observed TIS source, never a requested ID.
+    func recordObservedInputSource(_ sourceID: String) {
+        sourceTransitions.observe(sourceID: sourceID, at: DispatchTime.now().uptimeNanoseconds)
+    }
     fileprivate func inputSourceNeedsRefresh(eventTimestamp: UInt64) -> Bool {
         sourceTransitions.needsRefresh(eventTimestamp: eventTimestamp)
     }
@@ -215,6 +231,10 @@ final class KeyboardMonitor: @unchecked Sendable {
     }
     func nativeInputTransactionIsCurrent(_ lease: InputEventFence.Lease) -> Bool {
         nativeInputTransportAvailable && inputFence.isCurrent(lease)
+    }
+    func nativeInputTransactionRemainingDuration(_ lease: InputEventFence.Lease) -> TimeInterval? {
+        guard nativeInputTransportAvailable else { return nil }
+        return inputFence.remainingDuration(lease)
     }
     var onPredictionInput: (@MainActor (PredictionSnapshot) -> Void)?
     var onPredictionInvalidated: (@MainActor () -> Void)?

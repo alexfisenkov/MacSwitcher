@@ -222,7 +222,9 @@ enum SmartConvert {
         var cur = ""
         var curWS: Bool? = nil
         for ch in s {
-            let ws = ch.isWhitespace
+            // A hyphen separates keyboard-layout words but remains literal in
+            // the joined result, so both halves receive dictionary decisions.
+            let ws = ch.isWhitespace || ch == "-"
             if let w = curWS {
                 if ws == w { cur.append(ch) }
                 else { out.append((!w, cur)); cur = String(ch); curWS = ws }

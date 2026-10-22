@@ -148,6 +148,16 @@ final class InputEventFence: @unchecked Sendable {
         return !blocked && active?.lease == lease
     }
 
+    /// Remaining time belongs to this exact lease. A stale, expired or foreign
+    /// lease has no budget and cannot authorize a new native edit phase.
+    func remainingDuration(_ lease: Lease) -> TimeInterval? {
+        condition.lock()
+        defer { condition.unlock() }
+        expireLease()
+        guard !blocked, let active, active.lease == lease else { return nil }
+        return max(0, active.deadline - ProcessInfo.processInfo.systemUptime)
+    }
+
     var generation: UInt64 {
         condition.lock()
         defer { condition.unlock() }

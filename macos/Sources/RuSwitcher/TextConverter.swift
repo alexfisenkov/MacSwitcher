@@ -190,6 +190,51 @@ enum NativeWholeFieldRecovery {
 /// Конвертация текста между раскладками
 @MainActor
 final class TextConverter {
+    private var nativeInputRemainingBudget: (() -> TimeInterval?)?
+    /// Ephemeral evidence for the immediately preceding automatic call only.
+    /// A new attempt clears it before touching the field.
+    private(set) var confirmedAutomaticField: (before: NativeFieldObservation,
+        after: NativeFieldObservation)?
+
+    /// Leave time for the editor's bounded read-back and the source commit
+    /// while the exact physical-input fence still owns its original lease.
+    private var hasSafeNativeEditBudget: Bool {
+        guard let nativeInputRemainingBudget else { return false }
+        guard let remaining = nativeInputRemainingBudget(), remaining.isFinite else { return false }
+        return remaining >= VerifiedNativeFieldEditor.maximumDuration + 0.020
+    }
+
+    func withNativeInputBudget<T>(_ remaining: @escaping () -> TimeInterval?, perform: () -> T) -> T {
+        let previous = nativeInputRemainingBudget
+        nativeInputRemainingBudget = remaining
+        defer { nativeInputRemainingBudget = previous }
+        return perform()
+    }
+
+    typealias NativeEditBoundary = (_ selected: Bool, _ original: CombinedShiftSelectionSnapshot,
+        _ replacement: String, _ execution: CombinedShiftExecutionContext,
+        _ inputBarrierIsActive: @escaping () -> Bool,
+        _ onPrepared: @escaping (NativeFieldObservation) -> Void,
+        _ onTextQueued: @escaping () -> Void) -> VerifiedNativeFieldEditResult
+
+    private let nativeEditBoundary: NativeEditBoundary?
+    private let automaticRoute: (String?, String, String) -> AutomaticEditorRoute
+    /// A read-only preference boundary lets tests exercise the production
+    /// selection path without changing the owner's saved application settings.
+    private let selectionPreferences: () -> (convertByText: Bool, smartConversion: Bool)
+
+    init(selectionPreferences: @escaping () -> (convertByText: Bool, smartConversion: Bool) = {
+        let settings = SettingsManager.shared
+        return (settings.convertByText, settings.smartConversion)
+    }, nativeEditBoundary: NativeEditBoundary? = nil,
+       automaticRoute: @escaping (String?, String, String) -> AutomaticEditorRoute = {
+           AutomaticEditorPolicy.route(bundleID: $0, suffix: $1, sourceID: $2)
+       }) {
+        self.selectionPreferences = selectionPreferences
+        self.nativeEditBoundary = nativeEditBoundary
+        self.automaticRoute = automaticRoute
+    }
+
     private var nativeTextQueuedHandler: ((String) -> Void)?
     private var nativeAXTimeout: Float {
         Float(NativeAXMessagingPolicy.configuredTimeout(arguments: CommandLine.arguments))
@@ -284,16 +329,17 @@ final class TextConverter {
     func replaceVerifiedSuffix(original: String, replacement: String, sourceLayoutID: String,
                                resultLayoutID: String, execution: CombinedShiftExecutionContext,
                                inputBarrierIsActive: (() -> Bool)? = nil, forceNativeFixture: Bool = false) -> Bool {
+        confirmedAutomaticField = nil
         let appID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        let route = AutomaticEditorPolicy.route(bundleID: appID, suffix: original, sourceID: sourceLayoutID)
+        let route = automaticRoute(appID, original, sourceLayoutID)
         guard route != .blocked else { RuntimeDiagnostics.record(.nativeAutoBlocked); return false }
         let usesNative = forceNativeFixture || route == .nativeCanary || route == .nativeVerified
         if usesNative {
             RuntimeDiagnostics.beginNativeFocusReadAttempt()
         }
         if forceNativeFixture || route == .nativeCanary {
-            guard AXUIElementSetMessagingTimeout(execution.focus.element, nativeAXTimeout) == .success else { return false }
-            defer { AXUIElementSetMessagingTimeout(execution.focus.element, 0.05) }
+            guard execution.focus.setMessagingTimeout(nativeAXTimeout) == .success else { return false }
+            defer { _ = execution.focus.setMessagingTimeout(0.05) }
             guard execution.isValid(timeout: nativeAXTimeout), original == "ghbd", replacement == "прив", sourceLayoutID == "com.apple.keylayout.US",
                   AutomaticEditorPolicy.fieldMatchesFixture(execution.focus),
                   CommandLine.arguments.contains("--diagnostic-native-canary"),
@@ -317,13 +363,17 @@ final class TextConverter {
         }
         isConverting = true
         defer { isConverting = false }
+        let axBefore = usesNative ? nil : wholeFieldObservation(focus: execution.focus)
         let result: CombinedShiftAXEditResult
         if usesNative {
             guard let inputBarrierIsActive, inputBarrierIsActive(),
                   (route != .nativeCanary || AutomaticEditorPolicy.claimCanary()) else { return false }
             result = replaceNativeRange(original: snapshot, replacement: replacement,
                 expectedSelection: caret, execution: execution, inputBarrierIsActive: inputBarrierIsActive,
-                context: nil, layouts: (sourceLayoutID, resultLayoutID))
+                context: nil, layouts: (sourceLayoutID, resultLayoutID),
+                onConfirmedField: { [weak self] before, after in
+                    self?.confirmedAutomaticField = (before, after)
+                })
             guard result == .confirmed else {
                 if result == .unknown { RuntimeDiagnostics.record(.nativeAutoUncertain) }
                 return false // the native helper already retained the whole-field source
@@ -341,6 +391,13 @@ final class TextConverter {
             } else if !execution.focus.canWriteSelectedText() { RuntimeDiagnostics.record(.autoAXUnsupported) }
             return false
         }
+        if !usesNative, execution.isValid(timeout: nativeAXTimeout), let axBefore,
+           let axAfter = wholeFieldObservation(focus: execution.focus),
+           let expected = expectedWholeField(afterReplacing: snapshot, with: replacement,
+               in: axBefore), axAfter == expected,
+           execution.isValid(timeout: nativeAXTimeout) {
+            confirmedAutomaticField = (axBefore, axAfter)
+        }
         lastOriginal = original
         lastConverted = replacement
         lastWasBuffer = true
@@ -352,6 +409,68 @@ final class TextConverter {
         lastSelectionOrigin = execution.focus
         lastSelectionRange = CFRange(location: snapshot.range.location, length: replacement.utf16.count)
         return true
+    }
+
+    private func wholeFieldObservation(focus: CombinedShiftFocus) -> NativeFieldObservation? {
+        guard !AutoSwitchPolicy.secureInputActive, focus.fieldBoundary == nil,
+              let selection = focus.selectionRange(), selection.location >= 0,
+              selection.length >= 0 else { return nil }
+        var raw: AnyObject?
+        guard AXUIElementCopyAttributeValue(focus.element, kAXValueAttribute as CFString, &raw) == .success,
+              let text = raw as? String,
+              text.utf16.count <= NativeFieldEditPlan.maximumFieldUnits,
+              selection.location <= text.utf16.count,
+              selection.length <= text.utf16.count - selection.location else { return nil }
+        return NativeFieldObservation(text: text, caretUTF16Location: selection.location,
+            selectionLength: selection.length)
+    }
+
+    private func expectedWholeField(afterReplacing original: CombinedShiftSelectionSnapshot,
+                                    with replacement: String,
+                                    in before: NativeFieldObservation) -> NativeFieldObservation? {
+        let units = Array(before.text.utf16)
+        let start = original.range.location
+        let count = original.range.length
+        guard start >= 0, count >= 0, start <= units.count, count <= units.count - start,
+              units[start..<(start + count)].elementsEqual(original.text.utf16),
+              before.caretUTF16Location == start + count, before.selectionLength == 0 else { return nil }
+        let result = Array(units[..<start]) + Array(replacement.utf16) + Array(units[(start + count)...])
+        guard result.count <= NativeFieldEditPlan.maximumFieldUnits,
+              NativeFieldEditPlan.isWellFormedUTF16(result) else { return nil }
+        return NativeFieldObservation(text: String(decoding: result, as: UTF16.self),
+            caretUTF16Location: start + replacement.utf16.count, selectionLength: 0)
+    }
+
+    /// One native undo attempt for an immutable, previously acknowledged edit.
+    /// The caller owns the same PID lease and source commitment as auto-correction.
+    /// Refusal never falls through to AX setters, clipboard or a global key queue.
+    func undoConfirmedCorrection(_ receipt: ConfirmedCorrectionReceipt,
+                                 execution: CombinedShiftExecutionContext,
+                                 inputBarrierIsActive: @escaping () -> Bool) -> CombinedShiftAXEditResult {
+        guard !isConverting, !hasUnconfirmedAXEdit(in: receipt.focus),
+              receipt.focus.processID == execution.focus.processID,
+              CFEqual(receipt.focus.element, execution.focus.element),
+              receipt.inputRevision == execution.inputRevision,
+              inputBarrierIsActive(), execution.isValid(timeout: nativeAXTimeout),
+              let observed = wholeFieldObservation(focus: execution.focus),
+              observed == receipt.after else { return .refused }
+        let end = receipt.after.caretUTF16Location
+        let length = receipt.editReplacement.utf16.count
+        guard end >= length,
+              let selected = CombinedShiftSelectionSnapshot(
+                range: CFRange(location: end - length, length: length),
+                text: receipt.editReplacement),
+              execution.focus.text(in: selected.range)?.utf16.elementsEqual(
+                receipt.editReplacement.utf16) == true,
+              inputBarrierIsActive(), execution.isValid(timeout: nativeAXTimeout) else { return .refused }
+        isConverting = true
+        defer { isConverting = false }
+        let result = replaceNativeRange(original: selected, replacement: receipt.editOriginal,
+            expectedSelection: CFRange(location: end, length: 0), execution: execution,
+            inputBarrierIsActive: inputBarrierIsActive, context: nil,
+            layouts: (receipt.resultLayoutID, receipt.sourceLayoutID))
+        if result == .confirmed { clearState() }
+        return result
     }
     /// Последняя clipboard-конверсия содержала RTL — реконверт стрелками небезопасен.
     private var lastClipboardRTL = false
@@ -446,14 +565,13 @@ final class TextConverter {
     }
 
     func selectionConversion(_ text: String, context: CombinedShiftContext?, normalize: Bool = true) -> String {
-        let settings = SettingsManager.shared
-        var converted = settings.convertByText ? DynamicKeyMapping.convertBidirectional(text, context: context)
-            : settings.smartConversion ? SmartConvert.selection(text, context: context)
+        let preferences = selectionPreferences()
+        var converted = preferences.convertByText ? DynamicKeyMapping.convertBidirectional(text, context: context)
+            : preferences.smartConversion ? SmartConvert.selection(text, context: context)
             : DynamicKeyMapping.convert(text, context: context)
-        // Pasted selections have no reliable relationship to the active input
-        // source. An explicit manual request may flip their actual script when
-        // the requested direction leaves every character unchanged.
-        if context != nil && converted == text {
+        // Smart conversion deliberately keeps valid names and unresolved words.
+        // A whole-selection fallback would override that decision.
+        if context != nil && converted == text && !preferences.smartConversion {
             converted = DynamicKeyMapping.convertBidirectional(text, context: context)
         }
         return normalize ? TextConverter.normalizedForInsert(converted) : converted
@@ -466,9 +584,9 @@ final class TextConverter {
                           inputBarrierIsActive: (() -> Bool)? = nil) -> Bool {
         guard !isConverting, inputBarrierIsActive?() ?? true else { return false }
         if inputBarrierIsActive != nil {
-            guard AXUIElementSetMessagingTimeout(execution.focus.element, nativeAXTimeout) == .success else { return false }
+            guard execution.focus.setMessagingTimeout(nativeAXTimeout) == .success else { return false }
         }
-        defer { if inputBarrierIsActive != nil { AXUIElementSetMessagingTimeout(execution.focus.element, 0.05) } }
+        defer { if inputBarrierIsActive != nil { _ = execution.focus.setMessagingTimeout(0.05) } }
         if hasUnconfirmedAXEdit(in: execution.focus) {
             return recoverUnconfirmedAXEdit(execution: execution, inputBarrierIsActive: inputBarrierIsActive)
         }
@@ -555,7 +673,9 @@ final class TextConverter {
                                     expectedSelection: CFRange, execution: CombinedShiftExecutionContext,
                                     inputBarrierIsActive: @escaping () -> Bool,
                                     context: CombinedShiftContext?, layouts: (source: String, target: String)?,
-                                    preservedOriginal: UnconfirmedAXEdit? = nil) -> CombinedShiftAXEditResult {
+                                    preservedOriginal: UnconfirmedAXEdit? = nil,
+                                    onConfirmedField: ((NativeFieldObservation, NativeFieldObservation) -> Void)? = nil)
+                                    -> CombinedShiftAXEditResult {
         guard inputBarrierIsActive(), !original.text.isEmpty, !replacement.isEmpty else { return .refused }
         if let preservedOriginal {
             guard preservedOriginal.focus.processID == execution.focus.processID,
@@ -570,8 +690,9 @@ final class TextConverter {
             replacing: preservedOriginal?.focus) else {
             RuntimeDiagnostics.record(.unconfirmedEditBlocked); return .refused
         }
-        guard AXUIElementSetMessagingTimeout(execution.focus.element, nativeAXTimeout) == .success else { return .refused }
-        defer { AXUIElementSetMessagingTimeout(execution.focus.element, 0.05) }
+        guard hasSafeNativeEditBudget else { return .refused }
+        guard execution.focus.setMessagingTimeout(nativeAXTimeout) == .success else { return .refused }
+        defer { _ = execution.focus.setMessagingTimeout(0.05) }
         guard let current = execution.focus.selectionRange(),
               current.location == expectedSelection.location, current.length == expectedSelection.length,
               inputBarrierIsActive() else { return .refused }
@@ -601,7 +722,11 @@ final class TextConverter {
             guard let target = layouts?.target ?? context?.targetLayoutID, !target.isEmpty else { return }
             self?.nativeTextQueuedHandler?(target)
         }
-        if selected {
+        guard hasSafeNativeEditBudget else { return .refused }
+        if let nativeEditBoundary {
+            result = nativeEditBoundary(selected, original, replacement, execution,
+                leasedGate, prepare, textQueued)
+        } else if selected {
             result = NativeAutoEventTransport.executeSelected(original: original.text, replacement: replacement,
                 start: original.range.location, execution: execution, inputBarrierIsActive: leasedGate,
                 onPrepared: prepare, onTextQueued: textQueued)
@@ -612,7 +737,18 @@ final class TextConverter {
         }
         switch result {
         case .refused: return .refused
-        case .confirmed: return .confirmed
+        case .confirmed:
+            if let prepared {
+                let plan = selected
+                    ? NativeFieldEditPlan.makeSelected(original: original.text, replacement: replacement,
+                        start: original.range.location, snapshot: prepared)
+                    : NativeFieldEditPlan.make(original: original.text, replacement: replacement,
+                        start: original.range.location, snapshot: prepared)
+                if case .success(let verified) = plan {
+                    onConfirmedField?(verified.originalSnapshot, verified.resultSnapshot)
+                }
+            }
+            return .confirmed
         case .uncertain(let observation):
             guard let prepared, let wholeSource = retainedSource else {
                 return .unknown
@@ -657,9 +793,9 @@ final class TextConverter {
         // whole-result selection. It cannot fall through to an AX writer.
         guard !pending.requiresExplicitSelection || inputBarrierIsActive != nil else { return false }
         if inputBarrierIsActive != nil {
-            guard AXUIElementSetMessagingTimeout(execution.focus.element, nativeAXTimeout) == .success else { return false }
+            guard execution.focus.setMessagingTimeout(nativeAXTimeout) == .success else { return false }
         }
-        defer { if inputBarrierIsActive != nil { AXUIElementSetMessagingTimeout(execution.focus.element, 0.05) } }
+        defer { if inputBarrierIsActive != nil { _ = execution.focus.setMessagingTimeout(0.05) } }
         guard execution.isValid(timeout: inputBarrierIsActive == nil ? 0.05 : nativeAXTimeout),
               let current = execution.focus.selectionRange() else { return false }
         guard !pending.requiresExplicitSelection || current.length > 0 else { return false }

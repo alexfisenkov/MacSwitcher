@@ -61,11 +61,20 @@ struct CombinedShiftFocus: @unchecked Sendable {
     let processID: Int32
     let element: AXUIElement
     let initialSelection: CFRange?
+    /// Synthetic boundary for headless editing tests. Live captures never set it.
+    let fieldBoundary: CombinedShiftFieldBoundary?
 
-    init(processID: Int32, element: AXUIElement, initialSelection: CFRange? = nil) {
+    init(processID: Int32, element: AXUIElement, initialSelection: CFRange? = nil,
+         fieldBoundary: CombinedShiftFieldBoundary? = nil) {
         self.processID = processID
         self.element = element
         self.initialSelection = initialSelection
+        self.fieldBoundary = fieldBoundary
+    }
+
+    func setMessagingTimeout(_ timeout: Float) -> AXError {
+        if fieldBoundary != nil { return .success }
+        return AXUIElementSetMessagingTimeout(element, timeout)
     }
 
     static func capture(processID: Int32, timeout: Float = 0.05, includeSelection: Bool = true) -> CombinedShiftFocus? {
@@ -161,6 +170,7 @@ struct CombinedShiftFocus: @unchecked Sendable {
     }
 
     func selectionRange() -> CFRange? {
+        if let fieldBoundary { return fieldBoundary.selectionRange() }
         var raw: AnyObject?
         guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &raw) == .success,
               let raw, CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
@@ -183,6 +193,7 @@ struct CombinedShiftFocus: @unchecked Sendable {
 
     func text(in range: CFRange, allowValueFallback: Bool = true) -> String? {
         guard !AutoSwitchPolicy.secureInputActive else { return nil }
+        if let fieldBoundary { return fieldBoundary.text(range) }
         var requestedRange = range
         var raw: AnyObject?
         if let value = AXValueCreate(.cfRange, &requestedRange),
@@ -207,6 +218,11 @@ struct CombinedShiftExecutionContext {
 
     func validationFailure(timeout: Float = 0.05) -> CombinedShiftExecutionFailure? {
         guard inputRevision == currentInputRevision() else { return .revisionChanged }
+        guard !AutoSwitchPolicy.secureInputActive else { return .secureInput }
+        if let boundary = focus.fieldBoundary {
+            guard focus.processID > 0 else { return .wrongProcess }
+            return boundary.validationFailure()
+        }
         guard focus.processID > 0,
               NSWorkspace.shared.frontmostApplication?.processIdentifier == focus.processID else { return .wrongProcess }
         guard !AutoSwitchPolicy.secureInputActive else { return .secureInput }
@@ -235,4 +251,12 @@ struct CombinedShiftExecutionContext {
     func canReplaceBuffer(original: String) -> Bool {
         isValid() && focus.hasOriginalSuffixBeforeCaret(original) && isValid()
     }
+}
+
+/// Read-only field identity, selection and text supplied by a synthetic editor.
+/// The live app never constructs this boundary; it uses AX and NSWorkspace.
+struct CombinedShiftFieldBoundary {
+    let validationFailure: () -> CombinedShiftExecutionFailure?
+    let selectionRange: () -> CFRange?
+    let text: (CFRange) -> String?
 }
