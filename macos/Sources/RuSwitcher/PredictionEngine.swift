@@ -62,7 +62,7 @@ struct PredictionEngine: Sendable {
                 mapping: characterMapping, lexicon: lexicon) : nil
         let corrected: String?
         do {
-            corrected = priority ?? (try correction(for: current, source: source, target: target,
+            corrected = try (priority ?? correction(for: current, source: source, target: target,
                 atBoundary: atBoundary || suffix.last?.isWhitespace == true,
                 alwaysConvertWords: alwaysConvertWords, characterMapping: characterMapping,
                 hasDomainContext: hasDomainContext, hasPeopleCollocation: hasPeopleCollocation))

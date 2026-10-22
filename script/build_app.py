@@ -165,21 +165,30 @@ def main(argv=None):
     if not args.ad_hoc and not icon.is_file():
         parser.error("Signed release requires assets/MacSwitcher.icns")
     architectures = ("arm64", "x86_64") if args.arch == "universal" else (args.arch,)
-    arch_flags = [flag for arch in architectures for flag in ("--arch", arch)]
-    run(["swift", "build", "--package-path", str(ROOT / "macos"), "-c", "release", "-j", str(args.jobs),
-         *arch_flags, "-Xswiftc", "-DMACSWITCHER_APP_BUNDLE",
-         "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])
-    binary_dir = Path(run(["swift", "build", "--package-path", str(ROOT / "macos"),
-                           "-c", "release", *arch_flags, "--show-bin-path"], capture_output=True).stdout.strip())
-    executable = binary_dir / "RuSwitcher"
-    if not executable.is_file():
-        raise RuntimeError("SwiftPM executable was not produced")
-    require_architectures(executable, architectures)
-    linked = run(["/usr/bin/otool", "-L", str(executable)], capture_output=True).stdout
-    runpaths = run(["/usr/bin/otool", "-l", str(executable)], capture_output=True).stdout
-    if "@rpath/Sparkle.framework/" not in linked or "@executable_path/../Frameworks" not in runpaths:
-        raise RuntimeError("SwiftPM executable does not link the bundled Sparkle framework via @rpath")
+    binary_dirs = []
+    executables = []
+    for arch in architectures:
+        arch_flags = ["--build-system", "native", "--arch", arch]
+        run(["swift", "build", "--package-path", str(ROOT / "macos"), "-c", "release", "-j", str(args.jobs),
+             *arch_flags, "-Xswiftc", "-DMACSWITCHER_APP_BUNDLE",
+             "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])
+        binary_dir = Path(run(["swift", "build", "--package-path", str(ROOT / "macos"),
+                               "-c", "release", *arch_flags, "--show-bin-path"],
+                              capture_output=True).stdout.strip())
+        executable = binary_dir / "RuSwitcher"
+        if not executable.is_file():
+            raise RuntimeError(f"SwiftPM {arch} executable was not produced")
+        require_architectures(executable, (arch,))
+        linked = run(["/usr/bin/otool", "-L", str(executable)], capture_output=True).stdout
+        runpaths = run(["/usr/bin/otool", "-l", str(executable)], capture_output=True).stdout
+        if "@rpath/Sparkle.framework/" not in linked or "@executable_path/../Frameworks" not in runpaths:
+            raise RuntimeError(f"SwiftPM {arch} executable does not link bundled Sparkle via @rpath")
+        binary_dirs.append(binary_dir)
+        executables.append(executable)
     framework_source = sparkle_framework(ROOT)
+    sparkle_license = framework_source.parents[2] / "LICENSE"
+    if not sparkle_license.is_file():
+        raise RuntimeError("Sparkle artifact LICENSE is missing")
     output.parent.mkdir(parents=True, exist_ok=True)
     # Sign in the system temporary directory: synchronized folders can attach
     # Finder metadata between xattr and codesign, making that check racy.
@@ -190,7 +199,14 @@ def main(argv=None):
         (contents / "MacOS").mkdir(parents=True)
         resources = contents / "Resources"
         resources.mkdir()
-        shutil.copy2(executable, contents / "MacOS/RuSwitcher")
+        staged_executable = contents / "MacOS/RuSwitcher"
+        if len(executables) == 1:
+            shutil.copy2(executables[0], staged_executable)
+        else:
+            run(["/usr/bin/lipo", "-create", *(str(path) for path in executables),
+                 "-output", str(staged_executable)])
+            os.chmod(staged_executable, executables[0].stat().st_mode)
+        require_architectures(staged_executable, architectures)
         frameworks = contents / "Frameworks"
         frameworks.mkdir()
         framework = frameworks / "Sparkle.framework"
@@ -199,10 +215,11 @@ def main(argv=None):
             shutil.copy2(icon, resources / "MacSwitcher.icns")
         # Release-only PredictionResources resolves Contents/Resources explicitly;
         # unit tests continue to use SwiftPM's normal Bundle.module accessor.
-        for bundle in binary_dir.glob("*.bundle"):
+        for bundle in binary_dirs[0].glob("*.bundle"):
             shutil.copytree(bundle, resources / bundle.name)
         licenses = resources / "Licenses"
         licenses.mkdir()
+        shutil.copy2(sparkle_license, licenses / "Sparkle-LICENSE")
         for filename in ("LICENSE", "NOTICE.md"):
             shutil.copy2(ROOT / filename, licenses / filename)
         dictionary_licenses = licenses / "dictionaries"
