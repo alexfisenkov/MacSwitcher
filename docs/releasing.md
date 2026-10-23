@@ -2,6 +2,8 @@
 
 `script/package_release.py` prepares a local candidate from an exact clean Git checkout. It does not tag, upload, commit, publish the appcast, install, or start the app. The current `version.json` is the sole version/build/channel source. A new release needs a build number higher than every item in `updates/appcast.xml` and an unused local Git tag `v<version>`.
 
+The verified release toolchain is Xcode 26.6 (Swift 6.3.3). Final CI explicitly selects this Xcode on the `macos-26` runner, matching the local release environment. The macOS 13 deployment target remains unchanged; the CI host version does not prove runtime compatibility with every supported macOS release. The earlier alpha.15 CI attempt on Xcode 16.4/Swift 6.1.2 crashed during compiler SIL generation before tests; it is retained as a failed attempt, not a test pass.
+
 The checkout must already contain the pinned Sparkle SwiftPM artifact. The signing identity is a full `Developer ID Application: … (TEAMID)` selector. `--notary-profile` names credentials previously stored for `notarytool` in Keychain; `--sparkle-account` names Sparkle's EdDSA Keychain account. The script never accepts key material or password values. Check that both selectors refer to the intended release credentials before running.
 
 ```sh
