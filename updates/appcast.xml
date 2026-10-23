@@ -6,6 +6,17 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/alexfisenkov/MacSwitcher</link>
     <description>Signed MacSwitcher releases</description>
     <item>
+      <title>MacSwitcher 0.1.0-alpha.15</title>
+      <link>https://github.com/alexfisenkov/MacSwitcher/releases/tag/v0.1.0-alpha.15</link>
+      <pubDate>Fri, 23 Oct 2026 11:53:28 +0000</pubDate>
+      <description>Повторный двойной Shift, продолжение слова и исправление выделения. Ранние замены коротких русских слов с отменой и явным добавлением в исключения. Пустой начальный список исключённых приложений и короткие сообщения о восстановлении текста.</description>
+      <sparkle:version>15</sparkle:version>
+      <sparkle:shortVersionString>0.1.0-alpha.15</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <sparkle:channel>alpha</sparkle:channel>
+      <enclosure url="https://github.com/alexfisenkov/MacSwitcher/releases/download/v0.1.0-alpha.15/MacSwitcher-0.1.0-alpha.15-universal.zip" length="23947984" type="application/octet-stream" sparkle:edSignature="W+PgSz2yocerS0UIvI71RMEd6I8te65/lyp1TBlaV+rPuLXH1qZR+eWv+MJE6jO64aZBBRzVhyJjS/lRYfbvCA=="></enclosure>
+    </item>
+    <item>
       <title>MacSwitcher 0.1.0-alpha.14</title>
       <link>https://github.com/alexfisenkov/MacSwitcher/releases/tag/v0.1.0-alpha.14</link>
       <pubDate>Thu, 22 Oct 2026 18:10:50 +0000</pubDate>
@@ -73,6 +84,6 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: K6bd85p1xluE22IxDzp6J89oLegnF2WuOnqLq0NMhImyqX4sIUUpzwB6preJdnLeNPw44SPD75V8JFKulOp1CQ==
-length: 6682
+edSignature: +46YplHmh2BEoEpHEJzqwF+r1jBOPfpyrtrjNRaD7iIHPLULznh593c8OJk80s8PByeL79FTOqUGE9WFZ/4yDg==
+length: 7934
 -->
