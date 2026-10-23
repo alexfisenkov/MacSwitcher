@@ -13,6 +13,7 @@ enum RussianPriorityPolicy {
         "а", "ну", "не", "да", "нет", "но", "же", "бы", "ли", "вот", "уже", "ещё",
         "это", "как", "что", "или", "где", "там", "тут", "без", "для"
     ]
+    private static let immediateSingleLetterWords: Set<String> = ["а", "и", "в", "к", "с", "у", "о", "я"]
 
     static func replacement(for current: String, previous: String?, sourceLanguage: String,
                             precedingWords: [String], atBoundary: Bool,
@@ -30,21 +31,25 @@ enum RussianPriorityPolicy {
             mapped.append(replacement)
         }
         let exactYoWord = (current == "to\\" || current == "to`") && mapped == "ещё"
-        guard commonRussianWords.contains(mapped), current == "ye" || exactYoWord || atBoundary else { return nil }
+        let immediateSingleLetter = current.count == 1 && immediateSingleLetterWords.contains(mapped)
+        let earlyPairedWord = current == "yt" && previous == "f" && mapped == "не"
+        guard commonRussianWords.contains(mapped) || immediateSingleLetter,
+              current == "ye" || exactYoWord || immediateSingleLetter || earlyPairedWord || atBoundary else { return nil }
         // Preserve real English prose, commands and named entities. A single
         // ambiguous token remains eligible only in genuinely neutral context.
         for word in precedingWords.suffix(3) {
             let normalized = word.lowercased().trimmingCharacters(in: .punctuationCharacters)
-            if technicalCues.contains(normalized)
+            if word.dropFirst().contains(where: \.isUppercase)
+                || technicalCues.contains(normalized)
                 || lexicon.isProtectedTerm(normalized, language: "en")
                 || lexicon.frequency(of: normalized, language: "en") >= 5_000 {
                 return nil
             }
         }
         if current == "yt", previous == "f" {
-            // The pair is considered only at a word boundary, avoiding an early
-            // rewrite of a longer English token such as "yet".
-            return atBoundary ? "не" : nil
+            // The preceding f is a separate token. A continuation of one English
+            // token such as yet never enters this two-token branch.
+            return "не"
         }
         return mapped
     }

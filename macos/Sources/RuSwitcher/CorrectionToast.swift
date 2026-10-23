@@ -16,7 +16,7 @@ final class CorrectionToast: NSObject {
     private var timer: Timer?
 
     override init() {
-        panel = CorrectionToastPanel(contentRect: NSRect(x: 0, y: 0, width: 440, height: 90),
+        panel = CorrectionToastPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 82),
                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         message = NSTextField(wrappingLabelWithString: "")
         super.init()
@@ -27,20 +27,33 @@ final class CorrectionToast: NSObject {
         panel.collectionBehavior = [.canJoinAllSpaces, .transient, .fullScreenAuxiliary, .ignoresCycle]
         panel.isExcludedFromWindowsMenu = true
         panel.hasShadow = true
-        panel.backgroundColor = .windowBackgroundColor
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
 
-        let content = NSView(frame: NSRect(x: 0, y: 0, width: 440, height: 90))
-        message.frame = NSRect(x: 14, y: 42, width: 412, height: 38)
+        let content = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 420, height: 82))
+        content.material = .hudWindow
+        content.state = .active
+        content.blendingMode = .behindWindow
+        content.wantsLayer = true
+        content.layer?.cornerRadius = 11
+        content.layer?.masksToBounds = true
+        message.frame = NSRect(x: 14, y: 39, width: 392, height: 34)
+        message.font = .systemFont(ofSize: 12)
+        message.textColor = .labelColor
         message.lineBreakMode = .byTruncatingMiddle
         message.maximumNumberOfLines = 2
         content.addSubview(message)
 
         let undo = NSButton(title: label("Отменить", "Undo"), target: self, action: #selector(undoPressed))
-        undo.frame = NSRect(x: 14, y: 10, width: 110, height: 27)
+        undo.bezelStyle = .rounded
+        undo.controlSize = .small
+        undo.frame = NSRect(x: 14, y: 8, width: 100, height: 27)
         content.addSubview(undo)
         let never = NSButton(title: label("Больше не исправлять фразу", "Never correct this phrase"),
                              target: self, action: #selector(neverPressed))
-        never.frame = NSRect(x: 132, y: 10, width: 290, height: 27)
+        never.bezelStyle = .rounded
+        never.controlSize = .small
+        never.frame = NSRect(x: 122, y: 8, width: 284, height: 27)
         content.addSubview(never)
         panel.contentView = content
     }

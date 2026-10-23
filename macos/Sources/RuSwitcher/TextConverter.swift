@@ -190,6 +190,40 @@ enum NativeWholeFieldRecovery {
 /// Конвертация текста между раскладками
 @MainActor
 final class TextConverter {
+    struct NativeSelectionBaseline {
+        let selection: CombinedShiftSelectionSnapshot
+        let field: NativeFieldObservation
+
+        func matches(_ other: NativeSelectionBaseline) -> Bool {
+            field == other.field && selection.matches(range: other.selection.range,
+                text: other.selection.text)
+        }
+    }
+    struct ConfirmedNativeField {
+        let focus: CombinedShiftFocus
+        let original: String
+        let replacement: String
+        let before: NativeFieldObservation
+        let after: NativeFieldObservation
+    }
+
+    private(set) var confirmedNativeField: ConfirmedNativeField?
+
+    func beginManualTransaction() { confirmedNativeField = nil }
+
+    /// Immutable selected-text policy result prepared after the physical
+    /// Shift callback and before the input lease. The whole AX value is read
+    /// again under that lease before any native text event can be queued.
+    struct PreparedNativeSelection {
+        let focus: CombinedShiftFocus
+        let inputRevision: UInt64
+        let original: CombinedShiftSelectionSnapshot
+        let replacement: String
+        let resultContext: CombinedShiftContext
+        let before: NativeFieldObservation
+        let restoring: Bool
+    }
+
     private var nativeInputRemainingBudget: (() -> TimeInterval?)?
     /// Ephemeral evidence for the immediately preceding automatic call only.
     /// A new attempt clears it before touching the field.
@@ -218,6 +252,7 @@ final class TextConverter {
         _ onTextQueued: @escaping () -> Void) -> VerifiedNativeFieldEditResult
 
     private let nativeEditBoundary: NativeEditBoundary?
+    private let wholeFieldObservationOverride: ((CombinedShiftFocus) -> NativeFieldObservation?)?
     private let automaticRoute: (String?, String, String) -> AutomaticEditorRoute
     /// A read-only preference boundary lets tests exercise the production
     /// selection path without changing the owner's saved application settings.
@@ -227,11 +262,13 @@ final class TextConverter {
         let settings = SettingsManager.shared
         return (settings.convertByText, settings.smartConversion)
     }, nativeEditBoundary: NativeEditBoundary? = nil,
+       wholeFieldObservationOverride: ((CombinedShiftFocus) -> NativeFieldObservation?)? = nil,
        automaticRoute: @escaping (String?, String, String) -> AutomaticEditorRoute = {
            AutomaticEditorPolicy.route(bundleID: $0, suffix: $1, sourceID: $2)
        }) {
         self.selectionPreferences = selectionPreferences
         self.nativeEditBoundary = nativeEditBoundary
+        self.wholeFieldObservationOverride = wholeFieldObservationOverride
         self.automaticRoute = automaticRoute
     }
 
@@ -412,7 +449,9 @@ final class TextConverter {
     }
 
     private func wholeFieldObservation(focus: CombinedShiftFocus) -> NativeFieldObservation? {
-        guard !AutoSwitchPolicy.secureInputActive, focus.fieldBoundary == nil,
+        guard !AutoSwitchPolicy.secureInputActive else { return nil }
+        if let wholeFieldObservationOverride { return wholeFieldObservationOverride(focus) }
+        guard focus.fieldBoundary == nil,
               let selection = focus.selectionRange(), selection.location >= 0,
               selection.length >= 0 else { return nil }
         var raw: AnyObject?
@@ -423,6 +462,27 @@ final class TextConverter {
               selection.length <= text.utf16.count - selection.location else { return nil }
         return NativeFieldObservation(text: text, caretUTF16Location: selection.location,
             selectionLength: selection.length)
+    }
+
+    /// Exact bounded field and selection read used on both sides of an async
+    /// lexical lookup. Revision/PID/focus are checked by execution; a same-
+    /// range external edit is detected by the complete field comparison.
+    func nativeSelectionBaseline(execution: CombinedShiftExecutionContext)
+        -> NativeSelectionBaseline? {
+        let focus = execution.focus
+        guard let initial = focus.initialSelection, initial.length > 0,
+              initial.length <= NativeFieldEditPlan.maximumSelectedReplacementUnits,
+              execution.isValid(timeout: nativeAXTimeout),
+              let selected = focus.selectionSnapshot(),
+              let field = wholeFieldObservation(focus: focus),
+              field.text.utf16.count <= NativeFieldEditPlan.maximumFieldUnits,
+              field.caretUTF16Location == selected.range.location,
+              field.selectionLength == selected.range.length else { return nil }
+        let units = Array(field.text.utf16)
+        let start = selected.range.location, length = selected.range.length
+        guard start <= units.count, length <= units.count - start,
+              units[start..<(start + length)].elementsEqual(selected.text.utf16) else { return nil }
+        return NativeSelectionBaseline(selection: selected, field: field)
     }
 
     private func expectedWholeField(afterReplacing original: CombinedShiftSelectionSnapshot,
@@ -471,6 +531,31 @@ final class TextConverter {
             layouts: (receipt.resultLayoutID, receipt.sourceLayoutID))
         if result == .confirmed { clearState() }
         return result
+    }
+
+    /// A receipt undo has already restored the exact whole field. Treat that
+    /// acknowledged reverse edit as the latest *manual* edit so a second double
+    /// Shift can redo it through the existing verified reconversion path.
+    /// This state is armed only after both text and source are confirmed.
+    @discardableResult
+    func armManualRedoAfterConfirmedAutomaticUndo(_ receipt: ConfirmedCorrectionReceipt) -> Bool {
+        guard !isConverting, !hasUnconfirmedAXEdit(in: receipt.focus),
+              let field = confirmedNativeField,
+              field.focus.processID == receipt.focus.processID,
+              CFEqual(field.focus.element, receipt.focus.element),
+              field.before == receipt.after, field.after == receipt.before,
+              field.original.utf16.elementsEqual(receipt.editReplacement.utf16),
+              field.replacement.utf16.elementsEqual(receipt.editOriginal.utf16),
+              field.after.selectionLength == 0 else { return false }
+        let start = field.before.caretUTF16Location - field.original.utf16.count
+        guard start >= 0,
+              let original = CombinedShiftSelectionSnapshot(
+                range: CFRange(location: start, length: field.original.utf16.count),
+                text: field.original),
+              field.after.caretUTF16Location == start + field.replacement.utf16.count else { return false }
+        commitAXEdit(original: original, replacement: field.replacement, focus: field.focus,
+            context: nil, layouts: (receipt.resultLayoutID, receipt.sourceLayoutID))
+        return true
     }
     /// Последняя clipboard-конверсия содержала RTL — реконверт стрелками небезопасен.
     private var lastClipboardRTL = false
@@ -564,30 +649,106 @@ final class TextConverter {
         return false
     }
 
-    func selectionConversion(_ text: String, context: CombinedShiftContext?, normalize: Bool = true) -> String {
+    private struct SelectionPolicyResult {
+        let replacement: String
+        let changedLanguage: String?
+        let smart: Bool
+    }
+
+    private func selectionPolicy(_ text: String, context: CombinedShiftContext?,
+                                 normalize: Bool = true,
+                                 knownWord: ((String, String) -> Bool?)? = nil) -> SelectionPolicyResult? {
         let preferences = selectionPreferences()
+        let smart = !preferences.convertByText && preferences.smartConversion
+        let smartResult = smart ? SmartConvert.selectionWithDirection(text, context: context,
+            knownWord: knownWord) : nil
+        guard smartResult?.available != false else { return nil }
         var converted = preferences.convertByText ? DynamicKeyMapping.convertBidirectional(text, context: context)
-            : preferences.smartConversion ? SmartConvert.selection(text, context: context)
-            : DynamicKeyMapping.convert(text, context: context)
+            : smartResult?.text ?? DynamicKeyMapping.convert(text, context: context)
         // Smart conversion deliberately keeps valid names and unresolved words.
         // A whole-selection fallback would override that decision.
         if context != nil && converted == text && !preferences.smartConversion {
             converted = DynamicKeyMapping.convertBidirectional(text, context: context)
         }
-        return normalize ? TextConverter.normalizedForInsert(converted) : converted
+        return SelectionPolicyResult(
+            replacement: normalize ? TextConverter.normalizedForInsert(converted) : converted,
+            changedLanguage: smartResult?.language, smart: smart)
+    }
+
+    func selectionConversion(_ text: String, context: CombinedShiftContext?, normalize: Bool = true) -> String {
+        selectionPolicy(text, context: context, normalize: normalize)?.replacement ?? text
+    }
+
+    private func selectedResultContext(_ result: SelectionPolicyResult,
+                                       requested: CombinedShiftContext) -> CombinedShiftContext {
+        guard result.smart else {
+            return DynamicKeyMapping.resultContext(for: result.replacement, requested: requested)
+        }
+        guard let language = result.changedLanguage,
+              let pair = LayoutSwitcher.currentAndOppositeLanguage(context: requested) else {
+            // Both directions changed or no direction was proved: keep the
+            // first solo Shift's target instead of counting untouched words.
+            return requested
+        }
+        return language == pair.current ? requested.reversed : requested
+    }
+
+    /// Pure selection policy and its first AX snapshot run after ShiftUp has
+    /// returned, before a physical-input lease is opened. The caller must
+    /// still revalidate this candidate under its lease before posting text.
+    func prepareNativeSelection(context: CombinedShiftContext,
+                                execution: CombinedShiftExecutionContext,
+                                restorePrevious: Bool,
+                                observedSourceLayoutID: String,
+                                knownWord: ((String, String) -> Bool?)? = nil) -> PreparedNativeSelection? {
+        let focus = execution.focus
+        guard !observedSourceLayoutID.isEmpty,
+              observedSourceLayoutID == context.targetLayoutID,
+              !isConverting, !hasUnconfirmedAXEdit(in: focus),
+              unconfirmedAXEdits.count < Self.maximumUnconfirmedFields,
+              let initial = focus.initialSelection, initial.length > 0,
+              initial.length <= NativeFieldEditPlan.maximumSelectedReplacementUnits,
+              focus.setMessagingTimeout(nativeAXTimeout) == .success else { return nil }
+        defer { _ = focus.setMessagingTimeout(0.05) }
+        guard let baseline = nativeSelectionBaseline(execution: execution) else { return nil }
+        let original = baseline.selection
+        let before = baseline.field
+        let start = original.range.location, length = original.range.length
+        let restoring = restorePrevious && lastWasAXEdit && !lastOriginal.isEmpty
+            && original.text == lastConverted
+            && lastSelectionOrigin.map { $0.processID == focus.processID
+                && CFEqual($0.element, focus.element) } == true
+            && lastSelectionRange.map { $0.location == start && $0.length == length } == true
+        let policy = restoring ? nil : selectionPolicy(original.text, context: context,
+            knownWord: knownWord)
+        guard restoring || policy != nil else { return nil }
+        let replacement = restoring ? lastOriginal : policy!.replacement
+        guard replacement != original.text, !replacement.isEmpty,
+              !isConverting, !hasUnconfirmedAXEdit(in: focus),
+              unconfirmedAXEdits.count < Self.maximumUnconfirmedFields,
+              canRetainAXSource(original: original.text, replacement: replacement),
+              execution.isValid(timeout: nativeAXTimeout),
+              wholeFieldObservation(focus: focus) == before else { return nil }
+        let resultContext = restoring ? (lastLayoutContext?.reversed ?? context)
+            : selectedResultContext(policy!, requested: context)
+        return PreparedNativeSelection(focus: focus, inputRevision: execution.inputRevision,
+            original: original, replacement: replacement, resultContext: resultContext,
+            before: before, restoring: restoring)
     }
 
     /// Explicit selections use their immutable first-tap AX range, without
     /// Cmd+C, Cmd+V, or a delayed clipboard-restore transaction.
     func convertSelection(context: CombinedShiftContext, execution: CombinedShiftExecutionContext,
                           restorePrevious: Bool = false,
-                          inputBarrierIsActive: (() -> Bool)? = nil) -> Bool {
+                          inputBarrierIsActive: (() -> Bool)? = nil,
+                          prepared: PreparedNativeSelection? = nil) -> Bool {
         guard !isConverting, inputBarrierIsActive?() ?? true else { return false }
         if inputBarrierIsActive != nil {
             guard execution.focus.setMessagingTimeout(nativeAXTimeout) == .success else { return false }
         }
         defer { if inputBarrierIsActive != nil { _ = execution.focus.setMessagingTimeout(0.05) } }
         if hasUnconfirmedAXEdit(in: execution.focus) {
+            guard prepared == nil else { return false }
             return recoverUnconfirmedAXEdit(execution: execution, inputBarrierIsActive: inputBarrierIsActive)
         }
         guard unconfirmedAXEdits.count < Self.maximumUnconfirmedFields else {
@@ -599,21 +760,48 @@ final class TextConverter {
                 RuntimeDiagnostics.record(.selectionSnapshotUnavailable); return false
             }
         }
-        guard execution.isValid(timeout: inputBarrierIsActive == nil ? 0.05 : nativeAXTimeout), let original = execution.focus.selectionSnapshot() else {
-            RuntimeDiagnostics.record(.selectionSnapshotUnavailable); return false
+        let original: CombinedShiftSelectionSnapshot
+        let replacement: String
+        let resultContext: CombinedShiftContext
+        if let prepared {
+            guard inputBarrierIsActive != nil,
+                  prepared.inputRevision == execution.inputRevision,
+                  prepared.focus.processID == execution.focus.processID,
+                  CFEqual(prepared.focus.element, execution.focus.element),
+                  (!prepared.restoring || (lastWasAXEdit && lastOriginal == prepared.replacement
+                      && lastConverted == prepared.original.text
+                      && lastSelectionOrigin.map { $0.processID == execution.focus.processID
+                          && CFEqual($0.element, execution.focus.element) } == true
+                      && lastSelectionRange.map { $0.location == prepared.original.range.location
+                          && $0.length == prepared.original.range.length } == true)),
+                  execution.isValid(timeout: nativeAXTimeout),
+                  wholeFieldObservation(focus: execution.focus) == prepared.before,
+                  inputBarrierIsActive?() == true else { return false }
+            original = prepared.original
+            replacement = prepared.replacement
+            resultContext = prepared.resultContext
+        } else {
+            guard execution.isValid(timeout: inputBarrierIsActive == nil ? 0.05 : nativeAXTimeout),
+                  let current = execution.focus.selectionSnapshot() else {
+                RuntimeDiagnostics.record(.selectionSnapshotUnavailable); return false
+            }
+            original = current
+            let restoring = restorePrevious && lastWasAXEdit && !lastOriginal.isEmpty
+                && original.text == lastConverted
+                && lastSelectionOrigin.map { $0.processID == execution.focus.processID
+                    && CFEqual($0.element, execution.focus.element) } == true
+                && lastSelectionRange.map { $0.location == original.range.location
+                    && $0.length == original.range.length } == true
+            let policy = restoring ? nil : selectionPolicy(original.text, context: context)
+            guard restoring || policy != nil else { return false }
+            replacement = restoring ? lastOriginal : policy!.replacement
+            resultContext = restoring ? (lastLayoutContext?.reversed ?? context)
+                : selectedResultContext(policy!, requested: context)
         }
-        let restoring = restorePrevious && lastWasAXEdit && !lastOriginal.isEmpty && original.text == lastConverted
-            && lastSelectionOrigin.map { $0.processID == execution.focus.processID
-                && CFEqual($0.element, execution.focus.element) } == true
-            && lastSelectionRange.map { $0.location == original.range.location
-                && $0.length == original.range.length } == true
-        let replacement = restoring ? lastOriginal : selectionConversion(original.text, context: context)
         guard replacement != original.text, !replacement.isEmpty else { return false }
         guard canRetainAXSource(original: original.text, replacement: replacement) else {
             RuntimeDiagnostics.record(.unconfirmedEditBlocked); return false
         }
-        let resultContext = restoring ? (lastLayoutContext?.reversed ?? context)
-            : DynamicKeyMapping.resultContext(for: replacement, requested: context)
         isConverting = true
         defer { isConverting = false }
         let result: CombinedShiftAXEditResult
@@ -745,6 +933,9 @@ final class TextConverter {
                     : NativeFieldEditPlan.make(original: original.text, replacement: replacement,
                         start: original.range.location, snapshot: prepared)
                 if case .success(let verified) = plan {
+                    confirmedNativeField = ConfirmedNativeField(focus: execution.focus,
+                        original: original.text, replacement: replacement,
+                        before: verified.originalSnapshot, after: verified.resultSnapshot)
                     onConfirmedField?(verified.originalSnapshot, verified.resultSnapshot)
                 }
             }
@@ -921,6 +1112,66 @@ final class TextConverter {
             self.insertText(insert)
             Task { @MainActor in self.isConverting = false }
         }
+        return true
+    }
+
+    /// Narrow empty-buffer fallback for an already visible last word. The
+    /// first Shift captured this exact field and collapsed caret; the native
+    /// editor independently checks the whole original before posting Unicode.
+    func convertVerifiedLastWord(context: CombinedShiftContext,
+                                 execution: CombinedShiftExecutionContext,
+                                 inputBarrierIsActive: @escaping () -> Bool) -> Bool {
+        guard !isConverting, !hasUnconfirmedAXEdit(in: execution.focus),
+              inputBarrierIsActive(), execution.isValid(timeout: nativeAXTimeout),
+              let initial = execution.focus.initialSelection, initial.length == 0,
+              let observed = wholeFieldObservation(focus: execution.focus),
+              observed.selectionLength == 0,
+              observed.caretUTF16Location == initial.location,
+              observed.caretUTF16Location == observed.text.utf16.count,
+              observed.text.utf16.count <= NativeFieldEditPlan.maximumFieldUnits,
+              !TextConverter.containsRTL(observed.text) else { return false }
+        var characters = Array(observed.text)
+        var spaces = ""
+        while let last = characters.last, last == " " {
+            guard spaces.count < 16 else { return false }
+            spaces.insert(last, at: spaces.startIndex)
+            characters.removeLast()
+        }
+        guard let last = characters.last, last.isLetter else { return false }
+        var token: [Character] = []
+        while let character = characters.last {
+            let internalKeyLetter = !token.isEmpty && !character.isLetter
+                && ",.;'`[]\\".contains(character)
+                && DynamicKeyMapping.convert(String(character), context: context).allSatisfy(\.isLetter)
+            guard character.isLetter || internalKeyLetter else { break }
+            token.insert(character, at: token.startIndex)
+            characters.removeLast()
+            guard token.count <= 24 else { return false }
+        }
+        guard characters.last == nil || characters.last?.isWhitespace == true else { return false }
+        let word = String(token)
+        guard !word.isEmpty, word.utf16.count <= 24,
+              !word.unicodeScalars.contains(where: {
+                  $0.properties.generalCategory == .nonspacingMark
+              }) else { return false }
+        let converted = DynamicKeyMapping.convert(word, context: context)
+        guard converted != word, !converted.isEmpty,
+              converted.allSatisfy(\.isLetter),
+              inputBarrierIsActive(), execution.isValid(timeout: nativeAXTimeout),
+              wholeFieldObservation(focus: execution.focus) == observed else { return false }
+        let original = word + spaces
+        let replacement = converted + spaces
+        let resultContext = DynamicKeyMapping.resultContext(for: replacement,
+            requested: context)
+        guard performNativeBufferEdit(original: original, replacement: replacement,
+            execution: execution, inputBarrierIsActive: inputBarrierIsActive,
+            context: resultContext) else { return false }
+        lastOriginal = original
+        lastConverted = replacement
+        lastWasBuffer = true
+        lastWasAXEdit = false
+        predictionLayouts = nil
+        lastLayoutContext = resultContext
         return true
     }
 

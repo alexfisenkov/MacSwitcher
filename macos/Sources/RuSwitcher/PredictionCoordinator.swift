@@ -15,22 +15,37 @@ final class PredictionCoordinator {
     private var anchorSessionID: UInt64?
     private var anchorFocus: CombinedShiftFocus?
     private var pendingCaretAnchor: PredictionPendingCaretAnchor?
-    private let correctionReceipts = ConfirmedCorrectionReceipts()
+    private let correctionReceipts: ConfirmedCorrectionReceipts
+    private let receiptNow: () -> UInt64
     private var oneShotSuppression: OneShotCorrectionSuppression?
+    private struct RecentAutomaticEdit {
+        let focus: CombinedShiftFocus
+        let inputRevision: UInt64
+        let sessionID: UInt64
+        let sourceLayoutID: String
+        let resultLayoutID: String
+        let receiptID: UUID?
+    }
+    private var recentAutomaticEdit: RecentAutomaticEdit?
     /// AppDelegate supplies a saved choice. Legacy call sites default to off.
     var russianPriorityProvider: () -> Bool = { false }
     /// Exact displayed source phrase and language; storage belongs to the caller.
     var phraseExceptionLookup: (_ exactOriginal: String, _ sourceLanguage: String) -> Bool = { _, _ in false }
     var onCorrection: ((ConfirmedCorrectionNotice) -> Void)?
+    /// T02 may present a nonactivating explicit exception offer after gesture undo.
+    var onConfirmedAutomaticUndo: ((ConfirmedCorrectionNotice) -> Void)?
     var onApplied: ((String) -> Void)?
     var onUnconfirmedEdit: (() -> Void)?
     var onSourceFailure: ((String, LayoutSelectionCommit.Outcome?) -> Void)?
 
     init(monitor: KeyboardMonitor, converter: TextConverter,
-         platform: PredictionCoordinatorPlatform? = nil, engine: PredictionEngine? = nil) {
+         platform: PredictionCoordinatorPlatform? = nil, engine: PredictionEngine? = nil,
+         receiptNow: @escaping () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }) {
         self.monitor = monitor
         self.converter = converter
         self.platform = platform ?? .live(monitor: monitor)
+        self.receiptNow = receiptNow
+        self.correctionReceipts = ConfirmedCorrectionReceipts(now: receiptNow)
         if let engine {
             engineTask = Task { engine }
         } else {
@@ -42,6 +57,27 @@ final class PredictionCoordinator {
                 return PredictionEngine(lexicon: lexicon)
             }
         }
+    }
+
+    /// Reuse the already-loading immutable RU/EN corpus. SQLite may fault or
+    /// return unavailable, so every exact lookup runs away from MainActor and
+    /// a missing answer refuses the whole selected edit.
+    func nativeSelectionEvidence(for queries: [SmartConvert.WordQuery],
+        protectedWord: @escaping @Sendable (PredictionLexicon, String, String) -> Bool = {
+            $0.isProtectedTerm($1, language: $2)
+        }) async
+        -> [SmartConvert.WordQuery: Bool]? {
+        guard let engine = await engineTask.value else { return nil }
+        return await Task.detached(priority: .userInitiated) {
+            var answer: [SmartConvert.WordQuery: Bool] = [:]
+            for query in queries {
+                guard let frequency = engine.lexicon.fullFrequency(of: query.word,
+                    language: query.language) else { return nil }
+                answer[query] = frequency > 0 || protectedWord(engine.lexicon,
+                    query.word, query.language)
+            }
+            return answer
+        }.value
     }
 
     func invalidate() {
@@ -171,10 +207,12 @@ final class PredictionCoordinator {
             RuntimeDiagnostics.record(.autoFocusMismatch); return
         }
         if let oneShotSuppression {
-            self.oneShotSuppression = nil
-            if oneShotSuppression.matches(focus: originalFocus,
+            if DispatchTime.now().uptimeNanoseconds > oneShotSuppression.expiresAt {
+                self.oneShotSuppression = nil
+            } else if oneShotSuppression.matches(focus: originalFocus,
                 sourceLayoutID: snapshot.sourceLayoutID,
                 original: proposal.originalSuffix, replacement: proposal.replacementSuffix) {
+                self.oneShotSuppression = nil
                 RuntimeDiagnostics.record(.autoProposalRejected)
                 return
             }
@@ -271,12 +309,14 @@ final class PredictionCoordinator {
             // discard stale typed buffers, and wait for an actual source read.
             monitor.markConverted()
             monitor.requireObservedInputSource(resultID)
-            if let wholeField {
+            let notice = wholeField.flatMap {
                 retainReceipt(proposal: proposal, edit: edit, focus: focus,
                     sourceLanguage: String(language.lowercased().prefix(2)),
                     sourceLayoutID: snapshot.sourceLayoutID, resultLayoutID: resultID,
-                    field: wholeField)
+                    field: $0)
             }
+            rememberAutomaticEdit(focus: focus, sourceLayoutID: snapshot.sourceLayoutID,
+                resultLayoutID: resultID, receiptID: notice?.id)
             let outcome = sourceCommit.outcome
             DispatchQueue.main.async { [weak self] in
                 self?.onSourceFailure?(resultID, outcome)
@@ -288,11 +328,15 @@ final class PredictionCoordinator {
         monitor.recordPredictionResult(original: proposal.originalSuffix,
             replacement: proposal.replacementSuffix, resultLayoutID: resultID)
         RuntimeDiagnostics.record(.autoEditPosted)
-        if let wholeField,
-           let notice = retainReceipt(proposal: proposal, edit: edit, focus: focus,
+        let notice = wholeField.flatMap {
+            retainReceipt(proposal: proposal, edit: edit, focus: focus,
                sourceLanguage: String(language.lowercased().prefix(2)),
                sourceLayoutID: snapshot.sourceLayoutID, resultLayoutID: resultID,
-               field: wholeField) {
+               field: $0)
+        }
+        rememberAutomaticEdit(focus: focus, sourceLayoutID: snapshot.sourceLayoutID,
+            resultLayoutID: resultID, receiptID: notice?.id)
+        if let notice {
             // Present feedback only after the input fence has been released.
             DispatchQueue.main.async { [weak self] in self?.onCorrection?(notice) }
         }
@@ -315,8 +359,63 @@ final class PredictionCoordinator {
             sourceLayoutID: sourceLayoutID, resultLayoutID: resultLayoutID,
             editOriginal: edit.original, editReplacement: edit.replacement,
             before: field.before, after: field.after,
-            issuedAt: DispatchTime.now().uptimeNanoseconds)
+            issuedAt: receiptNow())
         return correctionReceipts.retain(receipt) ? notice : nil
+    }
+
+    private func rememberAutomaticEdit(focus: CombinedShiftFocus, sourceLayoutID: String,
+                                       resultLayoutID: String, receiptID: UUID?) {
+        if receiptID == nil { correctionReceipts.retireGestureCandidate() }
+        recentAutomaticEdit = RecentAutomaticEdit(focus: focus,
+            inputRevision: monitor.inputRevision, sessionID: monitor.predictionSessionID,
+            sourceLayoutID: sourceLayoutID, resultLayoutID: resultLayoutID,
+            receiptID: receiptID)
+    }
+
+    /// Called after the first solo Shift selected the original source. Metadata
+    /// only selects the undo branch; TextConverter compares the exact whole field
+    /// again under the transaction's input lease before writing anything.
+    func claimDoubleShiftAutomaticUndo(request: CombinedShiftRequest,
+        context: CombinedShiftContext, observedSourceID: String) -> DoubleShiftAutomaticUndo {
+        guard let recent = recentAutomaticEdit, let focus = request.focus,
+              request.frontProcessID == recent.focus.processID,
+              focus.processID == recent.focus.processID,
+              CFEqual(focus.element, recent.focus.element),
+              request.inputRevision == recent.inputRevision,
+              monitor.inputRevision == recent.inputRevision else { return .manual }
+        guard focus.initialSelection?.length == 0 else { return .manual }
+        guard monitor.predictionSessionID == recent.sessionID,
+              !platform.isSecure(), !platform.remoteDeferred(),
+              !platform.deniedApp(platform.frontmost().bundleID),
+              platform.frontmost().processID == focus.processID,
+              platform.focusIsCurrent(focus),
+              !converter.hasUnconfirmedAXEdit(in: focus),
+              context.sourceLayoutID == recent.resultLayoutID,
+              context.targetLayoutID == recent.sourceLayoutID,
+              observedSourceID == recent.sourceLayoutID,
+              let id = recent.receiptID,
+              let receipt = correctionReceipts.claimForGesture(id) else { return .staleAutomatic }
+        guard receipt.inputRevision == recent.inputRevision,
+              receipt.sessionID == recent.sessionID,
+              receipt.focus.processID == focus.processID,
+              CFEqual(receipt.focus.element, focus.element),
+              receipt.sourceLayoutID == recent.sourceLayoutID,
+              receipt.resultLayoutID == recent.resultLayoutID,
+              let selection = focus.selectionRange(),
+              selection.location == receipt.after.caretUTF16Location,
+              selection.length == receipt.after.selectionLength else { return .staleAutomatic }
+        return .receipt(receipt)
+    }
+
+    /// The transaction has already released its lease and confirmed both text
+    /// and source. The notice contains no AX element or whole-field contents.
+    func completeDoubleShiftAutomaticUndo(_ receipt: ConfirmedCorrectionReceipt) {
+        recentAutomaticEdit = nil
+        oneShotSuppression = OneShotCorrectionSuppression(focus: receipt.focus,
+            sourceLayoutID: receipt.sourceLayoutID,
+            original: receipt.notice.original, replacement: receipt.notice.replacement,
+            expiresAt: DispatchTime.now().uptimeNanoseconds + 2_000_000_000)
+        onConfirmedAutomaticUndo?(receipt.notice)
     }
 
     /// The ID is consumed before attempting a mutation. UI actions never select
@@ -360,6 +459,7 @@ final class PredictionCoordinator {
         let execution = CombinedShiftExecutionContext(focus: currentFocus,
             inputRevision: receipt.inputRevision,
             currentInputRevision: { [weak monitor] in monitor?.inputRevision ?? UInt64.max })
+        converter.beginManualTransaction()
         let result = converter.withNativeInputBudget({ [weak self] in
             self?.platform.leaseRemaining(lease)
         }) {
@@ -379,11 +479,20 @@ final class PredictionCoordinator {
             return .unknown
         case .confirmed:
             sourceCommit.textQueued(targetID: receipt.sourceLayoutID)
-            monitor.markConverted()
             guard sourceCommit.outcome == .confirmed, platform.leaseIsCurrent(lease) else {
+                monitor.markConverted()
                 monitor.requireObservedInputSource(receipt.sourceLayoutID)
-                return .unknown
+                return .sourceNotConfirmed(targetID: receipt.sourceLayoutID)
             }
+            if let field = converter.confirmedNativeField,
+               field.focus.processID == focus.processID,
+               CFEqual(field.focus.element, focus.element) {
+                monitor.adoptConfirmedManualField(field, resultLayoutID: receipt.sourceLayoutID)
+            } else {
+                monitor.markConverted()
+            }
+            converter.armManualRedoAfterConfirmedAutomaticUndo(receipt)
+            recentAutomaticEdit = nil
             oneShotSuppression = OneShotCorrectionSuppression(focus: focus,
                 sourceLayoutID: receipt.sourceLayoutID,
                 original: receipt.notice.original, replacement: receipt.notice.replacement,

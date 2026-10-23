@@ -17,6 +17,33 @@ final class PredictionEngineTests: XCTestCase {
 
     private func engine() -> PredictionEngine { PredictionEngine(lexicon: fixture()) }
 
+    func testRussianPriorityImmediatelyCorrectsCommonSingleLetterWords() {
+        let examples: [(String, String)] = [
+            ("f", "а"), ("b", "и"), ("d", "в"), ("r", "к"),
+            ("c", "с"), ("e", "у"), ("j", "о"), ("z", "я")
+        ]
+        for (typed, expected) in examples {
+            let result = engine().evaluate(suffix: typed, sourceLanguage: "en",
+                                           russianPriority: true)
+            XCTAssertEqual(result?.replacementSuffix, expected, typed)
+            XCTAssertEqual(result?.targetLanguage, "ru", typed)
+        }
+        XCTAssertNil(engine().evaluate(suffix: "f", sourceLanguage: "en",
+                                       russianPriority: false))
+    }
+
+    func testRussianPriorityCorrectsNeutralShortPhraseBeforeBoundary() {
+        XCTAssertEqual(engine().evaluate(suffix: "f yt", sourceLanguage: "en",
+                                       russianPriority: true)?.replacementSuffix, "а не")
+    }
+
+    func testRussianPriorityKeepsBrandAndEnglishContextProtected() {
+        for preceding in ["MacSwitcher", "hello", "press"] {
+            XCTAssertNil(engine().evaluate(suffix: "f", sourceLanguage: "en",
+                                           precedingWords: [preceding], russianPriority: true), preceding)
+        }
+    }
+
     func testCorrectsBeforeSpaceForStrongCompletedWord() throws {
         let result = try XCTUnwrap(engine().evaluate(suffix: "ghbdtn", sourceLanguage: "en"))
         XCTAssertEqual(result.originalSuffix, "ghbdtn")

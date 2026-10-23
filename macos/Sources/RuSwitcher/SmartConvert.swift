@@ -18,6 +18,45 @@ import Foundation
 /// Тумблер «Конвертировать по тексту» (A) идёт мимо — тотальный флип
 /// (DynamicKeyMapping.convertBidirectional). Пары не «латиница+кириллица» — обычный путь.
 enum SmartConvert {
+    struct WordQuery: Hashable, Sendable {
+        let word: String
+        let language: String
+    }
+
+    /// Enumerate every dictionary question the native RU/EN policy may ask.
+    /// The exact full-corpus reads then run off MainActor; a missing answer
+    /// fails closed when the same policy is evaluated with its evidence map.
+    @MainActor
+    static func requiredNativeWordEvidence(_ text: String,
+        context: CombinedShiftContext) -> [WordQuery]? {
+        guard let pair = classifyPair(context: context),
+              pair.latLang == "en", pair.cyrLang == "ru" else { return nil }
+        var queries: Set<WordQuery> = []
+        for token in tokenize(text) where token.isWord {
+            let core = letterCore(token.str)
+            let script = dominantScript(core)
+            guard core.count >= 3, script == .lat || script == .cyr,
+                  !LayoutDetector.isAllCaps(core),
+                  !LayoutDetector.looksLikeCodeIdentifier(core) else { continue }
+            let source = script == .lat ? pair.latLang : pair.cyrLang
+            let target = script == .lat ? pair.cyrLang : pair.latLang
+            queries.insert(WordQuery(word: core.lowercased(), language: source))
+            let whole = DynamicKeyMapping.convertBidirectional(token.str, context: context)
+            let flipped = letterCore(whole)
+            if flipped.count >= 2, flipped.allSatisfy(\.isLetter) {
+                queries.insert(WordQuery(word: flipped.lowercased(), language: target))
+            }
+            let (body, suffix) = splitTrailingNonLetters(token.str)
+            if !suffix.isEmpty, !body.isEmpty {
+                let stripped = letterCore(DynamicKeyMapping.convertBidirectional(body,
+                    context: context))
+                if stripped.count >= 2, stripped.allSatisfy(\.isLetter) {
+                    queries.insert(WordQuery(word: stripped.lowercased(), language: target))
+                }
+            }
+        }
+        return queries.sorted { ($0.language, $0.word) < ($1.language, $1.word) }
+    }
     private enum Script { case cyr, lat, other, mixed }
     private enum WordDecision { case keep, flip(String, Script), unresolved }
 
@@ -30,13 +69,22 @@ enum SmartConvert {
     @MainActor
     static func selection(_ text: String, context: CombinedShiftContext? = nil,
                           russianPriority: Bool = SettingsManager.shared.russianPriorityEnabled) -> String {
+        selectionWithDirection(text, context: context, russianPriority: russianPriority).text
+    }
+
+    /// Language of tokens actually changed by the smart policy. Unchanged
+    /// names must not choose the input source for the corrected selection.
+    @MainActor
+    static func selectionWithDirection(_ text: String, context: CombinedShiftContext? = nil,
+        russianPriority: Bool = SettingsManager.shared.russianPriorityEnabled,
+        knownWord: ((String, String) -> Bool?)? = nil) -> (text: String, language: String?, available: Bool) {
         guard let (latLang, cyrLang) = classifyPair(context: context),
-              Dict.isAvailable(latLang), Dict.isAvailable(cyrLang) else {
-            return DynamicKeyMapping.convert(text, context: context)   // не Lat+Cyr пара — обычный путь
+              knownWord != nil || (Dict.isAvailable(latLang) && Dict.isAvailable(cyrLang)) else {
+            return (DynamicKeyMapping.convert(text, context: context), nil, true)
         }
         if let explicitShortWords = russianPrioritySelection(text, context: context,
                                                               enabled: russianPriority) {
-            return explicitShortWords
+            return (explicitShortWords, cyrLang, true)
         }
         let toks = tokenize(text)
         var results = [String?](repeating: nil, count: toks.count)
@@ -46,7 +94,9 @@ enum SmartConvert {
         // Пас 1 — валидные оставляем, распознанный мусор флипаем и считаем направление.
         for (i, tok) in toks.enumerated() {
             guard tok.isWord else { results[i] = tok.str; continue }
-            switch decideWord(tok.str, latLang: latLang, cyrLang: cyrLang, context: context) {
+            guard let decision = decideWord(tok.str, latLang: latLang, cyrLang: cyrLang,
+                context: context, knownWord: knownWord) else { return (text, nil, false) }
+            switch decision {
             case .keep:
                 results[i] = tok.str
             case let .flip(s, toScript):
@@ -67,7 +117,8 @@ enum SmartConvert {
 
         // Пас 2 — неразрешённые по сигналу.
         for i in pending { results[i] = signalFlip(toks[i].str, target: target, latLang: latLang, cyrLang: cyrLang, context: context) }
-        return results.map { $0 ?? "" }.joined()
+        return (results.map { $0 ?? "" }.joined(),
+            target == .cyr ? cyrLang : target == .lat ? latLang : nil, true)
     }
 
     /// A manual selection consisting entirely of the owner's exact short RU
@@ -97,7 +148,12 @@ enum SmartConvert {
     /// Решение по слову. .flip несёт письменность РЕЗУЛЬТАТА (сигнал для пасса 2); .unresolved —
     /// кандидат на флип по сигналу соседей (мусор в своём скрипте, но словарём не подтверждён).
     @MainActor
-    private static func decideWord(_ w: String, latLang: String, cyrLang: String, context: CombinedShiftContext?) -> WordDecision {
+    private static func decideWord(_ w: String, latLang: String, cyrLang: String,
+        context: CombinedShiftContext?, knownWord: ((String, String) -> Bool?)?) -> WordDecision? {
+        func valid(_ word: String, _ language: String) -> Bool? {
+            if let knownWord { return knownWord(word, language) }
+            return Dict.isValidWord(word, lang: language)
+        }
         let core = letterCore(w)
         let script = dominantScript(core)
         guard core.count >= 1, script == .cyr || script == .lat else { return .keep }
@@ -123,20 +179,29 @@ enum SmartConvert {
         }
 
         // 3+ — словарь. Уже валидное слово своего языка → не трогаем (iPhone, стоит).
-        if Dict.isValidWord(core.lowercased(), lang: wordLang) { return .keep }
+        guard let sourceKnown = valid(core.lowercased(), wordLang) else { return nil }
+        if sourceKnown { return .keep }
         // (1) флип целиком — ловит «ёлка» (`krf), «делю» (ltk.), «продолжение».
         let whole = DynamicKeyMapping.convertBidirectional(w, context: context)
         let wc = letterCore(whole)
-        if wc.count >= 2, wc.allSatisfy({ $0.isLetter }), Dict.isValidWord(wc.lowercased(), lang: flipLang) {
-            return .flip(punctFixup(original: w, flipped: whole, towardLang: flipLang, context: context), flippedScript)
+        if wc.count >= 2, wc.allSatisfy({ $0.isLetter }) {
+            guard let targetKnown = valid(wc.lowercased(), flipLang) else { return nil }
+            if targetKnown {
+                return .flip(punctFixup(original: w, flipped: whole,
+                    towardLang: flipLang, context: context), flippedScript)
+            }
         }
         // (2) со снятым хвостом реальной пунктуации — «ghtlkj;tybt,» → «продолжение» + «,».
         let (body, suffix) = splitTrailingNonLetters(w)
         if !suffix.isEmpty, !body.isEmpty {
             let bflip = DynamicKeyMapping.convertBidirectional(body, context: context)
             let bc = letterCore(bflip)
-            if bc.count >= 2, bc.allSatisfy({ $0.isLetter }), Dict.isValidWord(bc.lowercased(), lang: flipLang) {
-                return .flip(bflip + DynamicKeyMapping.punctThroughPair(suffix, towardLang: flipLang, context: context), flippedScript)
+            if bc.count >= 2, bc.allSatisfy({ $0.isLetter }) {
+                guard let targetKnown = valid(bc.lowercased(), flipLang) else { return nil }
+                if targetKnown {
+                    return .flip(bflip + DynamicKeyMapping.punctThroughPair(suffix,
+                        towardLang: flipLang, context: context), flippedScript)
+                }
             }
         }
         return .unresolved   // имя/бренд/термин, словарём не подтверждён → по сигналу

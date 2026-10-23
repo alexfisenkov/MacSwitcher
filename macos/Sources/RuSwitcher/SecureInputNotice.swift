@@ -5,12 +5,20 @@ import AppKit
 /// уводила фокус из поля пароля (пользователь терял позицию в терминале и вводил пароль заново).
 /// Теперь это неактивирующая плашка (как `CaretIndicator`): `.nonactivatingPanel` +
 /// `orderFrontRegardless`, без `NSApp.activate` и без `makeKey…` — фокус остаётся в поле ввода.
-/// Сама гаснет через несколько секунд; click-through, ничего не перехватывает.
+/// Сама гаснет через несколько секунд; без действия остаётся click-through.
 @MainActor
 final class SecureInputNotice {
+    enum Kind: Hashable {
+        case secureInput, manualFailure, unknownEdit, sourceFailure, undoRefusal, saveFailure
+    }
+
     private let panel: NSPanel
     private let title: NSTextField
     private let body: NSTextField
+    private let actionButton: NSButton
+    private var onAction: (() -> Void)?
+    private var lastShownAt: [Kind: Date] = [:]
+    private var presentationGeneration = 0
     private var hideTimer: Timer?
     private let width: CGFloat = 380
 
@@ -51,7 +59,14 @@ final class SecureInputNotice {
         body.translatesAutoresizingMaskIntoConstraints = false
         body.preferredMaxLayoutWidth = width - 32
 
-        let stack = NSStackView(views: [title, body])
+        actionButton = NSButton(title: "", target: nil, action: nil)
+        actionButton.bezelStyle = .rounded
+        actionButton.controlSize = .small
+        actionButton.isHidden = true
+        actionButton.target = self
+        actionButton.action = #selector(actionPressed)
+
+        let stack = NSStackView(views: [title, body, actionButton])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 4
@@ -66,9 +81,18 @@ final class SecureInputNotice {
     }
 
     /// Показать плашку (не крадёт фокус). Длительность зависит от объёма текста.
-    func show(title titleText: String, body bodyText: String) {
+    @discardableResult
+    func show(title titleText: String, body bodyText: String, kind: Kind? = nil,
+              actionTitle: String? = nil, onAction: (() -> Void)? = nil) -> Bool {
+        if let kind, let last = lastShownAt[kind], Date().timeIntervalSince(last) < 12 { return false }
+        if let kind { lastShownAt[kind] = Date() }
+        presentationGeneration += 1
         title.stringValue = titleText
         body.stringValue = bodyText
+        self.onAction = onAction
+        actionButton.title = actionTitle ?? ""
+        actionButton.isHidden = actionTitle == nil || onAction == nil
+        panel.ignoresMouseEvents = actionButton.isHidden
 
         // Подгоняем высоту панели под содержимое, затем позиционируем сверху-по-центру экрана.
         panel.setContentSize(NSSize(width: width, height: 200))     // временно, чтобы layout развернулся
@@ -90,14 +114,27 @@ final class SecureInputNotice {
         }
         RunLoop.main.add(t, forMode: .common)
         hideTimer = t
+        return true
     }
 
     private func hide() {
         hideTimer?.invalidate(); hideTimer = nil
+        onAction = nil
+        panel.ignoresMouseEvents = true
+        let generation = presentationGeneration
         NSAnimationContext.runAnimationGroup({ $0.duration = 0.2; panel.animator().alphaValue = 0 },
                                              completionHandler: { [weak self] in
-                                                 Task { @MainActor in self?.panel.orderOut(nil) }
+                                                 Task { @MainActor in
+                                                     guard self?.presentationGeneration == generation else { return }
+                                                     self?.panel.orderOut(nil)
+                                                 }
                                              })
+    }
+
+    @objc private func actionPressed() {
+        let action = onAction
+        hide()
+        action?()
     }
 
     private func positionTopCenter(height h: CGFloat) {

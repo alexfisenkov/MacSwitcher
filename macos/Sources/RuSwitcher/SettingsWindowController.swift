@@ -574,8 +574,7 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate {
         addSection(L10n.settingsExceptionsApps, ExceptionListEditor(
             kind: .apps,
             get: { SettingsManager.shared.deniedApps },
-            set: { SettingsManager.shared.deniedApps = $0 },
-            isProtected: { AutoSwitchPolicy.protectedApps.contains($0) }))
+            set: { SettingsManager.shared.deniedApps = $0 }))
 
         addSection(L10n.settingsExceptionsNever, ExceptionListEditor(
             kind: .words,

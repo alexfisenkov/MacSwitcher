@@ -50,17 +50,28 @@ enum CombinedShiftEditing {
                         contextForSource: (String) -> CombinedShiftContext?,
                         onFailure: ((CombinedShiftFailure) -> Void)? = nil,
                         onDiagnostic: ((CombinedShiftDiagnostic) -> Void)? = nil,
-                        application: CombinedShiftApplicationFamily = .other) -> Bool {
+                        application: CombinedShiftApplicationFamily = .other,
+                        preparedSelection: TextConverter.PreparedNativeSelection? = nil,
+                        fallbackSourceIsCurrent: (() -> Bool)? = nil,
+                        automaticUndo: DoubleShiftAutomaticUndo = .manual) -> Bool {
         let wasUnconfirmed = converter.hasUnconfirmedAXEdit(in: execution.focus)
-        let operation: CombinedShiftDiagnostic.Operation = wasUnconfirmed || request.reconvert ? .undo
-            : (execution.focus.initialSelection?.length ?? 0) > 0 ? .selection : .word
+        let hasSelection = (execution.focus.initialSelection?.length ?? 0) > 0
+        let operation: CombinedShiftDiagnostic.Operation = wasUnconfirmed ? .undo
+            : hasSelection ? .selection : request.reconvert ? .undo : .word
         func performEdit() -> Bool {
             if wasUnconfirmed {
+                guard preparedSelection == nil else { return false }
                 return converter.reconvert(context: context, execution: execution,
                     inputBarrierIsActive: inputBarrierIsActive)
-            } else if (execution.focus.initialSelection?.length ?? 0) > 0 {
+            } else if hasSelection {
                 return converter.convertSelection(context: context, execution: execution,
-                    restorePrevious: request.reconvert, inputBarrierIsActive: inputBarrierIsActive)
+                    restorePrevious: request.reconvert, inputBarrierIsActive: inputBarrierIsActive,
+                    prepared: preparedSelection)
+            } else if case .receipt(let receipt) = automaticUndo {
+                return converter.undoConfirmedCorrection(receipt, execution: execution,
+                    inputBarrierIsActive: inputBarrierIsActive) == .confirmed
+            } else if case .staleAutomatic = automaticUndo {
+                return false
             } else if request.reconvert {
                 guard converter.hasReconversionState else {
                     RuntimeDiagnostics.record(.doubleNoReconversionState); return false
@@ -72,7 +83,11 @@ enum CombinedShiftEditing {
                     RuntimeDiagnostics.record(.doubleMissingWordContext); return false
                 }
                 guard !request.wordKeys.isEmpty || (!request.prevWordKeys.isEmpty && request.boundaryCount > 0) else {
-                    RuntimeDiagnostics.record(.doubleNoBufferOrSelection); return false
+                    guard fallbackSourceIsCurrent?() == true else {
+                        RuntimeDiagnostics.record(.doubleNoBufferOrSelection); return false
+                    }
+                    return converter.convertVerifiedLastWord(context: wordContext,
+                        execution: execution, inputBarrierIsActive: inputBarrierIsActive)
                 }
                 if convertWholeLine, !request.lineKeys.isEmpty,
                    let source = request.lineSourceLayoutID,

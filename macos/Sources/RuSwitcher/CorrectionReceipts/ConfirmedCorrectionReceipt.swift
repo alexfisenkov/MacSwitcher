@@ -12,6 +12,15 @@ enum CorrectionUndoResult: Sendable {
     case confirmed
     case refused
     case unknown
+    case sourceNotConfirmed(targetID: String)
+}
+
+/// Only a matched, one-use automatic receipt may take the gesture's undo path.
+/// A stale automatic edit must not fall through to generic word reconversion.
+enum DoubleShiftAutomaticUndo {
+    case manual
+    case receipt(ConfirmedCorrectionReceipt)
+    case staleAutomatic
 }
 
 /// A specific confirmed automatic edit, independent of mutable reconversion state.
@@ -44,6 +53,12 @@ final class ConfirmedCorrectionReceipts {
     private static let maximumUTF16Units = 1_048_576
     private static let lifetimeNanoseconds: UInt64 = 15_000_000_000
     private var entries: [ConfirmedCorrectionReceipt] = []
+    private var gestureEligibleID: UUID?
+    private let now: () -> UInt64
+
+    init(now: @escaping () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }) {
+        self.now = now
+    }
 
     func retain(_ receipt: ConfirmedCorrectionReceipt) -> Bool {
         expire()
@@ -56,18 +71,40 @@ final class ConfirmedCorrectionReceipts {
             entries.removeFirst()
         }
         entries.append(receipt)
+        gestureEligibleID = receipt.notice.id
         return true
     }
 
     func claim(_ id: UUID) -> ConfirmedCorrectionReceipt? {
         expire()
-        guard let index = entries.firstIndex(where: { $0.notice.id == id }) else { return nil }
+        guard let index = entries.firstIndex(where: { $0.notice.id == id }),
+              isFreshForToast(entries[index], at: now()) else { return nil }
+        if gestureEligibleID == id { gestureEligibleID = nil }
         return entries.remove(at: index)
     }
 
+    func claimForGesture(_ id: UUID) -> ConfirmedCorrectionReceipt? {
+        guard gestureEligibleID == id,
+              let index = entries.firstIndex(where: { $0.notice.id == id }),
+              now() >= entries[index].issuedAt else { return nil }
+        gestureEligibleID = nil
+        return entries.remove(at: index)
+    }
+
+    func retireGestureCandidate() {
+        gestureEligibleID = nil
+        expire()
+    }
+
     private func expire() {
-        let now = DispatchTime.now().uptimeNanoseconds
-        entries.removeAll { now < $0.issuedAt || now - $0.issuedAt > Self.lifetimeNanoseconds }
+        let now = now()
+        entries.removeAll { receipt in
+            receipt.notice.id != gestureEligibleID && !isFreshForToast(receipt, at: now)
+        }
+    }
+
+    private func isFreshForToast(_ receipt: ConfirmedCorrectionReceipt, at now: UInt64) -> Bool {
+        now >= receipt.issuedAt && now - receipt.issuedAt <= Self.lifetimeNanoseconds
     }
 }
 

@@ -22,6 +22,7 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         var sourceOutcome: LayoutSelectionCommit.Outcome = .confirmed
         var sourceFailures: [(target: String, outcome: LayoutSelectionCommit.Outcome?, leaseReleased: Bool)] = []
         var applied: [String] = []
+        var notices: [ConfirmedCorrectionNotice] = []
         var unknownNotices = 0
         var onApplication: (() -> Void)?
 
@@ -68,6 +69,7 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
                 onApplication?()
             }
             value.onUnconfirmedEdit = { [unowned self] in unknownNotices += 1 }
+            value.onCorrection = { [unowned self] in notices.append($0) }
             value.onSourceFailure = { [unowned self] target, outcome in
                 sourceFailures.append((target, outcome, activeLease == nil))
             }
@@ -153,6 +155,85 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         XCTAssertEqual(b.text, "привет")
         XCTAssertEqual(a.text, "привет hello")
         XCTAssertEqual(rig.applied.count, 3)
+    }
+
+    @MainActor
+    func testToastUndoReseedsConfirmedOriginalForContinuedTyping() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2031, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        _ = rig.coordinator
+        rig.deliver("ghbd")
+        spin()
+        XCTAssertEqual(field.text, "прив")
+        let notice = try XCTUnwrap(rig.notices.last)
+
+        var undoResult: CorrectionUndoResult?
+        rig.coordinator.undoCorrection(id: notice.id) { undoResult = $0 }
+        guard case .confirmed? = undoResult else {
+            XCTFail("Expected confirmed toast undo, got \(String(describing: undoResult))")
+            return
+        }
+        XCTAssertEqual(field.text, "ghbd")
+        XCTAssertEqual(rig.sourceID, pair.en)
+
+        rig.deliver("tn")
+        spin()
+        XCTAssertEqual(field.text, "привет")
+    }
+
+    @MainActor
+    func testToastUndoWithConfirmedTextAndFailedSourceReportsSourceFailure() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2033, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        _ = rig.coordinator
+        rig.deliver("ghbd")
+        spin()
+        XCTAssertEqual(field.text, "прив")
+        let notice = try XCTUnwrap(rig.notices.last)
+        rig.sourceOutcome = .refused
+
+        var result: CorrectionUndoResult?
+        rig.coordinator.undoCorrection(id: notice.id) { result = $0 }
+        guard case .sourceNotConfirmed(let target)? = result else {
+            XCTFail("Confirmed reverse text with failed source needs a source instruction")
+            return
+        }
+        XCTAssertEqual(target, pair.en)
+        XCTAssertEqual(field.text, "ghbd")
+        XCTAssertEqual(field.queuedText, 2)
+        XCTAssertFalse(rig.converter.hasUnconfirmedAXEdit(in: field.focus()),
+            "A failed source selection is not an unknown text write")
+        XCTAssertTrue(CorrectionFeedbackPolicy.sourceMessage(languageCode: "ru").contains("расклад"))
+    }
+
+    @MainActor
+    func testDifferentProposalDoesNotConsumeOneShotUndoSuppression() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2032, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        _ = rig.coordinator
+        rig.deliver("ghbd")
+        spin()
+        let first = try XCTUnwrap(rig.notices.last)
+        rig.coordinator.undoCorrection(id: first.id) { result in
+            guard case .confirmed = result else { XCTFail("Expected confirmed undo"); return }
+        }
+        XCTAssertEqual(field.text, "ghbd")
+
+        rig.deliver("tn") // ghbdtn -> привет is a different automatic proposal.
+        spin()
+        XCTAssertEqual(field.text, "привет")
+
+        field.text = ""
+        field.caret = 0
+        field.selection = 0
+        rig.sourceID = pair.en
+        rig.monitor.resetPredictionContext()
+        rig.deliver("ghbd")
+        spin()
+        XCTAssertEqual(field.text, "ghbd", "The original one-shot proposal must still be suppressed")
     }
 
     @MainActor

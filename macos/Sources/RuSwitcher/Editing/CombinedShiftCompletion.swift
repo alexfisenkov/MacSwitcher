@@ -32,7 +32,13 @@ enum CombinedShiftCompletion {
             return .sourceNotConfirmed(targetID: resultID, sourceOutcome: sourceCommit.outcome)
         }
         RuntimeDiagnostics.record(.doubleSucceeded)
-        monitor.markConverted()
+        if let field = converter.confirmedNativeField, let focus = request.focus,
+           field.focus.processID == focus.processID,
+           CFEqual(field.focus.element, focus.element) {
+            monitor.adoptConfirmedManualField(field, resultLayoutID: resultID)
+        } else {
+            monitor.markConverted()
+        }
         return .confirmed(resultID: resultID)
     }
 }

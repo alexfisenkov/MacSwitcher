@@ -96,7 +96,9 @@ class ProductTests(unittest.TestCase):
         for forbidden in ("Process()", "update_local.py", "hdiutil", "rashn/RuSwitcher", "raw.githubusercontent.com"):
             self.assertNotIn(forbidden, source)
         self.assertIn("api.github.com/repos/", source)
-        self.assertIn("/releases/tag/", source)
+        # Sparkle installs the selected signed version; the unconfigured
+        # fallback opens this project's release list rather than a guessed tag.
+        self.assertIn('SettingsManager.githubURL + "/releases"', source)
 
 
 if __name__ == "__main__":

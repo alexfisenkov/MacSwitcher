@@ -15,9 +15,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var caretIndicator: CaretIndicator?   // issue #10: флаг у каретки (бета, по умолчанию OFF)
     private let secureNotice = SecureInputNotice()  // issue #27: подсказка о защ. вводе без кражи фокуса
     private let correctionToast = CorrectionToast()
+    private let correctionExceptionOffer = CorrectionExceptionOffer()
     private var lastFlagShown: String?            // идентичность раскладки для детекта смены (не title!)
     private var badgeCache: [String: NSImage] = [:]  // монохромные плашки, чтобы не перерисовывать 2с-опросом
     private var diagnosticRepro: DiagnosticReproController?
+    private var nativeSelectionAwaitGate = NativeSelectionAwaitGate()
+    private var pendingNativeSelection: Task<Void, Never>?
     private static let recoveryCopyItemTag = 71003
     private static let sourceRecoveryItemTag = 71004
 
@@ -33,12 +36,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         showWhatsNewIfNeeded(hasRunBefore: ranBefore)
         showBetaWhatsNewIfNeeded()   // отдельная витрина для бет (текст из бета-фида)
         UpdateChecker.checkOnLaunch()
-        // Прогрев NSSpellChecker: первый чек поднимает XPC AppleSpell (сотни мс на main) —
-        // прогреваем в тихую паузу после старта, а не на первом пробеле пользователя.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            Task { @MainActor in Dict.warmUp() }
-        }
-
         // Скрытая иконка: reopen-событие приходит только УЖЕ работающему приложению.
         // Свежий РУЧНОЙ запуск со скрытой иконкой без этого блока «тих» (ни иконки, ни
         // окна — выглядит как «не запустилось»). Показываем настройки; автологин-старт
@@ -133,12 +130,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - Learn-from-undo (предложить добавить слово в never-convert)
 
-    /// Последняя авто-конвертация: слово (как было набрано) + время. Если пользователь
-    /// сразу откатывает ручным триггером — предлагаем занести слово в исключения.
-    private var lastAutoConverted: (word: String, at: Date)?
-    /// Анти-наг: за сессию про одно слово спрашиваем один раз.
-    private var offeredExceptionWords: Set<String> = []
-
     /// Анти-наг для уведомления о защищённом вводе (не чаще раза в N секунд).
     private var lastSecureNoticeAt: Date?
 
@@ -154,40 +145,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // issue #27: неактивирующая плашка вместо NSAlert.runModal() — модалка активировала
         // приложение и уводила фокус из поля пароля (пользователь терял место в терминале).
         secureNotice.show(title: L10n.securePausedTitle,
-                          body: String(format: L10n.securePausedBody, holder))
+                          body: String(format: L10n.securePausedBody, holder), kind: .secureInput)
     }
 
     /// Called after the edit lease finishes. Only a fresh TIS read may resolve
     /// the requested source; a queued request is not selection evidence.
     private func presentSourceFailure(targetID: String) {
         keyboardMonitor.recordObservedInputSource(LayoutSwitcher.currentLayoutID())
-        guard keyboardMonitor.pendingInputSourceTargetID == targetID,
-              let message = CombinedShiftFailure.sourceNotConfirmed.userMessage else { return }
-        let name = LayoutSwitcher.installedLayouts().first(where: {
-            LayoutSwitcher.sourceID($0) == targetID
-        }).map(LayoutSwitcher.sourceName) ?? targetID
-        secureNotice.show(title: "MacSwitcher", body: "\(message) Нужная раскладка: \(name).")
+        let pending = keyboardMonitor.pendingInputSourceTargetID
+        guard LayoutSwitcher.currentLayoutID() != targetID,
+              pending == nil || pending == targetID else { return }
+        secureNotice.show(title: "MacSwitcher",
+            body: CorrectionFeedbackPolicy.sourceMessage(languageCode: L10n.languageCode),
+            kind: .sourceFailure)
     }
 
-    private func offerExceptionAfterUndo() {
-        guard let last = lastAutoConverted, Date().timeIntervalSince(last.at) < 8 else { return }
-        lastAutoConverted = nil
-        let word = last.word
-        let key = word.lowercased()
-        guard !offeredExceptionWords.contains(key) else { return }
-        offeredExceptionWords.insert(key)
-        guard !SettingsManager.shared.deniedWordsSet.contains(key) else { return }
+    private func offerExceptionAfterConfirmedUndo(_ notice: ConfirmedCorrectionNotice) {
+        guard !SettingsManager.shared.deniedWordsSet.contains(notice.original.lowercased()) else { return }
+        correctionExceptionOffer.show(notice, onSaved: { [weak self] in
+            self?.predictionCoordinator.invalidate()
+        }, onFailure: { [weak self] in
+            self?.secureNotice.show(title: "MacSwitcher",
+                body: L10n.languageCode == "ru"
+                    ? "Не удалось сохранить исключение. Откройте личный словарь в настройках."
+                    : "Could not save the exception. Open the personal dictionary in Settings.",
+                kind: .saveFailure)
+        })
+    }
 
-        let alert = NSAlert()
-        alert.messageText = L10n.learnQuestion(word)
-        alert.addButton(withTitle: L10n.learnAdd)
-        alert.addButton(withTitle: L10n.learnNotNow)
-        if alert.runModal() == .alertFirstButtonReturn {
-            var list = SettingsManager.shared.deniedWords
-            list.append(word)
-            SettingsManager.shared.deniedWords = list
-            rslog("learn: added word (len=\(word.count)) to never-convert")
-        }
+    private func showUnknownEditNotice() {
+        let hasRecovery = textConverter.hasUnconfirmedAXEdit
+        secureNotice.show(title: "MacSwitcher",
+            body: CorrectionFeedbackPolicy.recoveryMessage(languageCode: L10n.languageCode),
+            kind: .unknownEdit,
+            actionTitle: hasRecovery ? (L10n.languageCode == "ru" ? "Показать исходный текст" : "Show original text") : nil,
+            onAction: hasRecovery ? { [weak self] in self?.openRecoveryOriginals() } : nil)
+    }
+
+    private func openRecoveryOriginals() {
+        guard textConverter.hasUnconfirmedAXEdit,
+              let parent = statusItem.menu?.item(withTag: Self.recoveryCopyItemTag) else { return }
+        refreshRecoveryMenu(parent)
+        _ = parent.submenu?.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
     }
 
     private func startPerAppLayout() {
@@ -370,7 +369,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         self.keyboardMonitor.markConverted()
                         LayoutSwitcher.switchToOpposite()
                         self.updateStatusIcon()
-                        self.lastAutoConverted = nil
                     }
                     return
                 }
@@ -388,7 +386,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                                 self.keyboardMonitor.markConverted()
                                 LayoutSwitcher.switchToOpposite()
                                 self.updateStatusIcon()
-                                self.lastAutoConverted = nil
                             }
                             return
                         }
@@ -398,7 +395,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                             self.keyboardMonitor.markConverted()
                             LayoutSwitcher.switchToOpposite()
                             self.updateStatusIcon()
-                            self.lastAutoConverted = nil
                         }
                         return   // whole-line в обычной проге — всегда завершаем (не last-word)
                     }
@@ -410,7 +406,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     self.keyboardMonitor.markConverted()
                     LayoutSwitcher.switchToOpposite()
                     self.updateStatusIcon()
-                    self.lastAutoConverted = nil
                 }
             },
             onAltReconvert: { [weak self] in
@@ -442,7 +437,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     self.keyboardMonitor.markConverted()
                     LayoutSwitcher.switchToOpposite()
                     self.updateStatusIcon()
-                    self.offerExceptionAfterUndo()
                 }
             }
         ) {
@@ -477,15 +471,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         switch result {
                         case .confirmed:
                             self.updateStatusIcon()
+                            self.offerExceptionAfterConfirmedUndo(notice)
                         case .refused:
                             self.secureNotice.show(title: "MacSwitcher",
                                 body: L10n.languageCode == "ru"
                                     ? "Текст или поле уже изменились. Отмена этой замены недоступна."
-                                    : "The text or field has changed. This correction can no longer be undone.")
+                                    : "The text or field has changed. This correction can no longer be undone.",
+                                kind: .undoRefusal)
                         case .unknown:
-                            if let message = CombinedShiftFailure.unconfirmedEdit.userMessage {
-                                self.secureNotice.show(title: "MacSwitcher", body: message)
-                            }
+                            self.showUnknownEditNotice()
+                        case .sourceNotConfirmed(let targetID):
+                            self.presentSourceFailure(targetID: targetID)
                         }
                     }
                 },
@@ -502,9 +498,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     }
                 })
         }
+        predictionCoordinator.onConfirmedAutomaticUndo = { [weak self] notice in
+            self?.offerExceptionAfterConfirmedUndo(notice)
+        }
         predictionCoordinator.onUnconfirmedEdit = { [weak self] in
-            guard let message = CombinedShiftFailure.unconfirmedEdit.userMessage else { return }
-            self?.secureNotice.show(title: "MacSwitcher", body: message)
+            self?.showUnknownEditNotice()
         }
         predictionCoordinator.onSourceFailure = { [weak self] target, _ in
             self?.presentSourceFailure(targetID: target)
@@ -593,6 +591,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// One native handler owns switching and correction. The first tap is already visible;
     /// the second edits using the original source and selects the result's exact layout.
     private func handleCombinedShift(_ request: CombinedShiftRequest) {
+        // A newer Shift action supersedes any selected-text lexicon await,
+        // even if no character event changed the input revision.
+        _ = nativeSelectionAwaitGate.nextAction()
+        pendingNativeSelection?.cancel()
+        pendingNativeSelection = nil
         let isDouble: Bool
         if case .convert = request.action { isDouble = true; RuntimeDiagnostics.record(.doubleReceived) }
         else { isDouble = false; RuntimeDiagnostics.record(.soloReceived) }
@@ -640,81 +643,133 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func handleVerifiedCombinedShift(_ request: CombinedShiftRequest,
         context: CombinedShiftContext, execution: CombinedShiftExecutionContext) {
-        guard let lease = keyboardMonitor.beginNativeInputTransaction(processID: execution.focus.processID) else {
-            RuntimeDiagnostics.record(.nativeFenceUnavailable)
-            RuntimeDiagnostics.record(.doubleFailed)
-            if let target = keyboardMonitor.pendingInputSourceTargetID {
-                DispatchQueue.main.async { [weak self] in self?.presentSourceFailure(targetID: target) }
+        let settings = SettingsManager.shared
+        let languages = LayoutSwitcher.currentAndOppositeLanguage(context: context)
+        let nativeRUEN = languages.map { Set([$0.current, $0.opposite]) == Set(["ru", "en"]) } == true
+        if (execution.focus.initialSelection?.length ?? 0) > 0,
+           !textConverter.hasUnconfirmedAXEdit(in: execution.focus),
+           !settings.convertByText, settings.smartConversion, nativeRUEN {
+            guard !AutoSwitchPolicy.secureInputActive,
+                  LayoutSwitcher.currentLayoutID() == context.targetLayoutID,
+                  let baseline = textConverter.nativeSelectionBaseline(execution: execution),
+                  let queries = SmartConvert.requiredNativeWordEvidence(baseline.selection.text,
+                      context: context) else {
+                showCombinedShiftRefusal()
+                return
+            }
+            let generation = nativeSelectionAwaitGate.nextAction()
+            pendingNativeSelection = Task { @MainActor [weak self] in
+                guard let self else { return }
+                let evidence = await self.predictionCoordinator.nativeSelectionEvidence(for: queries)
+                guard self.nativeSelectionAwaitGate.permits(generation,
+                    cancelled: Task.isCancelled) else { return }
+                guard let evidence,
+                      let current = self.textConverter.nativeSelectionBaseline(execution: execution),
+                      baseline.matches(current),
+                      self.keyboardMonitor.inputRevision == execution.inputRevision,
+                      NSWorkspace.shared.frontmostApplication?.processIdentifier == execution.focus.processID,
+                      !AutoSwitchPolicy.secureInputActive,
+                      LayoutSwitcher.currentLayoutID() == context.targetLayoutID else {
+                    self.showCombinedShiftRefusal()
+                    return
+                }
+                self.runVerifiedCombinedShift(request, context: context, execution: execution,
+                    selectionKnownWord: { word, language in
+                        evidence[SmartConvert.WordQuery(word: word, language: language)]
+                    })
             }
             return
         }
-        let isCurrent = { [weak self] in
-            guard let self else { return false }
-            return self.keyboardMonitor.nativeInputTransactionIsCurrent(lease)
-                && self.keyboardMonitor.inputRevision == execution.inputRevision
-                && NSWorkspace.shared.frontmostApplication?.processIdentifier == execution.focus.processID
-                && !AutoSwitchPolicy.secureInputActive
-        }
-        var requestedAt: UInt64 = 0
-        let sourceCommit = NativeQueuedSourceCommit(isCurrent: isCurrent, request: { target in
-            requestedAt = DispatchTime.now().uptimeNanoseconds
-            return LayoutSwitcher.switchToWithConfirmation(layoutID: target)
-        }, onUnconfirmed: { [weak self] target in
-            self?.keyboardMonitor.noteUnconfirmedInputSource(target, requestedAt: requestedAt)
-        })
-        var failureNotice: CombinedShiftFailure?
-        defer {
-            keyboardMonitor.finishNativeInputTransaction(lease, replayLayoutID: sourceCommit.confirmedLayoutID)
-            if let failureNotice {
-                // Present only after releasing the input fence. This existing
-                // nonactivating panel does not take focus from the editor.
-                DispatchQueue.main.async { [weak self] in
-                    guard let message = failureNotice.userMessage else { return }
-                    self?.secureNotice.show(title: "MacSwitcher", body: message)
-                }
-            }
-        }
-        let succeeded = textConverter.withNativeInputBudget({ [weak self] in
-            self?.keyboardMonitor.nativeInputTransactionRemainingDuration(lease)
-        }) {
-            textConverter.withNativeTextQueuedHandler({ _ in
-                // The queued Unicode is not editor acknowledgement. Completion
-                // selects the result source after exact text ACK, under this lease.
-            }) {
-                CombinedShiftEditing.perform(request: request, context: context, execution: execution,
-                    converter: textConverter, inputBarrierIsActive: isCurrent,
-                    convertWholeLine: SettingsManager.shared.convertWholeLine,
-                    contextForSource: { LayoutSwitcher.combinedShiftContext(sourceLayoutID: $0) },
-                    onFailure: { failureNotice = $0 },
-                    onDiagnostic: { RuntimeDiagnostics.record($0) },
-                    application: CombinedShiftApplicationFamily.classify(
-                        bundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier))
-            }
-        }
-        finishCombinedShift(succeeded: succeeded, request: request, context: context,
-            sourceCommit: sourceCommit, isInputCurrent: isCurrent)
+        runVerifiedCombinedShift(request, context: context, execution: execution)
     }
 
-    private func finishCombinedShift(succeeded: Bool, request: CombinedShiftRequest,
-        context: CombinedShiftContext, sourceCommit: NativeQueuedSourceCommit,
-        isInputCurrent: () -> Bool) {
-        switch CombinedShiftCompletion.finish(succeeded: succeeded, request: request,
-            context: context, sourceCommit: sourceCommit, converter: textConverter,
-            monitor: keyboardMonitor, isInputCurrent: isInputCurrent) {
-        case .stopped:
+    private func showCombinedShiftRefusal() {
+        DispatchQueue.main.async { [weak self] in
+            self?.secureNotice.show(title: "MacSwitcher",
+                body: CorrectionFeedbackPolicy.retryMessage(languageCode: L10n.languageCode),
+                kind: .manualFailure)
+        }
+    }
+
+    private func runVerifiedCombinedShift(_ request: CombinedShiftRequest,
+        context: CombinedShiftContext, execution: CombinedShiftExecutionContext,
+        selectionKnownWord: ((String, String) -> Bool?)? = nil) {
+        let platform = CombinedShiftTransaction.Platform(
+            currentSourceID: LayoutSwitcher.currentLayoutID,
+            frontProcessID: { NSWorkspace.shared.frontmostApplication?.processIdentifier },
+            secureInputActive: { AutoSwitchPolicy.secureInputActive },
+            beginLease: { [weak self] pid in
+                self?.keyboardMonitor.beginNativeInputTransaction(processID: pid)
+            }, leaseIsCurrent: { [weak self] lease in
+                self?.keyboardMonitor.nativeInputTransactionIsCurrent(lease) == true
+            }, leaseRemaining: { [weak self] lease in
+                self?.keyboardMonitor.nativeInputTransactionRemainingDuration(lease)
+            }, finishLease: { [weak self] lease, source in
+                self?.keyboardMonitor.finishNativeInputTransaction(lease, replayLayoutID: source)
+            }, pendingSourceTargetID: { [weak self] in
+                self?.keyboardMonitor.pendingInputSourceTargetID
+            }, selectSource: { LayoutSwitcher.switchToWithConfirmation(layoutID: $0) },
+            noteUnconfirmedSource: { [weak self] target, requestedAt in
+                self?.keyboardMonitor.noteUnconfirmedInputSource(target, requestedAt: requestedAt)
+            }, observeWholeField: { [weak self] focus in
+                guard let self else { return nil }
+                let current = CombinedShiftExecutionContext(focus: focus,
+                    inputRevision: execution.inputRevision,
+                    currentInputRevision: { [weak self] in
+                        self?.keyboardMonitor.inputRevision ?? UInt64.max
+                    })
+                return self.textConverter.nativeSelectionBaseline(execution: current)?.field
+            }, applicationFamily: {
+                CombinedShiftApplicationFamily.classify(
+                    bundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+            })
+        let automaticUndo = predictionCoordinator.claimDoubleShiftAutomaticUndo(
+            request: request, context: context, observedSourceID: platform.currentSourceID())
+        let result = CombinedShiftTransaction.run(request: request, context: context,
+            execution: execution, converter: textConverter, monitor: keyboardMonitor,
+            platform: platform, convertWholeLine: SettingsManager.shared.convertWholeLine,
+            contextForSource: { LayoutSwitcher.combinedShiftContext(sourceLayoutID: $0) },
+            selectionKnownWord: selectionKnownWord, automaticUndo: automaticUndo)
+        if let notice = result.failureNotice {
+            // The helper released the input fence before any user-facing notice.
+            switch notice {
+            case .unconfirmedEdit:
+                DispatchQueue.main.async { [weak self] in self?.showUnknownEditNotice() }
+            case .noSafeEdit:
+                let hasTarget = CorrectionFeedbackPolicy.hasManualTarget(
+                    selectionLength: execution.focus.initialSelection?.length ?? 0,
+                    currentWordCount: request.wordKeys.count,
+                    previousWordCount: request.prevWordKeys.count,
+                    boundaryCount: request.boundaryCount,
+                    reconvert: request.reconvert,
+                    hasReconversionState: textConverter.hasReconversionState)
+                if case .manual = automaticUndo, hasTarget { showCombinedShiftRefusal() }
+            case .sourceNotConfirmed:
+                break
+            }
+        }
+        if let target = result.pendingSourceTargetID {
+            DispatchQueue.main.async { [weak self] in self?.presentSourceFailure(targetID: target) }
+        }
+        switch result.outcome {
+        case .none, .some(.stopped):
             break
-        case .sourceNotConfirmed(let targetID, _):
-            // The current handler's defer releases the lease before this runs.
-            DispatchQueue.main.async { [weak self] in self?.presentSourceFailure(targetID: targetID) }
-        case .confirmed:
+        case .some(.sourceNotConfirmed(let targetID, _)):
+            if result.pendingSourceTargetID == nil {
+                DispatchQueue.main.async { [weak self] in self?.presentSourceFailure(targetID: targetID) }
+            }
+        case .some(.confirmed):
             updateStatusIcon()
-            // A modal question must never keep the native input lease open.
-            if request.reconvert { DispatchQueue.main.async { [weak self] in self?.offerExceptionAfterUndo() } }
-            else { lastAutoConverted = nil }
+            if let receipt = result.confirmedAutomaticUndo {
+                predictionCoordinator.completeDoubleShiftAutomaticUndo(receipt)
+            }
         }
     }
 
     private func resetCombinedShiftAfterPause() {
+        _ = nativeSelectionAwaitGate.nextAction()
+        pendingNativeSelection?.cancel()
+        pendingNativeSelection = nil
         predictionCoordinator.invalidate()
         keyboardMonitor.resetPredictionContext()
         guard SettingsManager.shared.combinedShiftEnabled else { return }
@@ -1088,7 +1143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         parent.isEnabled = textConverter.hasUnconfirmedAXEdit
         let submenu = NSMenu()
         for (index, original) in textConverter.unconfirmedOriginals.enumerated() {
-            let title = L10n.languageCode == "ru" ? "Скопировать исходник \(index + 1)" : "Copy original \(index + 1)"
+            let title = L10n.languageCode == "ru" ? "Скопировать исходный текст \(index + 1)" : "Copy original text \(index + 1)"
             let item = NSMenuItem(title: title, action: #selector(copyRecoveryOriginal(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = original

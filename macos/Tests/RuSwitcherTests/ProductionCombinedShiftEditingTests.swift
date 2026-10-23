@@ -140,6 +140,10 @@ final class ProductionCombinedShiftEditingTests: XCTestCase {
                 return VerifiedNativeFieldEditor.execute(original: original.text, replacement: replacement,
                     start: original.range.location, access: access,
                     onPrepared: prepared, onTextQueued: queued)
+            }, wholeFieldObservationOverride: { focus in
+                fields.first(where: {
+                    $0.pid == focus.processID && CFEqual($0.element, focus.element) && $0.valid
+                })?.observation
             }, automaticRoute: automaticRoute)
     }
 

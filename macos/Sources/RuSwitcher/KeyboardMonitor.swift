@@ -191,12 +191,16 @@ final class KeyboardMonitor: @unchecked Sendable {
     private var combinedShiftGesture = CombinedShiftGesture()
     private var combinedShiftProcessID: Int32?
     private var combinedShiftFirstRequest: CombinedShiftRequest?
+    private var combinedShiftFirstSoloAt: UInt64?
+    private var combinedShiftDoubleWindowNanoseconds = CombinedShiftGesture.Configuration
+        .defaultDoubleWindowNanoseconds
     /// T02 supplies its persisted preference here; the default recognizer still
     /// uses 180 ms until an explicit validated configuration is passed.
     @MainActor
     func configureCombinedShiftTiming(_ configuration: CombinedShiftGesture.Configuration) {
         interruptCombinedShift()
         combinedShiftGesture = CombinedShiftGesture(configuration: configuration)
+        combinedShiftDoubleWindowNanoseconds = configuration.doubleWindowNanoseconds
     }
     private(set) var inputRevision: UInt64 = 0
     private var currentWordSourceID: String?
@@ -437,6 +441,51 @@ final class KeyboardMonitor: @unchecked Sendable {
         lineSourceID = nil
     }
 
+    /// A native editor has read back the exact whole field after a manual edit.
+    /// Seed the next physical key from that confirmed caret prefix, so typing a
+    /// suffix continues this word rather than starting a new one. No AX read is
+    /// performed here and an unknown edit never reaches this method.
+    func adoptConfirmedManualField(_ field: TextConverter.ConfirmedNativeField,
+                                   resultLayoutID: String) {
+        let pid = field.focus.processID
+        guard pid > 0, field.after.selectionLength == 0,
+              let beforeRange = Range(NSRange(location: 0,
+                    length: field.before.caretUTF16Location), in: field.before.text),
+              let afterRange = Range(NSRange(location: 0,
+                    length: field.after.caretUTF16Location), in: field.after.text) else {
+            markConverted(); return
+        }
+        let beforePrefix = String(field.before.text[beforeRange])
+        let afterPrefix = String(field.after.text[afterRange])
+        let originalEndPrefix = field.before.selectionLength > 0
+            ? beforePrefix + field.original : beforePrefix
+        guard originalEndPrefix.hasSuffix(field.original), afterPrefix.hasSuffix(field.replacement),
+              !afterPrefix.isEmpty else { markConverted(); return }
+        interruptCombinedShift()
+        if field.before.selectionLength > 0
+            || predictionBuffer.processID != pid
+            || !originalEndPrefix.hasSuffix(predictionBuffer.text)
+            || !predictionBuffer.replaceSuffix(original: field.original,
+                replacement: field.replacement) {
+            predictionBuffer.reset()
+            predictionBuffer.append(afterPrefix, processID: pid)
+        }
+        predictionSourceLayoutID = resultLayoutID
+        let trailingSpaces = afterPrefix.reversed().prefix(while: \.isWhitespace).count
+        let last = afterPrefix.split(whereSeparator: \.isWhitespace).last.map(String.init) ?? ""
+        let keys = last.map { TypedKey(keyCode: 0, shift: $0.isUppercase, caps: false, char: $0) }
+        currentWordKeys = trailingSpaces == 0 ? keys : []
+        currentWordLength = currentWordKeys.count
+        currentWordSourceID = currentWordKeys.isEmpty ? nil : resultLayoutID
+        prevWordKeys = trailingSpaces > 0 ? keys : []
+        wordBeforeBoundaryLength = prevWordKeys.count
+        prevWordSourceID = prevWordKeys.isEmpty ? nil : resultLayoutID
+        boundaryCount = trailingSpaces
+        lineKeys = []
+        lineSourceID = nil
+        keysTypedSinceConversion = false
+    }
+
     /// issue #24 / скептик 3.2.0: системная смена раскладки (globe / Ctrl-Space) не проходит через
     /// наш обработчик клавиш, поэтому буфер строки декодировался бы старой раскладкой. Сбрасываем
     /// его (только строку — словный буфер трогаем как раньше).
@@ -444,6 +493,19 @@ final class KeyboardMonitor: @unchecked Sendable {
         observeInputSource(sourceLayoutID)
         lineKeys = []
         lineSourceID = nil
+        if let first = combinedShiftFirstRequest,
+           case .switchLayout(let direction) = first.action,
+           let firstSoloAt = combinedShiftFirstSoloAt,
+           first.inputRevision == inputRevision,
+           first.frontProcessID == predictionBuffer.processID,
+           predictionSourceLayoutID == direction.sourceLayoutID,
+           sourceLayoutID == direction.targetLayoutID {
+            let now = DispatchTime.now().uptimeNanoseconds
+            if now >= firstSoloAt, now - firstSoloAt <= combinedShiftDoubleWindowNanoseconds {
+                RuntimeDiagnostics.record(.sourceNotificationPreserved)
+                return
+            }
+        }
         // TIS delivers source-change notifications after the source is already
         // selectable. Fast typing may have started under that source before its
         // acknowledgement arrives; it must not cancel that new pending snapshot.
@@ -585,6 +647,7 @@ final class KeyboardMonitor: @unchecked Sendable {
         combinedShiftGesture.interrupt()
         combinedShiftProcessID = nil
         combinedShiftFirstRequest = nil
+        combinedShiftFirstSoloAt = nil
         inputRevision &+= 1
     }
 
@@ -675,8 +738,10 @@ final class KeyboardMonitor: @unchecked Sendable {
                 lineSourceLayoutID: first.lineSourceLayoutID, boundaryCount: first.boundaryCount,
                 reconvert: first.reconvert, inputRevision: inputRevision, frontProcessID: frontProcessID, focus: first.focus)
             combinedShiftFirstRequest = nil
+            combinedShiftFirstSoloAt = nil
         } else {
             combinedShiftFirstRequest = request
+            combinedShiftFirstSoloAt = DispatchTime.now().uptimeNanoseconds
         }
         return request
     }

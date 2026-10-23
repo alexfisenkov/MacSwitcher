@@ -240,10 +240,10 @@ final class SettingsManager: @unchecked Sendable {
         }
     }
 
-    /// Explicit user choice enables the native path even while formal acceptance stays false.
-    /// The default remains off; no stored preference is silently promoted.
+    /// An existing explicit auto-conversion choice remains effective after upgrading from
+    /// builds without a separate native key. An explicit native opt-out still wins.
     var nativeAutoEnabled: Bool {
-        get { defaults.bool(forKey: Keys.nativeAutoEnabled) }
+        get { defaults.object(forKey: Keys.nativeAutoEnabled) as? Bool ?? autoConvert }
         set { defaults.set(newValue, forKey: Keys.nativeAutoEnabled) }
     }
 
@@ -345,24 +345,17 @@ final class SettingsManager: @unchecked Sendable {
         set { defaults.set(newValue, forKey: Keys.monochromeIcon) }
     }
 
-    /// Приложения, где авто-конверсия выключена. Эффективный список = дефолты минус
-    /// явно удалённые пользователем плюс явно добавленные. Так новые дефолты из будущих
-    /// версий подхватываются автоматически, а правки пользователя сохраняются.
+    /// Only explicit user additions block automatic conversion. The old removed-key
+    /// delta remains on disk for compatibility but never promotes factory defaults.
     var deniedApps: [String] {
         get {
-            let removed = Set(defaults.stringArray(forKey: Keys.deniedAppsRemoved) ?? [])
-            let added = defaults.stringArray(forKey: Keys.deniedAppsAdded) ?? []
-            var result = AutoSwitchPolicy.defaultDeniedApps.filter { !removed.contains($0) }
-            for a in added where !result.contains(a) { result.append(a) }
-            return result
+            var seen: Set<String> = []
+            return (defaults.stringArray(forKey: Keys.deniedAppsAdded) ?? [])
+                .filter { seen.insert($0).inserted }
         }
         set {
-            let defaultsSet = Set(AutoSwitchPolicy.defaultDeniedApps)
-            let newSet = Set(newValue)
-            let removed = AutoSwitchPolicy.defaultDeniedApps.filter { !newSet.contains($0) }
-            let added = newValue.filter { !defaultsSet.contains($0) }
-            defaults.set(removed, forKey: Keys.deniedAppsRemoved)
-            defaults.set(added, forKey: Keys.deniedAppsAdded)
+            var seen: Set<String> = []
+            defaults.set(newValue.filter { seen.insert($0).inserted }, forKey: Keys.deniedAppsAdded)
         }
     }
 

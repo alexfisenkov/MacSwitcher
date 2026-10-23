@@ -21,9 +21,8 @@ enum Dict {
         return langs
     }
 
-    /// Прогрев: первое обращение к NSSpellChecker поднимает XPC-процесс AppleSpell
-    /// (сотни мс на main) — без прогрева этот фриз пришёлся бы на первый пробел
-    /// пользователя после запуска. Вызывается отложенно из applicationDidFinishLaunching.
+    /// Legacy warm-up helper. The native RU/EN path uses offline evidence and
+    /// does not schedule AppleSpell/XPC work on MainActor at app launch.
     @MainActor static func warmUp() {
         _ = languages()
         _ = isValidWord("тест", lang: "ru")
@@ -211,29 +210,13 @@ enum AutoSwitchPolicy {
         return nil
     }
 
-    /// Дефолтный список приложений, где авто выключено: терминалы, IDE, менеджеры
-    /// паролей. Возвращается, пока пользователь не отредактировал список
-    /// (см. SettingsManager.deniedApps). Запись с суффиксом "*" — префикс (весь вендор).
-    static let defaultDeniedApps: [String] = [
-        "com.apple.Terminal", "com.googlecode.iterm2", "net.kovidgoyal.kitty",
-        "io.alacritty", "com.github.wez.wezterm", "dev.warp.Warp-Stable", "co.zeit.hyper",
-        "com.apple.dt.Xcode", "com.microsoft.VSCode", "com.microsoft.VSCodeInsiders",
-        "com.sublimetext.4", "com.todesktop.230313mzl4w4u92", "com.google.android.studio",
-        "com.jetbrains.*",
-        "com.1password.1password", "com.agilebits.onepassword7",
-        "com.bitwarden.desktop", "org.keepassxc.keepassxc",
-    ]
-
-    /// Менеджеры паролей — несъёмные из списка в UI (безопасность).
-    static let protectedApps: Set<String> = [
-        "com.1password.1password", "com.agilebits.onepassword7",
-        "com.bitwarden.desktop", "org.keepassxc.keepassxc",
-    ]
+    /// New installs have no app-wide exclusions. Field and transport guards stay independent.
+    static let defaultDeniedApps: [String] = []
 
     /// Терминалы: в них нет OS-выделения текста, поэтому «конвертация строки» (#24) через
     /// Shift+Cmd+← не выделяет строку, а в Terminal.app клавиши протекают мусором. Для них
     /// режим «вся строка» деградирует на буферный путь (последнее слово — он в терминалах
-    /// работает, backspace+перепечатка). Список — терминалы из defaultDeniedApps.
+    /// работает, backspace+перепечатка). This is transport selection, not a denylist.
     static let terminalApps: Set<String> = [
         "com.apple.Terminal", "com.googlecode.iterm2", "net.kovidgoyal.kitty",
         "io.alacritty", "com.github.wez.wezterm", "dev.warp.Warp-Stable", "co.zeit.hyper",
@@ -244,11 +227,12 @@ enum AutoSwitchPolicy {
     }
 
     static func isDeniedApp(_ bundleID: String?) -> Bool {
+        isDeniedApp(bundleID, deniedApps: SettingsManager.shared.deniedApps)
+    }
+
+    static func isDeniedApp(_ bundleID: String?, deniedApps: [String]) -> Bool {
         guard let id = bundleID else { return false }
-        // Менеджеры паролей — жёсткий, не зависящий от пользовательского списка гейт:
-        // их нельзя разблокировать ни через UI, ни через рассинхрон дефолтов.
-        if protectedApps.contains(id) { return true }
-        for entry in SettingsManager.shared.deniedApps {
+        for entry in deniedApps {
             if entry.hasSuffix("*") {
                 if id.hasPrefix(String(entry.dropLast())) { return true }
             } else if entry == id {

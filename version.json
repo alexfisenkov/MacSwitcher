@@ -1,9 +1,9 @@
 {
-  "version": "0.1.0-alpha.14",
+  "version": "0.1.0-alpha.15",
   "short_version": "0.1.0",
-  "build": 14,
+  "build": 15,
   "channel": "alpha",
   "url": "https://github.com/alexfisenkov/MacSwitcher/releases",
-  "notes": "Defer manual double-Shift editing until its physical event-tap callback returns. Capture each gesture once and cancel stale requests after new input or tap replacement. Physical repeated-correction acceptance remains open.",
+  "notes": "Повторный двойной Shift, продолжение слова и исправление выделения. Ранние замены коротких русских слов с отменой и явным добавлением в исключения. Пустой начальный список исключённых приложений и короткие сообщения о восстановлении текста.",
   "native_backend_accepted": false
 }
