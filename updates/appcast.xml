@@ -6,6 +6,17 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/alexfisenkov/MacSwitcher</link>
     <description>Signed MacSwitcher releases</description>
     <item>
+      <title>MacSwitcher 0.1.0-alpha.18</title>
+      <link>https://github.com/alexfisenkov/MacSwitcher/releases/tag/v0.1.0-alpha.18</link>
+      <pubDate>Wed, 28 Oct 2026 14:18:44 +0000</pubDate>
+      <description>Исправлена обработка времени Shift: пауза между одиночными нажатиями не должна распознаваться как двойное нажатие из-за масштаба или постоянной метки системного события. Время событий и окна допуска ввода приведены к единому монотонному домену.</description>
+      <sparkle:version>18</sparkle:version>
+      <sparkle:shortVersionString>0.1.0-alpha.18</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <sparkle:channel>alpha</sparkle:channel>
+      <enclosure url="https://github.com/alexfisenkov/MacSwitcher/releases/download/v0.1.0-alpha.18/MacSwitcher-0.1.0-alpha.18-universal.zip" length="23957787" type="application/octet-stream" sparkle:edSignature="fLLwQ2cZALUjkz9HQk2yZNKJwIIs4jUkSpyBo0YVIVxKUyg6nZchkLSXRUaS8e1fZHBD2efyiU4NEDQ7zSNKDQ=="></enclosure>
+    </item>
+    <item>
       <title>MacSwitcher 0.1.0-alpha.17</title>
       <link>https://github.com/alexfisenkov/MacSwitcher/releases/tag/v0.1.0-alpha.17</link>
       <pubDate>Wed, 28 Oct 2026 12:58:38 +0000</pubDate>
@@ -106,6 +117,6 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: XKT7xRzDY/TroK4bCpi/GHGQH2qelziV8IDr7GEpzSmO1m65YENEqcU/YnPixstKiGyX+3canqwn0LXCPExxDQ==
-length: 10484
+edSignature: JyG7ZW/dyR4JQcd3pqlvDiMuDVmfxuksVn8l0FsS6bF+L8A2dKnoYp8pSiiANXozaCP8cn2ucWfepeEVi6R6Bw==
+length: 11743
 -->
