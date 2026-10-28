@@ -1,4 +1,5 @@
 import Dispatch
+import CoreGraphics
 import XCTest
 @testable import RuSwitcher
 
@@ -31,6 +32,54 @@ final class KeyboardInputClockTests: XCTestCase {
                 XCTAssertEqual(result[0], .switchLayout(enToRu))
                 XCTAssertEqual(result[1], gap <= 120_000_000 ? .convert(enToRu) : .switchLayout(ruToEn),
                     "gap=\(gap)")
+            }
+        }
+    }
+
+    @MainActor
+    func testRawCGEventProductionAdmissionAndRecognizerAcrossClockFormats() {
+        let now = DispatchTime.now().uptimeNanoseconds
+        let firstDown = now - 3_000_000_000
+        let firstUp = firstDown + 50_000_000
+        let modes: [(String, (UInt64) -> UInt64)] = [
+            ("mach", { $0 * 3 / 125 }),
+            ("nanoseconds", { $0 }),
+            ("zero", { _ in 0 }),
+            ("constant", { _ in firstDown }),
+        ]
+        let timebase = KeyboardInputClock.Timebase(numerator: 125, denominator: 3)
+
+        for (mode, rawTimestamp) in modes {
+            for gap: UInt64 in [100_000_000, 120_000_000, 121_000_000, 1_000_000_000, 2_000_000_000] {
+                let monitor = KeyboardMonitor()
+                monitor.configureCombinedShiftTiming(.init(doubleWindowNanoseconds: 120_000_000))
+                let fence = InputEventFence()
+                var actions: [CombinedShiftGesture.Action] = []
+                let edges: [(UInt64, CGKeyCode, Bool, CombinedShiftContext?)] = [
+                    (firstDown, 56, true, enToRu),
+                    (firstUp, 56, false, nil),
+                    (firstUp + gap - 50_000_000, 60, true, ruToEn),
+                    (firstUp + gap, 60, false, nil),
+                ]
+                for (at, keyCode, isDown, context) in edges {
+                    let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: isDown)!
+                    event.type = .flagsChanged
+                    event.flags = isDown ? .maskShift : []
+                    event.timestamp = rawTimestamp(at)
+                    XCTAssertEqual(event.timestamp, rawTimestamp(at))
+                    let callback = KeyboardCallbackAdmission.enter(event: event, fence: fence,
+                        receivedAt: at, timebase: timebase)
+                    XCTAssertTrue(monitor.allowCombinedShift(after: callback.admission))
+                    let side: CombinedShiftGesture.Side = keyCode == 56 ? .left : .right
+                    if let action = monitor.recognizeCombinedShift(side: side,
+                        isPressed: event.flags.contains(.maskShift), clock: callback.clock, context: context) {
+                        actions.append(action)
+                    }
+                    fence.leavePhysicalEvent(callback.admission)
+                }
+                XCTAssertEqual(actions, [.switchLayout(enToRu),
+                    gap <= 120_000_000 ? .convert(enToRu) : .switchLayout(ruToEn)],
+                    "mode=\(mode) gap=\(gap)")
             }
         }
     }

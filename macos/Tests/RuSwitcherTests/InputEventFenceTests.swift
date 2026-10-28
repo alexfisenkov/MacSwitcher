@@ -95,6 +95,7 @@ final class InputEventFenceTests: XCTestCase {
         fence.finish(next, replayLayoutID: nil)
     }
 
+    @MainActor
     func testSuccessfulLeaseHoldingShiftDownStillAllowsOneSoloSwitch() throws {
         let fence = InputEventFence()
         let lease = try XCTUnwrap(fence.begin(processID: 42))
@@ -111,9 +112,22 @@ final class InputEventFenceTests: XCTestCase {
         XCTAssertTrue(admission.wasHeld)
         XCTAssertFalse(admission.interrupted)
         let monitor = KeyboardMonitor()
-        XCTAssertTrue(monitor.allowCombinedShift(after: admission))
-
+        monitor.markConverted()
+        let revision = monitor.inputRevision
+        let generation = monitor.predictionGeneration
+        let session = monitor.predictionSessionID
         let direction = CombinedShiftContext(sourceLayoutID: "en", targetLayoutID: "ru")
+        let before = monitor.snapshotCombinedShiftRequest(action: .switchLayout(direction),
+            frontProcessID: 42, focus: nil, contextForSource: { _ in direction })
+        XCTAssertEqual(before?.reconvert, true)
+        XCTAssertTrue(monitor.allowCombinedShift(after: admission))
+        XCTAssertEqual(monitor.inputRevision, revision)
+        XCTAssertEqual(monitor.predictionGeneration, generation)
+        XCTAssertEqual(monitor.predictionSessionID, session)
+        let after = monitor.snapshotCombinedShiftRequest(action: .switchLayout(direction),
+            frontProcessID: 42, focus: nil, contextForSource: { _ in direction })
+        XCTAssertEqual(after?.reconvert, true)
+
         var gesture = CombinedShiftGesture(configuration: .init(doubleWindowNanoseconds: 120_000_000))
         gesture.press(.left, clock: downClock, context: direction)
         let upClock = KeyboardInputClock(rawTimestamp: downTime + 50_000_000,

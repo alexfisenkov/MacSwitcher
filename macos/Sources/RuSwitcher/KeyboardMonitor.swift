@@ -660,20 +660,38 @@ final class KeyboardMonitor: @unchecked Sendable {
 
     /// Cancellation is also used for scrolling, tap recovery, pause/resume, and stale focus.
     fileprivate func interruptCombinedShift() {
-        pendingCombinedShiftConversion = nil
+        clearCombinedShiftCandidate()
         invalidatePrediction()
+        inputRevision &+= 1
+    }
+
+    private func clearCombinedShiftCandidate() {
+        pendingCombinedShiftConversion = nil
         combinedShiftGesture.interrupt()
         combinedShiftProcessID = nil
         combinedShiftFirstRequest = nil
         combinedShiftFirstSoloAt = nil
-        inputRevision &+= 1
     }
 
     /// A successful held callback starts a fresh gesture; an interrupted lease
     /// cannot start one from compressed delivery.
     func allowCombinedShift(after admission: InputEventFence.Admission) -> Bool {
-        if admission.wasHeld || admission.interrupted { interruptCombinedShift() }
+        if admission.interrupted { interruptCombinedShift() }
+        else if admission.wasHeld { clearCombinedShiftCandidate() }
         return !admission.interrupted
+    }
+
+    /// Production gesture state transition, shared by the tap callback and its
+    /// raw-CGEvent regression tests. Context is captured only on a press.
+    func recognizeCombinedShift(side: CombinedShiftGesture.Side, isPressed: Bool,
+                                clock: KeyboardInputClock, context: CombinedShiftContext? = nil)
+        -> CombinedShiftGesture.Action? {
+        if isPressed {
+            guard let context else { combinedShiftGesture.interrupt(); return nil }
+            combinedShiftGesture.press(side, clock: clock, context: context)
+            return nil
+        }
+        return combinedShiftGesture.release(side, clock: clock)
     }
 
     func resetCombinedShift() {
@@ -742,10 +760,10 @@ final class KeyboardMonitor: @unchecked Sendable {
         let side: CombinedShiftGesture.Side = keyCode == KC.leftShift ? .left : .right
         if flags.contains(.maskShift) {
             guard let context = LayoutSwitcher.combinedShiftContext() else { interruptCombinedShift(); return }
-            combinedShiftGesture.press(side, clock: clock, context: context)
+            _ = recognizeCombinedShift(side: side, isPressed: true, clock: clock, context: context)
             return
         }
-        guard let action = combinedShiftGesture.release(side, clock: clock) else { return }
+        guard let action = recognizeCombinedShift(side: side, isPressed: false, clock: clock) else { return }
         let focus: CombinedShiftFocus?
         if case .switchLayout = action {
             // Only a qualified first solo reads AX, before its layout flip. Uppercase,
@@ -1277,8 +1295,9 @@ private func diagnosticFixtureEventIsAdmitted(_ event: CGEvent) -> Bool {
 
 private func processKeyboardInput(type: CGEventType, event: CGEvent, monitor: KeyboardMonitor,
                                   fence: InputEventFence, diagnosticFixture: Bool = false) -> Unmanaged<CGEvent>? {
-    let clock = KeyboardInputClock.capture(rawTimestamp: event.timestamp)
-    let admission = fence.enterPhysicalEvent(eventTimestamp: clock.eventTimestamp)
+    let callback = KeyboardCallbackAdmission.enter(event: event, fence: fence)
+    let clock = callback.clock
+    let admission = callback.admission
     let handoff = KeyboardCallbackEvent(event)
     let forwarded: Unmanaged<CGEvent>? = DispatchQueue.main.sync {
         let event = handoff.event
