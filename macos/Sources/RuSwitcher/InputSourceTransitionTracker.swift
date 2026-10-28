@@ -30,6 +30,17 @@ struct InputSourceTransitionTracker: Sendable {
         self.pending = nil
     }
 
+    /// A new user-requested source may supersede an older unresolved target,
+    /// but only after a fresh TIS read confirms that new source.
+    @discardableResult
+    mutating func confirmExplicitSelection(targetID: String, observedSourceID: String, at timestamp: UInt64) -> Bool {
+        guard !targetID.isEmpty, observedSourceID == targetID, let pending,
+              timestamp >= pending.startedAt else { return false }
+        recordCompletedWindow(start: pending.startedAt, end: timestamp)
+        self.pending = nil
+        return true
+    }
+
     /// Retains at most 64 controlled intervals, including completed fence leases.
     mutating func recordCompletedWindow(start: UInt64, end: UInt64) {
         guard start > 0, end >= start else { return }

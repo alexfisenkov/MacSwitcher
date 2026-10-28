@@ -5,8 +5,11 @@ enum VerifiedNativeFieldEditResult: Equatable {
     /// No text replacement was queued. Preparation/cancellation navigation may
     /// have been queued; this does not assert delivery of those non-text events.
     case refused
+    /// No Unicode was queued, but preparation/cancellation navigation has no
+    /// exact acknowledgement. A future attempt must capture a fresh field state.
+    case preparationUncertain(observation: NativeFieldObservation?)
     /// Last actual whole-field read, never a predicted insertion/result. It may
-    /// predate the last queued pair; callers must revalidate before any recovery.
+    /// predate queued Unicode; callers must revalidate before any recovery.
     case uncertain(observation: NativeFieldObservation?)
 }
 
@@ -164,20 +167,22 @@ enum VerifiedNativeFieldEditor {
         func cancelPreparation() -> VerifiedNativeFieldEditResult {
             // No text has been queued. Cleanup is preallocated non-text
             // navigation to the captured PID, under the remaining fence budget.
-            // It may be queued even after exact-field identity was lost; only
-            // an exact current original field can turn this into refused. That
-            // result means no text queued, not proven delivery of navigation.
+            // Never post it after losing exact-field identity. Refused means no
+            // text queued, not proven delivery of navigation.
             if let current = lastValidatedObservation,
                current.caretUTF16Location == 0, current.selectionLength == 0 {
                 // Shift+Left cannot move left at zero; a following Right would
                 // move a programmatically collapsed caret forward. Preserve it.
-                return .uncertain(observation: lastObservation)
+                return .preparationUncertain(observation: lastObservation)
+            }
+            guard checkpoint(until: deadline) else {
+                return .preparationUncertain(observation: lastObservation)
             }
             guard let cancel = access.cancelPreparedSelection, cancel(deadline) else {
-                return .uncertain(observation: lastObservation)
+                return .preparationUncertain(observation: lastObservation)
             }
             return awaitExact(plan.originalSnapshot, until: deadline)
-                ? .refused : .uncertain(observation: lastObservation)
+                ? .refused : .preparationUncertain(observation: lastObservation)
         }
 
         guard cheapCheckpoint(until: admissionDeadline), access.isEditable(admissionDeadline),

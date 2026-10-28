@@ -149,10 +149,27 @@ final class HeadlessNativeEditorTests: XCTestCase {
     }
 
     @MainActor
+    func testFocusLossAfterPreparationDoesNotQueueCancellationForOtherTextView() {
+        let field = Field()
+        let otherBefore = field.other.string
+        field.afterBatch = { field.identityValid = false }
+
+        guard case .preparationUncertain = field.run() else {
+            return XCTFail("Lost field identity before Unicode must remain preparation-only uncertainty")
+        }
+        XCTAssertEqual(field.batchCalls, 1)
+        XCTAssertEqual(field.cancellationCalls, 0)
+        XCTAssertFalse(field.textQueued)
+        XCTAssertEqual(field.other.string, otherBefore)
+    }
+
+    @MainActor
     func testGateLossAfterPreparationNeverQueuesReplacement() {
         let field = Field()
         field.afterBatch = { field.fenceActive = false }
-        guard case .uncertain = field.run() else { return XCTFail("Fence loss is not confirmation") }
+        guard case .preparationUncertain = field.run() else {
+            return XCTFail("Fence loss before Unicode must remain a preparation-only uncertainty")
+        }
         XCTAssertEqual(field.queued.count, 4)
         field.flush()
         XCTAssertEqual(field.view.string, "ghbd")

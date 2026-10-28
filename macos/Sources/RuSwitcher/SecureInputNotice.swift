@@ -5,7 +5,7 @@ import AppKit
 /// уводила фокус из поля пароля (пользователь терял позицию в терминале и вводил пароль заново).
 /// Теперь это неактивирующая плашка (как `CaretIndicator`): `.nonactivatingPanel` +
 /// `orderFrontRegardless`, без `NSApp.activate` и без `makeKey…` — фокус остаётся в поле ввода.
-/// Сама гаснет через несколько секунд; без действия остаётся click-through.
+/// Сама гаснет через несколько секунд; доступна кнопка закрытия и необязательное действие.
 @MainActor
 final class SecureInputNotice {
     enum Kind: Hashable {
@@ -16,6 +16,7 @@ final class SecureInputNotice {
     private let title: NSTextField
     private let body: NSTextField
     private let actionButton: NSButton
+    private let closeButton: NSButton
     private var onAction: (() -> Void)?
     private var lastShownAt: [Kind: Date] = [:]
     private var presentationGeneration = 0
@@ -34,7 +35,7 @@ final class SecureInputNotice {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
-        panel.ignoresMouseEvents = true                    // click-through — никогда не перехватываем
+        panel.ignoresMouseEvents = true
         panel.alphaValue = 0
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
         panel.isExcludedFromWindowsMenu = true
@@ -63,8 +64,18 @@ final class SecureInputNotice {
         actionButton.bezelStyle = .rounded
         actionButton.controlSize = .small
         actionButton.isHidden = true
+
+        let closeLabel = L10n.languageCode == "ru" ? "Закрыть уведомление" : "Close notification"
+        closeButton = NSButton(image: NSImage(systemSymbolName: "xmark", accessibilityDescription: closeLabel)!,
+                               target: nil, action: nil)
+        closeButton.bezelStyle = .inline
+        closeButton.isBordered = false
+        closeButton.controlSize = .small
+        closeButton.setAccessibilityLabel(closeLabel)
         actionButton.target = self
         actionButton.action = #selector(actionPressed)
+        closeButton.target = self
+        closeButton.action = #selector(closePressed)
 
         let stack = NSStackView(views: [title, body, actionButton])
         stack.orientation = .vertical
@@ -72,35 +83,45 @@ final class SecureInputNotice {
         stack.spacing = 4
         stack.translatesAutoresizingMaskIntoConstraints = false
         backdrop.addSubview(stack)
+        closeButton.translatesAutoresizingMaskIntoConstraints = false
+        backdrop.addSubview(closeButton)
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: backdrop.leadingAnchor, constant: 16),
-            stack.trailingAnchor.constraint(equalTo: backdrop.trailingAnchor, constant: -16),
+            stack.trailingAnchor.constraint(equalTo: backdrop.trailingAnchor, constant: -42),
             stack.topAnchor.constraint(equalTo: backdrop.topAnchor, constant: 14),
             stack.bottomAnchor.constraint(equalTo: backdrop.bottomAnchor, constant: -14),
+            closeButton.topAnchor.constraint(equalTo: backdrop.topAnchor, constant: 8),
+            closeButton.trailingAnchor.constraint(equalTo: backdrop.trailingAnchor, constant: -8),
+            closeButton.widthAnchor.constraint(equalToConstant: 24),
+            closeButton.heightAnchor.constraint(equalToConstant: 24),
         ])
     }
 
     /// Показать плашку (не крадёт фокус). Длительность зависит от объёма текста.
     @discardableResult
     func show(title titleText: String, body bodyText: String, kind: Kind? = nil,
-              actionTitle: String? = nil, onAction: (() -> Void)? = nil) -> Bool {
-        if let kind, let last = lastShownAt[kind], Date().timeIntervalSince(last) < 12 { return false }
+              actionTitle: String? = nil, onAction: (() -> Void)? = nil,
+              onWillPresent: (() -> Void)? = nil) -> Bool {
+        if let kind, let last = lastShownAt[kind], Date().timeIntervalSince(last) < 30 { return false }
         if let kind { lastShownAt[kind] = Date() }
+        onWillPresent?()
         presentationGeneration += 1
         title.stringValue = titleText
         body.stringValue = bodyText
         self.onAction = onAction
         actionButton.title = actionTitle ?? ""
         actionButton.isHidden = actionTitle == nil || onAction == nil
-        panel.ignoresMouseEvents = actionButton.isHidden
+        panel.ignoresMouseEvents = false
 
-        // Подгоняем высоту панели под содержимое, затем позиционируем сверху-по-центру экрана.
+        // Подгоняем высоту панели под содержимое и ставим рядом с указателем.
         panel.setContentSize(NSSize(width: width, height: 200))     // временно, чтобы layout развернулся
         panel.layoutIfNeeded()
         let fitH = panel.contentView?.fittingSize.height ?? 96
         let h = max(72, min(fitH, 220))
         panel.setContentSize(NSSize(width: width, height: h))
-        positionTopCenter(height: h)
+        if let origin = FeedbackPanelPlacement.origin(size: NSSize(width: width, height: h)) {
+            panel.setFrameOrigin(origin)
+        }
 
         panel.orderFrontRegardless()                                // показ БЕЗ активации приложения
         NSAnimationContext.runAnimationGroup { $0.duration = 0.14; panel.animator().alphaValue = 1 }
@@ -117,7 +138,7 @@ final class SecureInputNotice {
         return true
     }
 
-    private func hide() {
+    func hide() {
         hideTimer?.invalidate(); hideTimer = nil
         onAction = nil
         panel.ignoresMouseEvents = true
@@ -137,13 +158,5 @@ final class SecureInputNotice {
         action?()
     }
 
-    private func positionTopCenter(height h: CGFloat) {
-        let mouse = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first(where: { $0.frame.contains(mouse) })
-            ?? NSScreen.main ?? NSScreen.screens.first
-        guard let vf = screen?.visibleFrame else { return }
-        let x = vf.midX - width / 2
-        let y = vf.maxY - h - 12                                     // прижато к верху под меню-баром
-        panel.setFrameOrigin(NSPoint(x: x.rounded(), y: y.rounded()))
-    }
+    @objc private func closePressed() { hide() }
 }

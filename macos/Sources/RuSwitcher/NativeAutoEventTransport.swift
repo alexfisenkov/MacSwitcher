@@ -33,12 +33,15 @@ enum NativeFieldBooleanSignal: Equatable {
 enum NativeFieldEditabilityPolicy {
     static func allows(enabled: NativeFieldBooleanSignal, readOnly: NativeFieldBooleanSignal,
                        editable: NativeFieldBooleanSignal,
-                       selectedTextSettable: NativeFieldBooleanSignal) -> Bool {
+                       selectedTextSettable: NativeFieldBooleanSignal,
+                       valueSettable: NativeFieldBooleanSignal = .unavailable) -> Bool {
         guard enabled != .value(false), enabled != .invalid,
               readOnly != .value(true), readOnly != .invalid,
               editable != .value(false), editable != .invalid else { return false }
         if editable == .value(true) { return true }
-        return selectedTextSettable == .value(true)
+        if selectedTextSettable == .value(true) { return true }
+        guard selectedTextSettable != .invalid else { return false }
+        return valueSettable == .value(true)
     }
 }
 
@@ -233,10 +236,10 @@ extension NativeAutoEventTransport {
             cancelPreparedSelection: { phaseDeadline in
                 guard let cancelSelection else { return false }
                 return cancelSelection {
-                    ProcessInfo.processInfo.systemUptime < min(deadline, phaseDeadline)
-                        && inputBarrierIsActive()
-                        && NSWorkspace.shared.frontmostApplication?.processIdentifier == focus.processID
-                        && !AutoSwitchPolicy.secureInputActive
+                    let limit = min(deadline, phaseDeadline)
+                    return ProcessInfo.processInfo.systemUptime < limit && cheapGate()
+                        && validateFocus(until: limit)
+                        && ProcessInfo.processInfo.systemUptime < limit && cheapGate()
                 }
             },
             now: { ProcessInfo.processInfo.systemUptime },
@@ -292,8 +295,19 @@ private extension CombinedShiftFocus {
             let status = AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable)
             selectedTextSettable = .capability(status: status, settable: settable.boolValue)
         }
+        var valueSettable = NativeFieldBooleanSignal.unavailable
+        if editable == .unavailable,
+           selectedTextSettable == .value(false) || selectedTextSettable == .unavailable,
+           enabled != .value(false), enabled != .invalid,
+           readOnly != .value(true), readOnly != .invalid {
+            guard prepareRead() else { return false }
+            var settable = DarwinBoolean(false)
+            let status = AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable)
+            valueSettable = .capability(status: status, settable: settable.boolValue)
+        }
         return NativeFieldEditabilityPolicy.allows(enabled: enabled, readOnly: readOnly,
-            editable: editable, selectedTextSettable: selectedTextSettable)
+            editable: editable, selectedTextSettable: selectedTextSettable,
+            valueSettable: valueSettable)
     }
 
     /// Whole bounded raw UTF-16 read from the original AX object. Checking the

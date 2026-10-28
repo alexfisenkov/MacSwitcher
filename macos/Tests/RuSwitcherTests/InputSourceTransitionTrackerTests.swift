@@ -141,4 +141,60 @@ final class InputSourceTransitionTrackerTests: XCTestCase {
         XCTAssertTrue(tracker.needsRefresh(eventTimestamp: 35))
         XCTAssertFalse(tracker.needsRefresh(eventTimestamp: 25))
     }
+
+    func testExplicitSameTargetClosesPendingAndPreservesWindow() {
+        var tracker = InputSourceTransitionTracker()
+        tracker.noteUnconfirmed(targetID: "ru", startingAt: 10)
+        XCTAssertTrue(tracker.confirmExplicitSelection(targetID: "ru", observedSourceID: "ru", at: 20))
+        XCTAssertFalse(tracker.hasPending)
+        XCTAssertTrue(tracker.needsRefresh(eventTimestamp: 10))
+        XCTAssertTrue(tracker.needsRefresh(eventTimestamp: 20))
+        XCTAssertFalse(tracker.needsRefresh(eventTimestamp: 21))
+    }
+
+    func testExplicitDifferentTargetSupersedesOldPendingOnlyAfterMatchingObservation() {
+        var tracker = InputSourceTransitionTracker()
+        tracker.noteUnconfirmed(targetID: "ru", startingAt: 10)
+        tracker.observe(sourceID: "en", at: 15)
+        XCTAssertTrue(tracker.hasPending)
+        XCTAssertTrue(tracker.confirmExplicitSelection(targetID: "en", observedSourceID: "en", at: 25))
+        XCTAssertFalse(tracker.hasPending)
+        XCTAssertTrue(tracker.needsRefresh(eventTimestamp: 10))
+        XCTAssertTrue(tracker.needsRefresh(eventTimestamp: 15))
+        XCTAssertTrue(tracker.needsRefresh(eventTimestamp: 25))
+        XCTAssertFalse(tracker.needsRefresh(eventTimestamp: 26))
+    }
+
+    func testExplicitMismatchedObservationCannotResolveOldPending() {
+        var tracker = InputSourceTransitionTracker()
+        tracker.noteUnconfirmed(targetID: "ru", startingAt: 10)
+        XCTAssertFalse(tracker.confirmExplicitSelection(targetID: "en", observedSourceID: "ru", at: 20))
+        XCTAssertTrue(tracker.hasPending)
+        XCTAssertEqual(tracker.pendingTargetID, "ru")
+        XCTAssertTrue(tracker.needsRefresh(eventTimestamp: 21))
+    }
+
+    func testExplicitEmptyTargetOrObservationCannotResolvePending() {
+        var tracker = InputSourceTransitionTracker()
+        tracker.noteUnconfirmed(targetID: "ru", startingAt: 10)
+        XCTAssertFalse(tracker.confirmExplicitSelection(targetID: "", observedSourceID: "ru", at: 20))
+        XCTAssertFalse(tracker.confirmExplicitSelection(targetID: "en", observedSourceID: "", at: 20))
+        XCTAssertTrue(tracker.hasPending)
+    }
+
+    func testExplicitObservationBeforePendingStartCannotResolvePending() {
+        var tracker = InputSourceTransitionTracker()
+        tracker.noteUnconfirmed(targetID: "ru", startingAt: 10)
+        XCTAssertFalse(tracker.confirmExplicitSelection(targetID: "en", observedSourceID: "en", at: 9))
+        XCTAssertFalse(tracker.confirmExplicitSelection(targetID: "en", observedSourceID: "en", at: 0))
+        XCTAssertTrue(tracker.hasPending)
+        XCTAssertTrue(tracker.needsRefresh(eventTimestamp: 9))
+    }
+
+    func testExplicitConfirmationWithoutPendingDoesNotInventTransitionWindow() {
+        var tracker = InputSourceTransitionTracker()
+        XCTAssertFalse(tracker.confirmExplicitSelection(targetID: "en", observedSourceID: "en", at: 20))
+        XCTAssertFalse(tracker.hasPending)
+        XCTAssertFalse(tracker.needsRefresh(eventTimestamp: 20))
+    }
 }

@@ -355,6 +355,58 @@ final class ProductionCombinedShiftEditingTests: XCTestCase {
     }
 
     @MainActor
+    func testPreparationOnlyFailureDoesNotQuarantineFreshExplicitSelection() throws {
+        let pair = try layoutPair()
+        let contexts = [pair.en: pair.enToRu, pair.ru: pair.ruToEn]
+        let field = Field(pid: 1020, text: "ghbdtn")
+        let converter = Self.converter(for: [field])
+        let firstMonitor = KeyboardMonitor()
+        try type("ghbdtn", source: pair.en, monitor: firstMonitor)
+        field.loseFocusAfterSelection = true
+
+        XCTAssertFalse(try edit(field, monitor: firstMonitor, converter: converter,
+            context: pair.enToRu, contexts: contexts))
+        XCTAssertEqual(field.queuedText, 0)
+        XCTAssertEqual(field.text, "ghbdtn")
+        XCTAssertFalse(converter.hasUnconfirmedAXEdit)
+        XCTAssertTrue(converter.unconfirmedOriginals.isEmpty)
+
+        field.valid = true
+        field.loseFocusAfterSelection = false
+        let freshMonitor = KeyboardMonitor()
+        XCTAssertTrue(try edit(field, monitor: freshMonitor, converter: converter,
+            context: pair.enToRu, contexts: contexts))
+        XCTAssertEqual(field.text, "привет")
+        XCTAssertEqual(field.queuedText, 1)
+    }
+
+    @MainActor
+    func testEightPreparationOnlyFailuresDoNotExhaustRecoverySlotsForNinthField() throws {
+        let pair = try layoutPair()
+        let contexts = [pair.en: pair.enToRu, pair.ru: pair.ruToEn]
+        let fields = (0..<9).map { Field(pid: Int32(1030 + $0), text: "ghbdtn") }
+        let converter = Self.converter(for: fields)
+        for field in fields.prefix(8) {
+            let monitor = KeyboardMonitor()
+            try type("ghbdtn", source: pair.en, monitor: monitor)
+            field.loseFocusAfterSelection = true
+            XCTAssertFalse(try edit(field, monitor: monitor, converter: converter,
+                context: pair.enToRu, contexts: contexts))
+            XCTAssertEqual(field.queuedText, 0)
+        }
+        XCTAssertFalse(converter.hasUnconfirmedAXEdit)
+        XCTAssertTrue(converter.unconfirmedOriginals.isEmpty)
+
+        let ninth = fields[8]
+        let freshMonitor = KeyboardMonitor()
+        try type("ghbdtn", source: pair.en, monitor: freshMonitor)
+        XCTAssertTrue(try edit(ninth, monitor: freshMonitor, converter: converter,
+            context: pair.enToRu, contexts: contexts))
+        XCTAssertEqual(ninth.text, "привет")
+        XCTAssertEqual(ninth.queuedText, 1)
+    }
+
+    @MainActor
     func testExactOriginalReadbackAfterQueuedUnknownStaysQuarantined() throws {
         let pair = try layoutPair()
         let contexts = [pair.en: pair.enToRu, pair.ru: pair.ruToEn]

@@ -54,7 +54,11 @@ class PackageReleaseTests(unittest.TestCase):
         self.assertNotIn(b"sparkle-signatures:", result)
 
     def test_version_must_advance_and_tag_must_be_unused(self):
-        feed = release.APPCAST.read_bytes()
+        # Keep this contract independent of the newest published release.
+        feed = (f'<rss xmlns:sparkle="{release.SPARKLE}"><channel><item>'
+                '<sparkle:version>14</sparkle:version>'
+                '<sparkle:shortVersionString>0.1.0-alpha.14</sparkle:shortVersionString>'
+                '</item></channel></rss>').encode()
         with self.assertRaisesRegex(ValueError, "newer"):
             release.version_preflight({"version": "0.1.0-alpha.15", "build": 14}, feed)
         with patch.object(release.subprocess, "run", return_value=SimpleNamespace(returncode=0)):

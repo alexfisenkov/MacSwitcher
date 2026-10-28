@@ -925,6 +925,12 @@ final class TextConverter {
         }
         switch result {
         case .refused: return .refused
+        case .preparationUncertain:
+            // Navigation may still arrive, but no Unicode was queued. Do not
+            // reserve text-recovery state; the next attempt starts from a new
+            // selection/whole-field snapshot and input lease.
+            RuntimeDiagnostics.record(.nativePreparationNavigationUncertain)
+            return .refused
         case .confirmed:
             if let prepared {
                 let plan = selected

@@ -14,7 +14,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var monitoringActive = false
     private var caretIndicator: CaretIndicator?   // issue #10: флаг у каретки (бета, по умолчанию OFF)
     private let secureNotice = SecureInputNotice()  // issue #27: подсказка о защ. вводе без кражи фокуса
-    private let correctionToast = CorrectionToast()
     private let correctionExceptionOffer = CorrectionExceptionOffer()
     private var lastFlagShown: String?            // идентичность раскладки для детекта смены (не title!)
     private var badgeCache: [String: NSImage] = [:]  // монохромные плашки, чтобы не перерисовывать 2с-опросом
@@ -144,7 +143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let holder = AutoSwitchPolicy.secureInputHolderName() ?? L10n.securePausedUnknownApp
         // issue #27: неактивирующая плашка вместо NSAlert.runModal() — модалка активировала
         // приложение и уводила фокус из поля пароля (пользователь терял место в терминале).
-        secureNotice.show(title: L10n.securePausedTitle,
+        showFeedback(title: L10n.securePausedTitle,
                           body: String(format: L10n.securePausedBody, holder), kind: .secureInput)
     }
 
@@ -154,18 +153,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         keyboardMonitor.recordObservedInputSource(LayoutSwitcher.currentLayoutID())
         let pending = keyboardMonitor.pendingInputSourceTargetID
         guard LayoutSwitcher.currentLayoutID() != targetID,
-              pending == nil || pending == targetID else { return }
-        secureNotice.show(title: "MacSwitcher",
+              pending == targetID else { return }
+        showFeedback(title: "MacSwitcher",
             body: CorrectionFeedbackPolicy.sourceMessage(languageCode: L10n.languageCode),
             kind: .sourceFailure)
     }
 
+    @discardableResult
+    private func showFeedback(title: String, body: String, kind: SecureInputNotice.Kind? = nil,
+        actionTitle: String? = nil, onAction: (() -> Void)? = nil) -> Bool {
+        // A fresh failure retires an old exception offer even when the
+        // duplicate failure notice itself is throttled.
+        correctionExceptionOffer.hide()
+        return secureNotice.show(title: title, body: body, kind: kind,
+            actionTitle: actionTitle, onAction: onAction)
+    }
+
     private func offerExceptionAfterConfirmedUndo(_ notice: ConfirmedCorrectionNotice) {
+        secureNotice.hide()
         guard !SettingsManager.shared.deniedWordsSet.contains(notice.original.lowercased()) else { return }
         correctionExceptionOffer.show(notice, onSaved: { [weak self] in
             self?.predictionCoordinator.invalidate()
         }, onFailure: { [weak self] in
-            self?.secureNotice.show(title: "MacSwitcher",
+            self?.showFeedback(title: "MacSwitcher",
                 body: L10n.languageCode == "ru"
                     ? "Не удалось сохранить исключение. Откройте личный словарь в настройках."
                     : "Could not save the exception. Open the personal dictionary in Settings.",
@@ -175,7 +185,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func showUnknownEditNotice() {
         let hasRecovery = textConverter.hasUnconfirmedAXEdit
-        secureNotice.show(title: "MacSwitcher",
+        showFeedback(title: "MacSwitcher",
             body: CorrectionFeedbackPolicy.recoveryMessage(languageCode: L10n.languageCode),
             kind: .unknownEdit,
             actionTitle: hasRecovery ? (L10n.languageCode == "ru" ? "Показать исходный текст" : "Show original text") : nil,
@@ -462,42 +472,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.diagnosticRepro?.noteAutomaticApplication()
             self?.updateStatusIcon()
         }
-        predictionCoordinator.onCorrection = { [weak self] notice in
-            guard let self else { return }
-            self.correctionToast.show(original: notice.original, replacement: notice.replacement,
-                onUndo: { [weak self] in
-                    self?.predictionCoordinator.undoCorrection(id: notice.id) { [weak self] result in
-                        guard let self else { return }
-                        switch result {
-                        case .confirmed:
-                            self.updateStatusIcon()
-                            self.offerExceptionAfterConfirmedUndo(notice)
-                        case .refused:
-                            self.secureNotice.show(title: "MacSwitcher",
-                                body: L10n.languageCode == "ru"
-                                    ? "Текст или поле уже изменились. Отмена этой замены недоступна."
-                                    : "The text or field has changed. This correction can no longer be undone.",
-                                kind: .undoRefusal)
-                        case .unknown:
-                            self.showUnknownEditNotice()
-                        case .sourceNotConfirmed(let targetID):
-                            self.presentSourceFailure(targetID: targetID)
-                        }
-                    }
-                },
-                onNever: { [weak self] in
-                    do {
-                        try PersonalWordStore.shared.addPhrase(original: notice.original,
-                            replacement: notice.replacement, sourceLanguage: notice.sourceLanguage)
-                        self?.predictionCoordinator.invalidate()
-                    } catch {
-                        self?.secureNotice.show(title: "MacSwitcher",
-                            body: L10n.languageCode == "ru"
-                                ? "Не удалось сохранить исключение. Откройте личный словарь в настройках."
-                                : "Could not save the exception. Open the personal dictionary in Settings.")
-                    }
-                })
-        }
+        // Routine corrections stay quiet. The confirmed receipt remains
+        // available to double Shift; an explicit undo may offer an exception.
+        predictionCoordinator.onCorrection = nil
         predictionCoordinator.onConfirmedAutomaticUndo = { [weak self] notice in
             self?.offerExceptionAfterConfirmedUndo(notice)
         }
@@ -620,6 +597,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if LayoutSwitcher.currentLayoutID() != direction.targetLayoutID {
                 LayoutSwitcher.switchTo(layoutID: direction.targetLayoutID)
             }
+            // A fresh, confirmed user choice supersedes an older unresolved
+            // source request; passive observations still cannot clear it.
+            _ = keyboardMonitor.recordExplicitInputSourceSelection(
+                targetID: direction.targetLayoutID, observedSourceID: LayoutSwitcher.currentLayoutID())
             updateStatusIcon()
             return  // preserve typed buffers and undo; this may still be the first half of a double
         case .convert(let direction):
@@ -685,7 +666,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func showCombinedShiftRefusal() {
         DispatchQueue.main.async { [weak self] in
-            self?.secureNotice.show(title: "MacSwitcher",
+            self?.showFeedback(title: "MacSwitcher",
                 body: CorrectionFeedbackPolicy.retryMessage(languageCode: L10n.languageCode),
                 kind: .manualFailure)
         }
@@ -1007,7 +988,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             // A verified user choice is a source observation, not another text
             // edit. Preserve the confirmed replacement and its undo history.
-            keyboardMonitor.recordObservedInputSource(LayoutSwitcher.currentLayoutID())
+            _ = keyboardMonitor.recordExplicitInputSourceSelection(
+                targetID: id, observedSourceID: LayoutSwitcher.currentLayoutID())
             updateStatusIcon()
             return
         }

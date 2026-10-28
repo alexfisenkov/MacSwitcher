@@ -274,6 +274,12 @@ final class KeyboardMonitor: @unchecked Sendable {
     func recordObservedInputSource(_ sourceID: String) {
         sourceTransitions.observe(sourceID: sourceID, at: DispatchTime.now().uptimeNanoseconds)
     }
+    /// Call after an explicit source choice and a fresh observed TIS read.
+    @discardableResult
+    func recordExplicitInputSourceSelection(targetID: String, observedSourceID: String) -> Bool {
+        sourceTransitions.confirmExplicitSelection(targetID: targetID, observedSourceID: observedSourceID,
+            at: DispatchTime.now().uptimeNanoseconds)
+    }
     fileprivate func inputSourceNeedsRefresh(eventTimestamp: UInt64) -> Bool {
         sourceTransitions.needsRefresh(eventTimestamp: eventTimestamp)
     }

@@ -13,19 +13,19 @@ enum CorrectionFeedbackPolicy {
 
     static func retryMessage(languageCode: String) -> String {
         languageCode == "ru"
-            ? "Не получилось заменить. Выделите слово и нажмите Shift дважды."
-            : "Could not replace the text. Select a word and press Shift twice."
+            ? "Текст не изменён. Кликните в нужное поле, выделите фрагмент и повторите двойной Shift."
+            : "Text was not changed. Click the intended field, select the text, and press Shift twice again."
     }
 
     static func recoveryMessage(languageCode: String) -> String {
         languageCode == "ru"
-            ? "Не удалось проверить, заменился ли текст. Исходный текст сохранён в MacSwitcher. Откройте «Исходные тексты после сбоя» и скопируйте нужный текст."
-            : "The text replacement could not be verified. The original text is retained in MacSwitcher. Open Recovery originals and copy it."
+            ? "Не удалось проверить результат. Исходный текст сохранён в MacSwitcher."
+            : "Could not verify the result. The original text is preserved in MacSwitcher."
     }
 
     static func sourceMessage(languageCode: String) -> String {
         languageCode == "ru"
-            ? "Текст исправлен, но раскладка не подтверждена. Выберите нужную раскладку в меню ввода macOS."
-            : "The text was corrected, but the layout is unconfirmed. Select the needed layout in the macOS input menu."
+            ? "Текст исправлен. Выберите нужную раскладку в меню MacSwitcher."
+            : "Text corrected. Choose the needed keyboard layout in the MacSwitcher menu."
     }
 }

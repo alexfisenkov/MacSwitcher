@@ -222,17 +222,19 @@ final class VerifiedNativeFieldEditorTests: XCTestCase {
     }
 
     @MainActor
-    func testSelectionIdentityLossAtEveryPairNeverAuthorizesTextAndQueuesCleanup() {
+    func testSelectionIdentityLossAtEveryPairNeverAuthorizesTextOrCleanup() {
         for pair in 1...4 {
             let field = Field()
             field.onPost = { _ in if field.posted.count == pair { field.valid = false } }
-            guard case .uncertain = field.run() else { return XCTFail("Identity lost") }
+            guard case .preparationUncertain = field.run() else { return XCTFail("Identity lost before Unicode") }
             XCTAssertFalse(field.posted.contains(.insertReplacement))
             XCTAssertEqual(field.text, "ghbd")
-            XCTAssertEqual(field.selection, 0)
-            XCTAssertEqual(field.caret, 4)
+            // The original field may keep its prepared selection. Retrying
+            // cancellation after identity loss could navigate another field.
+            XCTAssertEqual(field.selection, 4)
+            XCTAssertEqual(field.caret, 0)
             XCTAssertEqual(field.textQueuedCount, 0)
-            XCTAssertEqual(field.cancellationCount, 1)
+            XCTAssertEqual(field.cancellationCount, 0)
         }
     }
 
@@ -266,20 +268,22 @@ final class VerifiedNativeFieldEditorTests: XCTestCase {
     }
 
     @MainActor
-    func testProgrammaticFocusMoveDuringSelectionNeverSubmitsTextIntoAnotherField() {
+    func testFocusMoveAfterPreparationNeverQueuesCancellationIntoOtherField() {
         let field = Field()
         let other = Field()
         other.text = "KEEPB"
         other.caret = 5
         field.onPost = { _ in
-            if field.posted.count == 1 { field.valid = false; field.deliveryTarget = other }
+            if field.posted.count == 4 { field.valid = false; field.deliveryTarget = other }
         }
-        guard case .uncertain = field.run() else { return XCTFail("Original focus was lost") }
+        guard case .preparationUncertain = field.run() else { return XCTFail("Original focus was lost before Unicode") }
         XCTAssertEqual(field.text, "ghbd")
+        XCTAssertEqual(field.selection, 4)
         XCTAssertEqual(other.text, "KEEPB")
+        XCTAssertTrue(other.delivered.isEmpty, "A PID-only cancellation must not navigate the newly focused field")
         XCTAssertFalse(field.posted.contains(.insertReplacement))
         XCTAssertEqual(field.textQueuedCount, 0)
-        XCTAssertEqual(field.cancellationCount, 1)
+        XCTAssertEqual(field.cancellationCount, 0)
     }
 
     @MainActor
@@ -314,7 +318,7 @@ final class VerifiedNativeFieldEditorTests: XCTestCase {
         field.onObserve = {
             if field.observeCount == 3 { field.caret = 0; field.selection = 0 }
         }
-        XCTAssertEqual(field.run(), .uncertain(observation:
+        XCTAssertEqual(field.run(), .preparationUncertain(observation:
             NativeFieldObservation(text: "ghbd", caretUTF16Location: 0, selectionLength: 0)))
         XCTAssertEqual(field.text, "ghbd")
         XCTAssertEqual(field.caret, 0)
@@ -323,10 +327,10 @@ final class VerifiedNativeFieldEditorTests: XCTestCase {
     }
 
     @MainActor
-    func testCleanupThatCannotBeQueuedIsUncertainWithNoTextReceipt() {
+    func testCleanupThatCannotBeQueuedIsPreparationUncertainWithNoTextReceipt() {
         let field = Field()
         field.onPost = { _ in if field.batchCount == 1 { field.barrier = false } }
-        guard case .uncertain = field.run() else { return XCTFail("Cleanup was not queued") }
+        guard case .preparationUncertain = field.run() else { return XCTFail("Cleanup was not queued") }
         XCTAssertFalse(field.posted.contains(.insertReplacement))
         XCTAssertEqual(field.cancellationCount, 0)
         XCTAssertEqual(field.textQueuedCount, 0)
@@ -386,7 +390,7 @@ final class VerifiedNativeFieldEditorTests: XCTestCase {
         field.deliverImmediately = false
         field.frozenClock = true
         field.onPost = { _ in field.observationUnavailable = true }
-        guard case .uncertain = field.run() else { return XCTFail("Missing delivery") }
+        guard case .preparationUncertain = field.run() else { return XCTFail("Missing preparation delivery") }
         XCTAssertLessThanOrEqual(field.observeCount, VerifiedNativeFieldEditor.maximumObservations)
         XCTAssertLessThanOrEqual(field.pauseCount, VerifiedNativeFieldEditor.maximumObservations)
         XCTAssertEqual(field.batchCount, 1)

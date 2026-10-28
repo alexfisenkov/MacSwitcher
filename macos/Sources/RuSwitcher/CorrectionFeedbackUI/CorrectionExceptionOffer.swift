@@ -98,9 +98,8 @@ final class CorrectionExceptionOffer: NSObject {
         self.onSaved = onSaved
         self.onFailure = onFailure
         message.stringValue = L10n.learnQuestion(notice.original)
-        if let screen = NSScreen.main {
-            panel.setFrameOrigin(NSPoint(x: screen.visibleFrame.maxX - panel.frame.width - 18,
-                y: screen.visibleFrame.maxY - panel.frame.height - 18))
+        if let origin = FeedbackPanelPlacement.origin(size: panel.frame.size) {
+            panel.setFrameOrigin(origin)
         }
         panel.orderFrontRegardless()
         let t = Timer(timeInterval: 12, repeats: false) { [weak self] _ in

@@ -32,6 +32,7 @@ enum RuntimeDiagnosticEvent: String, CaseIterable, Sendable {
     case autoWorkStarted, sourceNotificationPreserved, sourceNotificationInvalidated
     case harnessNativeStarted, harnessNativePassed, harnessNativeFailed
     case nativeAutoBlocked, nativeAutoInsertPosted, nativeAutoRemovalPosted, nativeAutoVerified, nativeAutoUncertain
+    case nativePreparationNavigationUncertain
     case nativeAutoFocusRetry, nativeAutoFocusRecovered, nativeAutoFocusRecheckFailed
     case nativeFenceHeldInput, nativeFenceInterrupted, nativeFenceUnavailable
     case fenceGateNotConfigured, fenceTapMissing, fenceTapDisabled, fenceInterrupted, fencePendingSource, fenceBusy
