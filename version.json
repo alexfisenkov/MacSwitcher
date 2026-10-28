@@ -1,9 +1,9 @@
 {
-  "version": "0.1.0-alpha.18",
+  "version": "0.1.0-alpha.19",
   "short_version": "0.1.0",
-  "build": 18,
+  "build": 19,
   "channel": "alpha",
   "url": "https://github.com/alexfisenkov/MacSwitcher/releases",
-  "notes": "Исправлена обработка времени Shift: пауза между одиночными нажатиями не должна распознаваться как двойное нажатие из-за масштаба или постоянной метки системного события. Время событий и окна допуска ввода приведены к единому монотонному домену.",
+  "notes": "Обновлён единый знак MacSwitcher Z—Я в приложении и на сайте.",
   "native_backend_accepted": false
 }

@@ -16,7 +16,9 @@ jobs:
           xcodebuild -version
           swift --version
       - name: Publication invariants
-        run: python3 script/check_public.py
+        run: |
+          python3 script/check_public.py
+          python3 script/check_website.py
       - name: Native regressions
         run: |
           swift script/prepare_ci_layouts.swift

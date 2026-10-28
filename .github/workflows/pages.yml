@@ -23,7 +23,7 @@ jobs:
         with:
           node-version: '22'
       - name: Validate static website and inline JavaScript
-        run: python3 script/check_website.py --javascript
+        run: python3 script/check_website.py --javascript --published-release
 
   deploy:
     needs: check

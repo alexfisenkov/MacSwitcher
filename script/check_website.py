@@ -5,10 +5,13 @@ from __future__ import annotations
 import argparse
 import html.parser
 import re
+import socket
 import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import unquote, urlparse
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "website"
@@ -51,9 +54,32 @@ def fail(message: str) -> None:
     raise SystemExit(1)
 
 
+def check_published_asset(url: str) -> None:
+    request = Request(url, method="HEAD")
+    try:
+        with urlopen(request, timeout=20) as response:
+            if response.status != 200:
+                fail(f"published alpha.19 archive returned HTTP {response.status}")
+            content_length = response.headers.get("Content-Length")
+            if content_length is not None:
+                try:
+                    size = int(content_length)
+                except ValueError:
+                    fail("published alpha.19 archive has an invalid Content-Length")
+                if size <= 0:
+                    fail("published alpha.19 archive is empty")
+    except HTTPError as error:
+        fail(f"published alpha.19 archive returned HTTP {error.code}")
+    except (TimeoutError, socket.timeout):
+        fail("timed out checking published alpha.19 archive")
+    except (URLError, OSError):
+        fail("could not check published alpha.19 archive (network error)")
+
+
 def main() -> None:
     args = argparse.ArgumentParser()
     args.add_argument("--javascript", action="store_true", help="also parse inline JavaScript with Node")
+    args.add_argument("--published-release", action="store_true", help="require the linked alpha.19 archive to be published and nonempty")
     options = args.parse_args()
     parsed: dict[Path, PageParser] = {}
     for page in PAGES:
@@ -86,12 +112,18 @@ def main() -> None:
                     fail(f"broken anchor in {page.name}: {raw}")
     if not (WEB / "assets/MacSwitcher.svg").is_file():
         fail("missing product mark")
+    canonical_mark = (ROOT / "assets/MacSwitcher.svg").read_bytes()
+    website_mark = (WEB / "assets/MacSwitcher.svg").read_bytes()
+    if canonical_mark != website_mark:
+        fail("website product mark differs from canonical assets/MacSwitcher.svg")
     index_source = (WEB / "index.html").read_text(encoding="utf-8")
-    download_url = "https://github.com/alexfisenkov/MacSwitcher/releases/download/v0.1.0-alpha.17/MacSwitcher-0.1.0-alpha.17-universal.zip"
+    download_url = "https://github.com/alexfisenkov/MacSwitcher/releases/download/v0.1.0-alpha.19/MacSwitcher-0.1.0-alpha.19-universal.zip"
     if index_source.count(download_url) != 2:
-        fail("expected alpha.17 universal download link in hero and setup sections")
+        fail("expected alpha.19 universal download link in hero and setup sections")
     if "releases/latest" in index_source or "MacSwitcher_Windows" in index_source:
         fail("release link must target the explicit prerelease and macOS archive")
+    if options.published_release:
+        check_published_asset(download_url)
     if options.javascript:
         node = __import__("shutil").which("node")
         if not node:
@@ -104,6 +136,8 @@ def main() -> None:
     print(f"PASS: {len(PAGES)} HTML pages, local links, anchors, and product asset")
     if options.javascript:
         print("PASS: inline JavaScript syntax")
+    if options.published_release:
+        print("PASS: linked alpha.19 archive is published")
 
 
 if __name__ == "__main__":

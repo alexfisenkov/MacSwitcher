@@ -1,7 +1,41 @@
 import AppKit
 
+final class SVGTextLabels: NSObject, XMLParserDelegate {
+    private(set) var labels: [String] = []
+    private var isReadingText = false
+    private var currentText = ""
+
+    func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String: String] = [:]) {
+        if elementName == "text" {
+            isReadingText = true
+            currentText = ""
+        }
+    }
+
+    func parser(_ parser: XMLParser, foundCharacters string: String) {
+        if isReadingText { currentText += string }
+    }
+
+    func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
+        guard elementName == "text" else { return }
+        let label = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !label.isEmpty { labels.append(label) }
+        isReadingText = false
+    }
+}
+
 // Original MacSwitcher artwork. No vendor artwork is used.
 let root = URL(fileURLWithPath: CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : ".")
+let svgURL = root.appendingPathComponent("assets/MacSwitcher.svg")
+let delegate = SVGTextLabels()
+guard let parser = XMLParser(contentsOf: svgURL) else {
+    fatalError("Cannot read canonical SVG at \(svgURL.path)")
+}
+parser.delegate = delegate
+guard parser.parse(), delegate.labels.count == 2 else {
+    fatalError("Canonical SVG must be valid XML and contain exactly two nonempty text labels")
+}
+let labels = delegate.labels
 let set = root.appendingPathComponent(".черновики/MacSwitcher.iconset")
 try FileManager.default.createDirectory(at: set, withIntermediateDirectories: true)
 func color(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> NSColor {
@@ -22,7 +56,7 @@ for size in [16, 32, 128, 256, 512] {
         let dark = color(20, 35, 61)
         dark.setFill()
         NSBezierPath(roundedRect: NSRect(x: 64, y: 64, width: 896, height: 896), xRadius: 220, yRadius: 220).fill()
-        for (x, text, fill) in [(155.0, "A", color(85, 200, 255)), (559.0, "Я", color(143, 240, 201))] {
+        for (x, text, fill) in [(155.0, labels[0], color(85, 200, 255)), (559.0, labels[1], color(143, 240, 201))] {
             fill.setFill()
             NSBezierPath(roundedRect: NSRect(x: x, y: 424, width: 310, height: 370), xRadius: 65, yRadius: 65).fill()
             let font = NSFont.systemFont(ofSize: 260, weight: .bold)

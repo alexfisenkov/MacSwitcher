@@ -2,7 +2,7 @@
   <rect x="64" y="64" width="896" height="896" rx="220" fill="#14233d"/>
   <rect x="155" y="230" width="310" height="370" rx="65" fill="#55c8ff"/>
   <rect x="559" y="230" width="310" height="370" rx="65" fill="#8ff0c9"/>
-  <text x="310" y="495" font-family="system-ui,sans-serif" font-weight="700" font-size="260" text-anchor="middle" fill="#14233d">A</text>
+  <text x="310" y="495" font-family="system-ui,sans-serif" font-weight="700" font-size="260" text-anchor="middle" fill="#14233d">Z</text>
   <text x="714" y="495" font-family="system-ui,sans-serif" font-weight="700" font-size="260" text-anchor="middle" fill="#14233d">Я</text>
   <path d="M270 715h470m-65-65 65 65-65 65M350 865l-65-65 65-65m-65 65h470" fill="none" stroke="#f7fbff" stroke-width="35" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
