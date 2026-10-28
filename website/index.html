@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="ru" class="scroll-smooth">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0a0a0a">
+  <meta name="description" content="MacSwitcher — локальная коррекция RU/EN и быстрые сочетания Shift для macOS.">
+  <title>MacSwitcher — быстрая коррекция RU/EN для macOS</title>
+  <link rel="icon" href="./assets/MacSwitcher.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./assets/MacSwitcher.svg">
+  <style>
+    :root { color-scheme: dark; --brand:#007aff; --ink:#0a0a0a; --muted:#9ca3af; }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; }
+    body { margin:0; background:var(--ink); color:#fff; font-family:-apple-system,system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+    ::selection { background:var(--brand); color:white; }
+    a { color:inherit; }
+    .glass { background:rgba(255,255,255,.05); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); border:1px solid rgba(255,255,255,.1); }
+    .nav { position:fixed; z-index:5; inset:0 0 auto; border:1px solid rgba(255,255,255,.1); }
+    .nav-inner,.container { width:min(100% - 2rem,80rem); margin:auto; }
+    .nav-row { min-height:4rem; display:flex; align-items:center; justify-content:space-between; gap:1rem; }
+    .brand { display:flex; align-items:center; gap:.55rem; font-size:1.25rem; font-weight:700; letter-spacing:-.025em; text-decoration:none; white-space:nowrap; }
+    .brand img { width:2rem; height:2rem; }
+    .nav-links { display:flex; align-items:center; gap:1.1rem; }
+    .nav-links a,.footer a { color:#d1d5db; text-decoration:none; transition:color .2s; }
+    .nav-links a:hover,.footer a:hover { color:white; }
+    .nav-link { display:inline-flex; align-items:center; min-height:44px; font-size:.875rem; }
+    .nav-setup { font-size:1rem; }
+    .button { min-height:44px; display:inline-flex; align-items:center; justify-content:center; gap:.5rem; padding:.8rem 1.3rem; border:0; border-radius:.8rem; color:#fff; background:var(--brand); font:inherit; font-weight:650; text-decoration:none; cursor:pointer; transition:background .2s,transform .2s,box-shadow .2s; }
+    .button:hover { background:#0869d1; }
+    .button-hero { padding:1rem 2rem; border-radius:1rem; font-size:1.125rem; line-height:1.5556; font-weight:700; box-shadow:0 0 20px rgba(0,122,255,.4); }
+    .button-hero:hover { transform:translateY(-3px); box-shadow:0 0 30px rgba(0,122,255,.6); }
+    .button-secondary { padding:1rem 2rem; border-radius:1rem; background:rgba(255,255,255,.1); font-size:1.125rem; line-height:1.5556; font-weight:500; }
+    .button-secondary:hover { background:rgba(255,255,255,.2); }
+    .nav-cta { padding:.5rem 1rem; border-radius:.5rem; font-size:.875rem; line-height:1.25rem; font-weight:500; }
+    .lang { min-width:44px; min-height:44px; font-size:.875rem; padding:.6rem .8rem; border:0; border-radius:999px; color:white; background:rgba(255,255,255,.1); font:inherit; cursor:pointer; }
+    .lang:hover { background:rgba(255,255,255,.2); }
+    .hero { padding:8rem 1rem 5rem; text-align:center; }
+    .hero-inner { max-width:56rem; margin:auto; }
+    h1 { margin:0 0 2rem; font-size:3rem; line-height:3rem; letter-spacing:-.025em; font-weight:800; }
+    .gradient { color:transparent; background:linear-gradient(90deg,#60a5fa,#a855f7); background-clip:text; -webkit-background-clip:text; }
+    .lead { max-width:42rem; margin:0 auto 2.5rem; color:var(--muted); font-size:1.25rem; line-height:1.75rem; }
+    .actions { display:flex; flex-wrap:wrap; justify-content:center; gap:1rem; }
+    .hero-note { margin:1.5rem 0 0; color:#d1d5db; font-size:1rem; line-height:1.5rem; }
+    .section { padding:5rem 0; }
+    .features { background:rgba(0,0,0,.5); }
+    h2 { margin:0 0 4rem; text-align:center; font-size:1.875rem; line-height:2.25rem; letter-spacing:0; }
+    .grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:2rem; }
+    .card { min-height:100%; padding:2rem; border-radius:1.5rem; }
+    .icon { margin-bottom:1rem; font-size:2.25rem; line-height:1.1111; }
+    h3 { margin:0 0 .75rem; font-size:1.25rem; line-height:1.75rem; }
+    .card p,.setup-copy { margin:0; color:var(--muted); line-height:1.625; }
+    .setup { padding-top:6rem; padding-bottom:6rem; text-align:center; }
+    .setup-inner { max-width:48rem; margin:auto; }
+    .setup-copy { margin:0 auto 1.75rem; font-size:1.1rem; }
+    .limit { margin:1.5rem 0 0; color:var(--muted); font-size:.95rem; line-height:1.65; }
+    .help { margin:2rem 0 0; color:var(--muted); }
+    .help a { display:inline-flex; align-items:center; min-height:44px; color:#60a5fa; }
+    .footer { margin-top:2.5rem; padding:3rem 0; border-top:1px solid rgba(255,255,255,.1); }
+    .footer-inner { display:flex; align-items:center; justify-content:space-between; gap:1.5rem; }
+    .copyright { color:#9ca3af; font-size:.875rem; }
+    .footer-links { display:flex; flex-wrap:wrap; justify-content:center; gap:.25rem 1.5rem; font-size:.875rem; }
+    .footer-links a { display:inline-flex; align-items:center; min-height:44px; }
+    @media(min-width:768px) { h1 { font-size:4.5rem; line-height:4.5rem; } h2 { font-size:2.25rem; line-height:2.5rem; } }
+    @media(max-width:767px) { .grid { grid-template-columns:1fr; } .footer-inner { flex-direction:column; text-align:center; } }
+    @media(max-width:639px) { .nav-links { gap:.45rem; } .nav-features,.nav-cta { display:none!important; } .actions { flex-direction:column; align-items:stretch; } .actions .button { width:100%; } }
+    @media(max-width:360px) { .nav-row { gap:.5rem; } .brand { gap:.375rem; font-size:1.0625rem; } .brand img { width:1.75rem; height:1.75rem; } .nav-links { gap:.25rem; } }
+    @media(prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior:auto!important; transition:none!important; } }
+  </style>
+</head>
+<body>
+  <nav class="nav glass" aria-label="Основная навигация" data-nav-aria>
+    <div class="nav-inner"><div class="nav-row">
+      <a class="brand" href="#top"><img src="./assets/MacSwitcher.svg" width="32" height="32" alt=""><span>MacSwitcher</span></a>
+      <div class="nav-links">
+        <a class="nav-link nav-features" href="#features" data-i18n="nav_features">Функции</a>
+        <a class="nav-link nav-setup" href="#download" data-i18n="nav_setup">Установка</a>
+        <button id="langToggle" class="lang" type="button" aria-label="Переключить на английский">EN</button>
+        <a class="button nav-cta" href="#download" data-i18n="nav_download">Скачать</a>
+      </div>
+    </div></div>
+  </nav>
+  <main id="top">
+    <section class="hero">
+      <div class="hero-inner">
+        <h1><span class="gradient" data-i18n="hero_gradient">Быстрая</span> <span data-i18n="hero_title">коррекция RU/EN для Mac</span></h1>
+        <p class="lead" data-i18n="hero_subtitle">MacSwitcher помогает менять раскладку и исправлять текст сочетаниями Shift. Коррекция работает локально на Mac.</p>
+        <div class="actions">
+          <a class="button button-hero" href="https://github.com/alexfisenkov/MacSwitcher/releases/download/v0.1.0-alpha.17/MacSwitcher-0.1.0-alpha.17-universal.zip"><span data-i18n="btn_download">Скачать alpha.17 для Mac</span></a>
+          <a class="button button-secondary" href="#download" data-i18n="btn_install">Как установить</a>
+        </div>
+        <p class="hero-note" data-i18n="hero_compat">macOS 13 или новее · Apple Silicon и Intel · ранняя alpha-версия</p>
+      </div>
+    </section>
+    <section id="features" class="section features">
+      <div class="container">
+        <h2 data-i18n="features_title">Пишите на двух языках свободнее</h2>
+        <div class="grid">
+          <article class="card glass"><div class="icon" aria-hidden="true">⇧</div><h3 data-i18n="feature1_title">Привычные Shift-жесты</h3><p data-i18n="feature1_desc">Короткое нажатие Shift переключает раскладку. Двойное нажатие быстро исправляет последнее слово или выделенный текст; результат можно отменить.</p></article>
+          <article class="card glass"><div class="icon" aria-hidden="true">✦</div><h3 data-i18n="feature2_title">Коррекция во время набора</h3><p data-i18n="feature2_desc">MacSwitcher может исправлять уверенно распознанные слова по локальным RU/EN словарям и текстовым правилам. Поведение зависит от приложения и поля.</p></article>
+          <article class="card glass"><div class="icon" aria-hidden="true">⌂</div><h3 data-i18n="feature3_title">Локальная работа</h3><p data-i18n="feature3_desc">Текст и словари остаются на Mac: приложение не отправляет набранный текст на сервер. Защищённые поля паролей пропускаются.</p></article>
+        </div>
+      </div>
+    </section>
+    <section id="download" class="section setup">
+      <div class="container setup-inner">
+        <h2 data-i18n="setup_title">Установите MacSwitcher</h2>
+        <p class="setup-copy" data-i18n="setup_steps">Скачайте и распакуйте универсальный ZIP, перенесите MacSwitcher.app в папку «Программы» и откройте его на Mac с macOS 13 или новее. Включите автокоррекцию при первом запуске или в меню MacSwitcher. Предоставьте приложению разрешения «Универсальный доступ» и «Мониторинг ввода» в системных настройках — они нужны для работы с клавиатурой и активным текстовым полем.</p>
+        <a class="button button-hero" href="https://github.com/alexfisenkov/MacSwitcher/releases/download/v0.1.0-alpha.17/MacSwitcher-0.1.0-alpha.17-universal.zip" data-i18n="btn_download">Скачать alpha.17 для Mac</a>
+        <p class="limit" data-i18n="alpha_note">Это ранняя версия: в некоторых приложениях переключение и коррекция могут срабатывать не каждый раз. Если заметите ошибку, сообщите о ней.</p>
+        <p class="limit"><a href="https://github.com/alexfisenkov/MacSwitcher/releases" data-i18n="all_releases">Все выпуски и контрольные суммы</a> · <a href="https://github.com/alexfisenkov/MacSwitcher/issues" data-i18n="issues">Сообщить о проблеме</a></p>
+        <p class="help"><span data-i18n="help">Нужна помощь?</span> <a href="mailto:a.fisenkov@gmail.com">a.fisenkov@gmail.com</a></p>
+      </div>
+    </section>
+  </main>
+  <footer class="footer">
+    <div class="container footer-inner">
+      <div class="copyright">© <span id="year"></span> MacSwitcher</div>
+      <div class="footer-links">
+        <a href="./legal.html#privacy" class="legal-link" data-i18n="privacy">Конфиденциальность</a>
+        <a href="./legal.html#terms" class="legal-link" data-i18n="terms">Условия использования</a>
+        <a href="mailto:a.fisenkov@gmail.com" data-i18n="contact">Контакты</a>
+      </div>
+    </div>
+  </footer>
+  <script>
+    const translations = {
+      ru: {
+        title: 'MacSwitcher — быстрая коррекция RU/EN для macOS', nav_aria: 'Основная навигация', switch_to: 'Переключить на английский', description: 'MacSwitcher — локальная коррекция RU/EN и быстрые сочетания Shift для macOS.', nav_features: 'Функции', nav_setup: 'Установка', nav_download: 'Скачать', hero_gradient: 'Быстрая', hero_title: 'коррекция RU/EN для Mac', hero_subtitle: 'MacSwitcher помогает менять раскладку и исправлять текст сочетаниями Shift. Коррекция работает локально на Mac.', btn_download: 'Скачать alpha.17 для Mac', btn_install: 'Как установить', hero_compat: 'macOS 13 или новее · Apple Silicon и Intel · ранняя alpha-версия', features_title: 'Пишите на двух языках свободнее', feature1_title: 'Привычные Shift-жесты', feature1_desc: 'Короткое нажатие Shift переключает раскладку. Двойное нажатие быстро исправляет последнее слово или выделенный текст; результат можно отменить.', feature2_title: 'Коррекция во время набора', feature2_desc: 'MacSwitcher может исправлять уверенно распознанные слова по локальным RU/EN словарям и текстовым правилам. Поведение зависит от приложения и поля.', feature3_title: 'Локальная работа', feature3_desc: 'Текст и словари остаются на Mac: приложение не отправляет набранный текст на сервер. Защищённые поля паролей пропускаются.', setup_title: 'Установите MacSwitcher', setup_steps: 'Скачайте и распакуйте универсальный ZIP, перенесите MacSwitcher.app в папку «Программы» и откройте его на Mac с macOS 13 или новее. Включите автокоррекцию при первом запуске или в меню MacSwitcher. Предоставьте приложению разрешения «Универсальный доступ» и «Мониторинг ввода» в системных настройках — они нужны для работы с клавиатурой и активным текстовым полем.', alpha_note: 'Это ранняя версия: в некоторых приложениях переключение и коррекция могут срабатывать не каждый раз. Если заметите ошибку, сообщите о ней.', all_releases: 'Все выпуски и контрольные суммы', issues: 'Сообщить о проблеме', help: 'Нужна помощь?', privacy: 'Конфиденциальность', terms: 'Условия использования', contact: 'Контакты'
+      },
+      en: {
+        title: 'MacSwitcher — fast RU/EN correction for macOS', nav_aria: 'Main navigation', switch_to: 'Switch to Russian', description: 'MacSwitcher provides local RU/EN correction and quick Shift shortcuts for macOS.', nav_features: 'Features', nav_setup: 'Setup', nav_download: 'Download', hero_gradient: 'Fast', hero_title: 'RU/EN correction for Mac', hero_subtitle: 'MacSwitcher helps switch layouts and correct text with Shift shortcuts. Text correction runs locally on your Mac.', btn_download: 'Download alpha.17 for Mac', btn_install: 'How to install', hero_compat: 'macOS 13 or later · Apple Silicon and Intel · early alpha release', features_title: 'Move between two languages with ease', feature1_title: 'Familiar Shift shortcuts', feature1_desc: 'A short Shift press switches the keyboard layout. A quick double press corrects the last word or selected text; you can undo the change.', feature2_title: 'Correction as you type', feature2_desc: 'MacSwitcher can correct confidently recognized words using local RU/EN dictionaries and text rules. Behavior depends on the app and text field.', feature3_title: 'Works locally', feature3_desc: 'Text and dictionaries stay on your Mac: the app does not send typed text to a server. Password fields are skipped.', setup_title: 'Install MacSwitcher', setup_steps: 'Download and extract the universal ZIP, move MacSwitcher.app to Applications, and open it on a Mac running macOS 13 or later. Enable auto-correction on first launch or from the MacSwitcher menu. Grant Accessibility and Input Monitoring permissions in System Settings; they are needed to work with the keyboard and active text field.', alpha_note: 'This is an early version: switching or correction may not work every time in some apps. If you notice a problem, please report it.', all_releases: 'All releases and checksums', issues: 'Report an issue', help: 'Need help?', privacy: 'Privacy', terms: 'Terms of use', contact: 'Contact'
+      }
+    };
+    const requestedLang = new URLSearchParams(location.search).get('lang');
+    let currentLang = ['ru', 'en'].includes(requestedLang) ? requestedLang : 'ru';
+    function setLanguage(lang, updateUrl = false) {
+      currentLang = lang;
+      document.documentElement.lang = lang;
+      document.querySelectorAll('[data-i18n]').forEach((element) => {
+        const value = translations[lang][element.dataset.i18n];
+        if (value) element.textContent = value;
+      });
+      document.title = translations[lang].title;
+      document.querySelector('[data-nav-aria]').setAttribute('aria-label', translations[lang].nav_aria);
+      document.getElementById('langToggle').setAttribute('aria-label', translations[lang].switch_to);
+      document.querySelector('meta[name="description"]').content = translations[lang].description;
+      document.getElementById('langToggle').textContent = lang === 'ru' ? 'EN' : 'RU';
+      document.querySelectorAll('.legal-link').forEach((link) => { link.href = `./legal.html?lang=${lang}${link.hash}`; });
+      if (updateUrl) {
+        const url = new URL(window.location.href);
+        url.searchParams.set('lang', lang);
+        window.history.replaceState(null, '', url.pathname + url.search + url.hash);
+      }
+    }
+    document.getElementById('year').textContent = new Date().getFullYear();
+    setLanguage(currentLang);
+    document.getElementById('langToggle').addEventListener('click', () => setLanguage(currentLang === 'ru' ? 'en' : 'ru', true));
+  </script>
+</body>
+</html>

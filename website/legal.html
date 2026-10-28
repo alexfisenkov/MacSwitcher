@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0a0a0a">
+  <meta name="description" content="Информация о конфиденциальности и условиях использования MacSwitcher.">
+  <title>MacSwitcher — юридическая информация</title>
+  <link rel="icon" href="./assets/MacSwitcher.svg" type="image/svg+xml">
+  <style>
+    * { box-sizing:border-box; }
+    body { margin:0; padding-bottom:5rem; background:#0a0a0a; color:#fff; font-family:-apple-system,system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+    a { color:#60a5fa; }
+    .glass { background:rgba(255,255,255,.05); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); border:1px solid rgba(255,255,255,.1); }
+    .nav { width:100%; margin-bottom:2.5rem; border-width:0 0 1px; }
+    .nav-inner { width:min(100% - 2rem,56rem); min-height:4.125rem; margin:auto; padding:.5rem 0; display:flex; align-items:center; justify-content:space-between; gap:1rem; }
+    .brand { min-height:44px; display:flex; align-items:center; gap:.5rem; color:white; font-size:1.25rem; font-weight:700; text-decoration:none; transition:color .2s; }
+    .brand:hover { color:#d1d5db; }
+    .brand img { width:2rem; height:2rem; }
+    .lang { min-width:44px; min-height:44px; padding:.6rem .8rem; border:0; border-radius:999px; color:white; background:rgba(255,255,255,.1); font:inherit; cursor:pointer; }
+    .lang:hover { background:rgba(255,255,255,.2); }
+    .container { width:min(100% - 2rem,56rem); margin:auto; }
+    .back { display:inline-flex; align-items:center; min-height:44px; margin-bottom:1rem; color:#d1d5db; text-decoration:none; }
+    .back:hover { color:#fff; }
+    .tablist { display:flex; flex-wrap:wrap; gap:.75rem; margin-bottom:2rem; padding-bottom:1rem; border-bottom:1px solid rgba(255,255,255,.1); }
+    .tab { min-height:44px; padding:.5rem 1rem; border:0; border-radius:.25rem; background:rgba(255,255,255,.1); color:#fff; font:inherit; cursor:pointer; transition:background .2s; }
+    .tab:hover,.tab[aria-selected="true"] { background:#007aff; }
+    .tab:focus-visible,.lang:focus-visible,.brand:focus-visible,a:focus-visible { outline:2px solid #93c5fd; outline-offset:3px; }
+    .panel { min-height:20rem; padding:2rem; border-radius:1rem; overflow-wrap:anywhere; }
+    .prose h1 { margin:0 0 1.5rem; color:#fff; font-size:2rem; line-height:1.2; font-weight:700; }
+    .prose h2 { margin:2rem 0 1rem; color:#fff; font-size:1.5rem; line-height:1.35; font-weight:700; }
+    .prose p,.prose li { color:#9ca3af; line-height:1.6; }
+    .prose p { margin:0 0 1rem; }
+    .prose ul { margin:0 0 1rem; padding-left:1.5rem; }
+    .prose li { margin-bottom:.5rem; }
+    [hidden] { display:none!important; }
+    @media(max-width:560px) { .nav-inner { width:min(100% - 2rem,56rem); } .panel { padding:2rem; } }
+    @media(prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior:auto!important; transition:none!important; } }
+  </style>
+</head>
+<body>
+  <nav class="nav glass" aria-label="Основная навигация" data-nav-aria>
+    <div class="nav-inner">
+      <a class="brand" href="./index.html?lang=ru" data-home-link><img src="./assets/MacSwitcher.svg" width="32" height="32" alt=""><span>MacSwitcher</span></a>
+      <button id="langToggle" class="lang" type="button" aria-label="Переключить на английский">EN</button>
+    </div>
+  </nav>
+  <main class="container">
+    <a class="back" href="./index.html?lang=ru" data-home-link data-i18n="back_home">← На главную</a>
+    <div class="tablist" role="tablist" aria-label="Юридические документы" data-tablist-aria>
+      <button id="privacy-tab" class="tab" type="button" role="tab" aria-controls="privacy" aria-selected="true" tabindex="0" data-document-tab="privacy" data-i18n="privacy_tab">Конфиденциальность</button>
+      <button id="terms-tab" class="tab" type="button" role="tab" aria-controls="terms" aria-selected="false" tabindex="-1" data-document-tab="terms" data-i18n="terms_tab">Условия использования</button>
+    </div>
+    <div class="panel glass">
+      <article id="privacy" class="prose" role="tabpanel" aria-labelledby="privacy-tab" tabindex="0">
+        <h1 data-i18n="privacy_heading">Конфиденциальность</h1>
+        <p data-i18n="privacy_1">MacSwitcher выполняет коррекцию текста на устройстве. Приложение не отправляет набранный текст, содержимое выделения или личный словарь на сервер проекта. Защищённые поля паролей пропускаются.</p>
+        <p data-i18n="privacy_2">Для взаимодействия с клавиатурой и активным текстовым полем macOS запрашивает системные разрешения «Универсальный доступ» и «Мониторинг ввода». Разрешения обрабатываются настройками macOS и могут быть отозваны пользователем.</p>
+        <p data-i18n="privacy_3">Этот статический сайт не использует аналитику, рекламные трекеры, формы или cookies. При переходе к загрузке GitHub может обрабатывать сетевые данные по своей политике конфиденциальности.</p>
+      </article>
+      <article id="terms" class="prose" role="tabpanel" aria-labelledby="terms-tab" tabindex="0" hidden>
+        <h1 data-i18n="terms_heading">Условия использования</h1>
+        <p data-i18n="terms_1">MacSwitcher распространяется как предварительная alpha-версия. Поведение зависит от приложения, конкретного текстового поля и системных разрешений; совместимость со всеми приложениями не гарантируется.</p>
+        <p><span data-i18n="terms_2a">Исходный код приложения распространяется по лицензии MIT. Уведомления об авторстве и происхождении кода приведены в </span><a href="https://github.com/alexfisenkov/MacSwitcher/blob/main/NOTICE.md">NOTICE.md</a><span data-i18n="terms_2b">. Словарные данные имеют отдельные условия лицензирования, указанные в </span><a href="https://github.com/alexfisenkov/MacSwitcher/blob/main/dictionaries/NOTICE.md">dictionaries/NOTICE.md</a>.</p>
+      </article>
+    </div>
+  </main>
+  <script>
+    const translations={
+      ru:{page_title:'MacSwitcher — юридическая информация',page_description:'Информация о конфиденциальности и условиях использования MacSwitcher.',nav_aria:'Основная навигация',switch_to:'Переключить на английский',tablist_aria:'Юридические документы',back_home:'← На главную',privacy_tab:'Конфиденциальность',terms_tab:'Условия использования',privacy_heading:'Конфиденциальность',privacy_1:'MacSwitcher выполняет коррекцию текста на устройстве. Приложение не отправляет набранный текст, содержимое выделения или личный словарь на сервер проекта. Защищённые поля паролей пропускаются.',privacy_2:'Для взаимодействия с клавиатурой и активным текстовым полем macOS запрашивает системные разрешения «Универсальный доступ» и «Мониторинг ввода». Разрешения обрабатываются настройками macOS и могут быть отозваны пользователем.',privacy_3:'Этот статический сайт не использует аналитику, рекламные трекеры, формы или cookies. При переходе к загрузке GitHub может обрабатывать сетевые данные по своей политике конфиденциальности.',terms_heading:'Условия использования',terms_1:'MacSwitcher распространяется как предварительная alpha-версия. Поведение зависит от приложения, конкретного текстового поля и системных разрешений; совместимость со всеми приложениями не гарантируется.',terms_2a:'Исходный код приложения распространяется по лицензии MIT. Уведомления об авторстве и происхождении кода приведены в ',terms_2b:'. Словарные данные имеют отдельные условия лицензирования, указанные в '},
+      en:{page_title:'MacSwitcher — legal information',page_description:'Privacy information and terms of use for MacSwitcher.',nav_aria:'Main navigation',switch_to:'Switch to Russian',tablist_aria:'Legal documents',back_home:'← Back to MacSwitcher',privacy_tab:'Privacy',terms_tab:'Terms of use',privacy_heading:'Privacy',privacy_1:'MacSwitcher corrects text on your device. The app does not send typed text, selected text, or your personal dictionary to the project server. Password fields are skipped.',privacy_2:'macOS requests Accessibility and Input Monitoring permissions to interact with the keyboard and active text field. These permissions are managed by macOS settings and can be revoked by the user.',privacy_3:'This static website uses no analytics, advertising trackers, forms, or cookies. When you download from GitHub, GitHub may process network data under its own privacy policy.',terms_heading:'Terms of use',terms_1:'MacSwitcher is distributed as a prerelease alpha. Behavior depends on the app, the specific text field, and system permissions; compatibility with every app is not guaranteed.',terms_2a:'The app source code is distributed under the MIT License. Copyright and source notices are in ',terms_2b:'. Dictionary data has separate license terms listed in '}
+    };
+    const requestedLang=new URLSearchParams(location.search).get('lang');
+    let currentLang=['ru','en'].includes(requestedLang)?requestedLang:'ru';
+    function setLanguage(lang,updateUrl=false){
+      currentLang=lang;
+      document.documentElement.lang=lang;
+      document.title=translations[lang].page_title;
+      document.querySelector('meta[name="description"]').content=translations[lang].page_description;
+      document.querySelector('[data-nav-aria]').setAttribute('aria-label',translations[lang].nav_aria);
+      document.querySelector('[data-tablist-aria]').setAttribute('aria-label',translations[lang].tablist_aria);
+      document.getElementById('langToggle').textContent=lang==='ru'?'EN':'RU';
+      document.getElementById('langToggle').setAttribute('aria-label',translations[lang].switch_to);
+      document.querySelectorAll('[data-home-link]').forEach((link)=>{link.href=`./index.html?lang=${lang}`});
+      document.querySelectorAll('[data-i18n]').forEach((element)=>{
+        const value=translations[lang][element.dataset.i18n];
+        if(value) element.textContent=value;
+      });
+      if(updateUrl){const url=new URL(window.location.href);url.searchParams.set('lang',lang);window.history.replaceState(null,'',url.pathname+url.search+url.hash)}
+    }
+    function selectDocument(name,updateUrl=true,focusTab=false){
+      const selected=['privacy','terms'].includes(name)?name:'privacy';
+      document.querySelectorAll('[data-document-tab]').forEach((tab)=>{
+        const active=tab.dataset.documentTab===selected;
+        tab.setAttribute('aria-selected',String(active));
+        tab.tabIndex=active?0:-1;
+        document.getElementById(tab.getAttribute('aria-controls')).hidden=!active;
+        if(active&&focusTab)tab.focus();
+      });
+      if(updateUrl)window.history.replaceState(null,'',`${location.pathname}${location.search}#${selected}`);
+    }
+    document.querySelectorAll('[data-document-tab]').forEach((tab)=>{
+      tab.addEventListener('click',()=>selectDocument(tab.dataset.documentTab));
+      tab.addEventListener('keydown',(event)=>{
+        const tabs=[...document.querySelectorAll('[data-document-tab]')];
+        const index=tabs.indexOf(tab);
+        let next=null;
+        if(event.key==='ArrowRight'||event.key==='ArrowDown')next=(index+1)%tabs.length;
+        else if(event.key==='ArrowLeft'||event.key==='ArrowUp')next=(index+tabs.length-1)%tabs.length;
+        else if(event.key==='Home')next=0;
+        else if(event.key==='End')next=tabs.length-1;
+        if(next!==null){event.preventDefault();selectDocument(tabs[next].dataset.documentTab,true,true)}
+      });
+    });
+    document.getElementById('langToggle').addEventListener('click',()=>setLanguage(currentLang==='ru'?'en':'ru',true));
+    setLanguage(currentLang);
+    selectDocument(location.hash.slice(1),false);
+  </script>
+</body>
+</html>
