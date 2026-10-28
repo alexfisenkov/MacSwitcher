@@ -6,6 +6,17 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/alexfisenkov/MacSwitcher</link>
     <description>Signed MacSwitcher releases</description>
     <item>
+      <title>MacSwitcher 0.1.0-alpha.20</title>
+      <link>https://github.com/alexfisenkov/MacSwitcher/releases/tag/v0.1.0-alpha.20</link>
+      <pubDate>Wed, 28 Oct 2026 17:07:53 +0000</pubDate>
+      <description>Упрощено меню в строке состояния. Обработка ввода и сохранённые настройки не изменены.</description>
+      <sparkle:version>20</sparkle:version>
+      <sparkle:shortVersionString>0.1.0-alpha.20</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <sparkle:channel>alpha</sparkle:channel>
+      <enclosure url="https://github.com/alexfisenkov/MacSwitcher/releases/download/v0.1.0-alpha.20/MacSwitcher-0.1.0-alpha.20-universal.zip" length="23953489" type="application/octet-stream" sparkle:edSignature="wKfb7QMlU9javdHRPRbE9o+Y9dCN5G83w08mPHi97y9l3PJsxbDpEQ+PhYLeVkT/25uJvHcD2AQhJYwWWRjcDg=="></enclosure>
+    </item>
+    <item>
       <title>MacSwitcher 0.1.0-alpha.19</title>
       <link>https://github.com/alexfisenkov/MacSwitcher/releases/tag/v0.1.0-alpha.19</link>
       <pubDate>Wed, 28 Oct 2026 14:54:19 +0000</pubDate>
@@ -128,6 +139,6 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: 9PArv6SM3Je1csOHc7z0KAVXIhOx1L+vkZwu7eKeOv7I26sTqtxrqJdBEz/lU7uMce4wOGRQ00T1D8KHz2++CQ==
-length: 12655
+edSignature: XNZcWyrLbyYkM/V8N3+g317u8HVVM/W3NafcBe7OsZeoeTc9Sge9+vgF4cAM9ezZDrziWH8gIJLUwZh/yvWYCA==
+length: 13625
 -->
