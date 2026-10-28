@@ -1,9 +1,9 @@
 {
-  "version": "0.1.0-alpha.19",
+  "version": "0.1.0-alpha.20",
   "short_version": "0.1.0",
-  "build": 19,
+  "build": 20,
   "channel": "alpha",
   "url": "https://github.com/alexfisenkov/MacSwitcher/releases",
-  "notes": "Обновлён единый знак MacSwitcher Z—Я в приложении и на сайте.",
+  "notes": "Упрощено меню в строке состояния. Обработка ввода и сохранённые настройки не изменены.",
   "native_backend_accepted": false
 }

@@ -60,8 +60,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func setupSettingsCallbacks() {
         settingsController.onAutoSwitchChanged = { [weak self] _ in
             self?.resetCombinedShiftAfterPause()
-            // Не адресуем пункт по индексу: с 2.5.0 item(at: 0) — строка версии, а со списком
-            // раскладок индексы вообще динамические. Пересборка — как у соседних колбэков.
+            // Не адресуем пункт по индексу: меню группирует пункты по назначению,
+            // а recovery и раскладки появляются динамически. Пересборка — как у соседних колбэков.
             self?.rebuildMenu()
         }
         settingsController.onPerAppLayoutChanged = { [weak self] enabled in
@@ -845,25 +845,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func rebuildMenu() {
         let menu = NSMenu()
 
-        // Строка версии (с dev-меткой для непубликуемых сборок) — чтобы было видно, какой билд.
-        let ver = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-        let devTag = Bundle.main.infoDictionary?["RSDevTag"] as? String ?? ""
-        let displayName = Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String ?? "MacSwitcher"
-        let verItem = NSMenuItem(title: "\(displayName) \(ver)\(devTag)", action: nil, keyEquivalent: "")
-        verItem.isEnabled = false
-        menu.addItem(verItem)
-        menu.addItem(NSMenuItem.separator())
-
-        // Список раскладок как в системном меню ввода: флаг + имя, галочка на текущей,
-        // клик — переключение. Актуализируется в menuWillOpen при каждом открытии.
-        for item in layoutMenuItems() { menu.addItem(item) }
-        let sourceRecovery = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-        sourceRecovery.tag = Self.sourceRecoveryItemTag
-        sourceRecovery.isEnabled = false
-        menu.addItem(sourceRecovery)
-        refreshSourceRecoveryMenu(sourceRecovery)
-        menu.addItem(NSMenuItem.separator())
-
         let autoItem = NSMenuItem(title: L10n.menuAutoSwitch, action: #selector(toggleAutoSwitch), keyEquivalent: "")
         autoItem.target = self
         autoItem.state = SettingsManager.shared.autoSwitchEnabled ? .on : .off
@@ -879,47 +860,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             : "Original texts after unconfirmed edits", action: nil, keyEquivalent: "")
         recovery.target = self
         recovery.tag = Self.recoveryCopyItemTag
-        recovery.isEnabled = textConverter.hasUnconfirmedAXEdit
         menu.addItem(recovery)
         refreshRecoveryMenu(recovery)
+        menu.addItem(NSMenuItem.separator())
 
+        let inputSource = NSMenuItem(title: L10n.menuInputSource, action: nil, keyEquivalent: "")
+        inputSource.tag = Self.inputSourceMenuTag
+        let inputSourceMenu = NSMenu()
+        for item in layoutMenuItems() { inputSourceMenu.addItem(item) }
+        inputSource.submenu = inputSourceMenu
+        menu.addItem(inputSource)
+
+        let sourceRecovery = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        sourceRecovery.tag = Self.sourceRecoveryItemTag
+        sourceRecovery.isEnabled = false
+        menu.addItem(sourceRecovery)
+        refreshSourceRecoveryMenu(sourceRecovery)
+
+        let more = NSMenuItem(title: L10n.menuMore, action: nil, keyEquivalent: "")
+        let moreMenu = NSMenu()
         let keySoundItem = NSMenuItem(title: L10n.menuKeySound, action: #selector(toggleKeySound), keyEquivalent: "")
         keySoundItem.target = self
         keySoundItem.state = SettingsManager.shared.keySound ? .on : .off
-        menu.addItem(keySoundItem)
+        moreMenu.addItem(keySoundItem)
 
         let caretFlagItem = NSMenuItem(title: L10n.menuCaretFlag, action: #selector(toggleCaretFlag), keyEquivalent: "")
         caretFlagItem.target = self
         caretFlagItem.state = SettingsManager.shared.caretFlag ? .on : .off
-        menu.addItem(caretFlagItem)
+        moreMenu.addItem(caretFlagItem)
 
         // Единый стиль меню-бара (Sequoia): монохромная плашка вместо цветного флага.
         let monoIconItem = NSMenuItem(title: L10n.menuMonoIcon, action: #selector(toggleMonoIcon), keyEquivalent: "")
         monoIconItem.target = self
         monoIconItem.state = SettingsManager.shared.monochromeIcon ? .on : .off
-        menu.addItem(monoIconItem)
+        moreMenu.addItem(monoIconItem)
 
         // Режим удалённого стола отложен в 2.5 — тумблер скрыт за флагом (для тестирования).
         if SettingsManager.shared.showRemoteDesktopBeta {
             let remoteDesktopItem = NSMenuItem(title: L10n.menuRemoteDesktop, action: #selector(toggleRemoteDesktop), keyEquivalent: "")
             remoteDesktopItem.target = self
             remoteDesktopItem.state = SettingsManager.shared.remoteDesktopMode ? .on : .off
-            menu.addItem(remoteDesktopItem)
+            moreMenu.addItem(remoteDesktopItem)
         }
-
-        menu.addItem(NSMenuItem.separator())
 
         let permItem = NSMenuItem(title: L10n.menuCheckPermissions, action: #selector(recheckPermissions), keyEquivalent: "")
         permItem.target = self
-        menu.addItem(permItem)
+        moreMenu.addItem(NSMenuItem.separator())
+        moreMenu.addItem(permItem)
+        let updateItem = NSMenuItem(title: L10n.menuCheckUpdates, action: #selector(checkUpdates), keyEquivalent: "")
+        updateItem.target = self
+        moreMenu.addItem(updateItem)
+        more.submenu = moreMenu
 
         let settingsItem = NSMenuItem(title: L10n.menuSettings, action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
-
-        let updateItem = NSMenuItem(title: L10n.menuCheckUpdates, action: #selector(checkUpdates), keyEquivalent: "")
-        updateItem.target = self
-        menu.addItem(updateItem)
+        menu.addItem(more)
 
         menu.addItem(NSMenuItem.separator())
 
@@ -936,6 +932,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// Метка пунктов-раскладок, чтобы находить и обновлять их группу в меню.
     private static let layoutItemTag = 741
+    private static let inputSourceMenuTag = 742
 
     /// Пункты списка раскладок: «флаг + локализованное имя», галочка на текущей.
     private func layoutMenuItems() -> [NSMenuItem] {
@@ -960,11 +957,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard menu === statusItem.menu else { return }
         if let recovery = menu.item(withTag: Self.recoveryCopyItemTag) { refreshRecoveryMenu(recovery) }
         if let recovery = menu.item(withTag: Self.sourceRecoveryItemTag) { refreshSourceRecoveryMenu(recovery) }
-        let insertAt = menu.items.firstIndex { $0.tag == Self.layoutItemTag } ?? 2
-        for old in menu.items where old.tag == Self.layoutItemTag { menu.removeItem(old) }
-        for (offset, item) in layoutMenuItems().enumerated() {
-            menu.insertItem(item, at: insertAt + offset)
-        }
+        guard let layoutMenu = menu.item(withTag: Self.inputSourceMenuTag)?.submenu else { return }
+        for old in layoutMenu.items where old.tag == Self.layoutItemTag { layoutMenu.removeItem(old) }
+        for item in layoutMenuItems() { layoutMenu.addItem(item) }
     }
 
     private func refreshSourceRecoveryMenu(_ item: NSMenuItem) {
@@ -1123,7 +1118,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func refreshRecoveryMenu(_ parent: NSMenuItem) {
-        parent.isEnabled = textConverter.hasUnconfirmedAXEdit
+        let hasRecovery = textConverter.hasUnconfirmedAXEdit
+        parent.isEnabled = hasRecovery
+        parent.isHidden = !hasRecovery
         let submenu = NSMenu()
         for (index, original) in textConverter.unconfirmedOriginals.enumerated() {
             let title = L10n.languageCode == "ru" ? "Скопировать исходный текст \(index + 1)" : "Copy original text \(index + 1)"

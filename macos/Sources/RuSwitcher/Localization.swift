@@ -74,6 +74,8 @@ enum L10n {
     static var settingsTriggerDoubleTap: String { s("settings.triggerDoubleTap") }
     static var settingsTriggerHint: String { s("settings.triggerHint") }
     static var menuAutoConvert: String { s("menu.autoConvert") }
+    static var menuInputSource: String { s("menu.inputSource") }
+    static var menuMore: String { s("menu.more") }
     static var menuKeySound: String { s("menu.keySound") }
     static var menuRemoteDesktop: String { s("menu.remoteDesktop") }
     static var menuCaretFlag: String { s("menu.caretFlag") }
@@ -181,7 +183,10 @@ enum L10n {
             "settings.betaChannel": ("Включать альфа- и бета-выпуски", "Include alpha and beta releases"),
             "settings.betaChannel.hint": ("Предлагать предварительные выпуски MacSwitcher. Установка — после подтверждения.", "Include MacSwitcher prereleases. Installation requires confirmation."),
             "settings.autoConvert.hint": ("Локальная RU/EN-коррекция при наборе и на границе слова. Неоднозначный текст может остаться без изменений.", "Local RU/EN correction during typing and at word boundaries. Ambiguous text may be left unchanged."),
-            "settings.version": ("Переключение раскладки и коррекция RU/EN", "Keyboard layout switching and RU/EN correction")
+            "settings.version": ("Переключение раскладки и коррекция RU/EN", "Keyboard layout switching and RU/EN correction"),
+            "menu.autoConvert": ("Автоисправление", "Automatic correction"),
+            "menu.inputSource": ("Раскладка", "Input Source"),
+            "menu.more": ("Дополнительно", "More")
         ]
         if let pair = own[key] { return currentLang == "ru" ? pair.0 : pair.1 }
         return strings[currentLang]?[key] ?? strings["en"]![key] ?? key
