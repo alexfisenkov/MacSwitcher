@@ -6,6 +6,17 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/alexfisenkov/MacSwitcher</link>
     <description>Signed MacSwitcher releases</description>
     <item>
+      <title>MacSwitcher 0.1.0-alpha.17</title>
+      <link>https://github.com/alexfisenkov/MacSwitcher/releases/tag/v0.1.0-alpha.17</link>
+      <pubDate>Wed, 28 Oct 2026 12:58:38 +0000</pubDate>
+      <description>Усилена защита паролей до чтения текста. Ограничены истории клавиш и предиктивный буфер Unicode; длинные слова не исправляются по усечённому фрагменту. Уточнены сообщения при неизвестном результате и слишком большом личном словаре. Сборщик не принимает путь внутри Applications или через символьную ссылку.</description>
+      <sparkle:version>17</sparkle:version>
+      <sparkle:shortVersionString>0.1.0-alpha.17</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <sparkle:channel>alpha</sparkle:channel>
+      <enclosure url="https://github.com/alexfisenkov/MacSwitcher/releases/download/v0.1.0-alpha.17/MacSwitcher-0.1.0-alpha.17-universal.zip" length="23948006" type="application/octet-stream" sparkle:edSignature="4keD5SFO5Ac9QfzS0vHonay7UgekzS8AM+j/VRHPPEKe6MYcds4aOrrjFZjb0yQ/0aWDwC7XVNVusvggB5QVDA=="></enclosure>
+    </item>
+    <item>
       <title>MacSwitcher 0.1.0-alpha.16</title>
       <link>https://github.com/alexfisenkov/MacSwitcher/releases/tag/v0.1.0-alpha.16</link>
       <pubDate>Wed, 28 Oct 2026 03:32:42 +0000</pubDate>
@@ -95,6 +106,6 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: Za3zPfbLQr0e7tHeJBhYBdCp7x6nG57t6JBGt1oR66jN2+z4fZ/BQ7h7R2lwh5q1UBx55jVZs2OW66lr+BV1Dw==
-length: 9124
+edSignature: XKT7xRzDY/TroK4bCpi/GHGQH2qelziV8IDr7GEpzSmO1m65YENEqcU/YnPixstKiGyX+3canqwn0LXCPExxDQ==
+length: 10484
 -->
