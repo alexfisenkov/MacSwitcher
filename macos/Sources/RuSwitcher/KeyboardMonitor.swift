@@ -669,6 +669,13 @@ final class KeyboardMonitor: @unchecked Sendable {
         inputRevision &+= 1
     }
 
+    /// A successful held callback starts a fresh gesture; an interrupted lease
+    /// cannot start one from compressed delivery.
+    func allowCombinedShift(after admission: InputEventFence.Admission) -> Bool {
+        if admission.wasHeld || admission.interrupted { interruptCombinedShift() }
+        return !admission.interrupted
+    }
+
     func resetCombinedShift() {
         guard combinedShiftEnabled else { return }
         interruptCombinedShift()
@@ -718,7 +725,7 @@ final class KeyboardMonitor: @unchecked Sendable {
         }
     }
 
-    private func handleCombinedShift(flags: CGEventFlags, keyCode: UInt16, timestamp: UInt64) {
+    private func handleCombinedShift(flags: CGEventFlags, keyCode: UInt16, clock: KeyboardInputClock) {
         let otherModifiers: CGEventFlags = [.maskCommand, .maskControl, .maskAlternate, .maskSecondaryFn]
         guard SettingsManager.shared.autoSwitchEnabled, !AutoSwitchPolicy.secureInputActive,
               flags.intersection(otherModifiers).isEmpty,
@@ -735,10 +742,10 @@ final class KeyboardMonitor: @unchecked Sendable {
         let side: CombinedShiftGesture.Side = keyCode == KC.leftShift ? .left : .right
         if flags.contains(.maskShift) {
             guard let context = LayoutSwitcher.combinedShiftContext() else { interruptCombinedShift(); return }
-            combinedShiftGesture.press(side, at: timestamp, context: context)
+            combinedShiftGesture.press(side, clock: clock, context: context)
             return
         }
-        guard let action = combinedShiftGesture.release(side, at: timestamp) else { return }
+        guard let action = combinedShiftGesture.release(side, clock: clock) else { return }
         let focus: CombinedShiftFocus?
         if case .switchLayout = action {
             // Only a qualified first solo reads AX, before its layout flip. Uppercase,
@@ -1000,9 +1007,12 @@ final class KeyboardMonitor: @unchecked Sendable {
     }
 
     /// Возвращает true, если событие надо «съесть» (только Caps Lock в consume-режиме).
-    fileprivate func handleFlagsChanged(flags: CGEventFlags, keyCode: UInt16, timestamp: UInt64) -> Bool {
+    fileprivate func handleFlagsChanged(flags: CGEventFlags, keyCode: UInt16,
+                                        clock: KeyboardInputClock, allowCombinedShift: Bool) -> Bool {
         invalidatePrediction()  // do not advance combined-Shift revision between its two taps
-        if combinedShiftEnabled { handleCombinedShift(flags: flags, keyCode: keyCode, timestamp: timestamp) }
+        if combinedShiftEnabled && allowCombinedShift {
+            handleCombinedShift(flags: flags, keyCode: keyCode, clock: clock)
+        }
         handleSwitchFlags(flags: flags, keyCode: keyCode)   // issue #14: второй хоткей
         handleCaseFlags(flags: flags, keyCode: keyCode)     // issue #29: третий хоткей (регистр)
         if combinedShiftEnabled && triggerConfig.isShift { return false }
@@ -1267,7 +1277,8 @@ private func diagnosticFixtureEventIsAdmitted(_ event: CGEvent) -> Bool {
 
 private func processKeyboardInput(type: CGEventType, event: CGEvent, monitor: KeyboardMonitor,
                                   fence: InputEventFence, diagnosticFixture: Bool = false) -> Unmanaged<CGEvent>? {
-    let admission = fence.enterPhysicalEvent(eventTimestamp: event.timestamp)
+    let clock = KeyboardInputClock.capture(rawTimestamp: event.timestamp)
+    let admission = fence.enterPhysicalEvent(eventTimestamp: clock.eventTimestamp)
     let handoff = KeyboardCallbackEvent(event)
     let forwarded: Unmanaged<CGEvent>? = DispatchQueue.main.sync {
         let event = handoff.event
@@ -1280,8 +1291,9 @@ private func processKeyboardInput(type: CGEventType, event: CGEvent, monitor: Ke
         }
         if admission.wasHeld { RuntimeDiagnostics.record(.nativeFenceHeldInput) }
         if admission.interrupted { RuntimeDiagnostics.record(.nativeFenceInterrupted) }
+        let allowCombinedShift = monitor.allowCombinedShift(after: admission)
         let needsSourceRefresh = admission.needsSourceRefresh
-            || monitor.inputSourceNeedsRefresh(eventTimestamp: event.timestamp)
+            || monitor.inputSourceNeedsRefresh(eventTimestamp: clock.eventTimestamp ?? 0)
         var observedSource: String?
         func observeSourceOnce() -> String {
             if let observedSource { return observedSource }
@@ -1297,7 +1309,8 @@ private func processKeyboardInput(type: CGEventType, event: CGEvent, monitor: Ke
             remoteDesktopMode: SettingsManager.shared.remoteDesktopMode,
             observeSource: observeSourceOnce)
         let result = keyboardEventOnMain(type: type, event: event, monitor: monitor,
-            renderedSourceLayoutID: renderedSourceLayoutID)
+            renderedSourceLayoutID: renderedSourceLayoutID, clock: clock,
+            allowCombinedShift: allowCombinedShift)
         monitor.schedulePendingCombinedShiftConversion(after: fence)
         return result
     }
@@ -1313,7 +1326,8 @@ private final class KeyboardCallbackEvent: @unchecked Sendable {
 }
 
 private func keyboardEventOnMain(type: CGEventType, event: CGEvent,
-                                 monitor: KeyboardMonitor, renderedSourceLayoutID: String?) -> Unmanaged<CGEvent>? {
+                                 monitor: KeyboardMonitor, renderedSourceLayoutID: String?,
+                                 clock: KeyboardInputClock, allowCombinedShift: Bool) -> Unmanaged<CGEvent>? {
 
     if type == .keyDown {
         let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
@@ -1349,7 +1363,8 @@ private func keyboardEventOnMain(type: CGEventType, event: CGEvent,
             renderedText: rendered, renderedSourceLayoutID: renderedSourceLayoutID)
     } else if type == .flagsChanged {
         let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
-        if monitor.handleFlagsChanged(flags: event.flags, keyCode: keyCode, timestamp: event.timestamp) {
+        if monitor.handleFlagsChanged(flags: event.flags, keyCode: keyCode,
+                                      clock: clock, allowCombinedShift: allowCombinedShift) {
             return nil  // съедаем Caps Lock, чтобы не переключался регистр
         }
     } else if type == .leftMouseDown || type == .rightMouseDown || type == .otherMouseDown

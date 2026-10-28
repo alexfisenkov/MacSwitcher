@@ -18,6 +18,19 @@ final class CombinedShiftGestureTests: XCTestCase {
         XCTAssertEqual(gesture.release(.left, at: 60 * ms), .switchLayout(enToRu))
     }
 
+    func testWrongScaleRawTimestampCannotTurnTwoSecondsIntoDouble() {
+        var gesture = CombinedShiftGesture(configuration: .init(doubleWindowNanoseconds: 120_000_000))
+        let base: UInt64 = 100_000_000_000
+        func clock(_ nanoseconds: UInt64) -> KeyboardInputClock {
+            KeyboardInputClock(rawTimestamp: nanoseconds * 3 / 125, receivedAt: nanoseconds,
+                numerator: 125, denominator: 3)
+        }
+        gesture.press(.left, clock: clock(base), context: enToRu)
+        XCTAssertEqual(gesture.release(.left, clock: clock(base + 50_000_000)), .switchLayout(enToRu))
+        gesture.press(.right, clock: clock(base + 2_000_000_000), context: ruToEn)
+        XCTAssertEqual(gesture.release(.right, clock: clock(base + 2_050_000_000)), .switchLayout(ruToEn))
+    }
+
     func testDoubleConvertsUsingSourceBeforeFirstSwitch() {
         var gesture = CombinedShiftGesture()
         XCTAssertEqual(tap(&gesture, .left, down: 10, up: 60, context: enToRu), .switchLayout(enToRu))
