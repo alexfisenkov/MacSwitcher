@@ -76,6 +76,15 @@ class ProductTests(unittest.TestCase):
                 build.validate_output(root / "alias/MacSwitcher.app")
             build.validate_output(root / "real/MacSwitcher.app")
 
+    def test_builder_refuses_system_applications_without_writing_there(self):
+        build = load("build_app")
+        for output in (Path("/System/Applications/MacSwitcher.app"),
+                       Path("/System/Applications/Utilities/MacSwitcher.app")):
+            with self.subTest(output=output), self.assertRaises(ValueError):
+                build.validate_output(output)
+        with tempfile.TemporaryDirectory(dir="/private/tmp") as directory:
+            build.validate_output(Path(directory) / "MacSwitcher.app")
+
     def test_release_identity_cannot_silently_be_ad_hoc(self):
         build = load("build_app")
         for identity in ("-", "", "Apple Development: Example (0123456789)"):

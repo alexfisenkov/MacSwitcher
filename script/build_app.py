@@ -62,7 +62,8 @@ def validate_output(output):
     output = Path(os.path.abspath(os.path.expanduser(output)))
     if output.name != "MacSwitcher.app":
         raise ValueError("Build output must be named MacSwitcher.app")
-    installed_roots = (Path("/Applications"), Path.home() / "Applications",
+    installed_roots = (Path("/Applications"), Path("/System/Applications"),
+                       Path.home() / "Applications",
                        Path("/System/Volumes/Data/Applications"))
     if any(root == output or root in output.parents for root in installed_roots):
         raise ValueError("Build output cannot be inside an installed Applications directory")
