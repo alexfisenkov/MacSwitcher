@@ -135,4 +135,49 @@ final class RepeatedCombinedShiftTests: XCTestCase {
         XCTAssertEqual(secondPair.release(.right, at: 200_000_000), .convert(ruToEn),
             "A second independent pair preserves its own original direction")
     }
+
+    @MainActor
+    func testLongPhysicalHistoryNeverSnapshotsTruncatedWordOrLine() throws {
+        let pair = fixturePair()
+        let monitor = KeyboardMonitor()
+        for _ in 0..<2_000 {
+            monitor.handleKeyDown(keyCode: 5, flags: [], renderedSourceLayoutID: pair.englishID)
+        }
+        XCTAssertTrue(monitor.currentWordKeys.isEmpty)
+        XCTAssertTrue(monitor.lineKeys.isEmpty)
+        monitor.handleKeyDown(keyCode: KC.backspace, flags: [], renderedSourceLayoutID: pair.englishID)
+        monitor.handleKeyDown(keyCode: 5, flags: [], renderedSourceLayoutID: pair.englishID)
+        XCTAssertTrue(monitor.currentWordKeys.isEmpty, "Backspace inside an overflowed token cannot start a suffix history")
+        monitor.resetLineBuffer(sourceLayoutID: pair.englishID)
+        monitor.handleKeyDown(keyCode: 5, flags: [], renderedSourceLayoutID: pair.englishID)
+        XCTAssertTrue(monitor.lineKeys.isEmpty, "A source notification cannot reopen an incomplete line")
+        monitor.handleKeyDown(keyCode: KC.space, flags: [], renderedSourceLayoutID: pair.englishID)
+        try type("ghbdtn", sourceID: pair.englishID, pair: pair, into: monitor)
+        XCTAssertEqual(monitor.currentWordKeys.count, 6)
+        XCTAssertTrue(monitor.lineKeys.isEmpty, "An overflowed line must not become a partial line")
+        let request = try XCTUnwrap(snapshot(.switchLayout(pair.englishToRussian), monitor: monitor,
+            focus: focus(), contexts: pair.contextBySource))
+        XCTAssertEqual(request.wordKeys.count, 6)
+        XCTAssertTrue(request.lineKeys.isEmpty)
+    }
+
+    @MainActor
+    func testForwardedAndMultiwordHistoryRemainBoundedAcrossManyBoundaries() {
+        let pair = fixturePair()
+        let monitor = KeyboardMonitor()
+        for _ in 0..<1_000 { monitor.handleForwardedChar("a", renderedSourceLayoutID: pair.englishID) }
+        XCTAssertTrue(monitor.currentWordKeys.isEmpty)
+        XCTAssertTrue(monitor.lineKeys.isEmpty)
+        monitor.handleForwardedChar(" ", renderedSourceLayoutID: pair.englishID)
+        for ch in "normal" { monitor.handleForwardedChar(ch, renderedSourceLayoutID: pair.englishID) }
+        XCTAssertEqual(monitor.currentWordKeys.count, 6)
+        XCTAssertTrue(monitor.lineKeys.isEmpty)
+        monitor.handleKeyDown(keyCode: KC.enter, flags: [], renderedSourceLayoutID: pair.englishID)
+        for _ in 0..<1_000 {
+            monitor.handleKeyDown(keyCode: 5, flags: [], renderedSourceLayoutID: pair.englishID)
+            monitor.handleKeyDown(keyCode: KC.space, flags: [], renderedSourceLayoutID: pair.englishID)
+        }
+        XCTAssertTrue(monitor.lineKeys.isEmpty)
+        XCTAssertLessThanOrEqual(monitor.prevWordKeys.count, 512)
+    }
 }

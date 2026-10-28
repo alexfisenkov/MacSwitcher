@@ -23,15 +23,30 @@ struct PredictionSnapshot: Sendable, Equatable {
 /// Only a bounded window of text typed in this focus session is retained in RAM.
 /// Earlier short tokens survive the next word so `f привет` can become `а привет`.
 struct PredictionInputBuffer: Sendable {
+    /// Storage budget in UTF-16 units; one grapheme can contain many scalars.
     static let maximumCharacters = 384
     private(set) var text = ""
     private(set) var processID: Int32?
     private(set) var sessionID: UInt64 = 0
     private(set) var cumulativeUTF16Offset = 0
     private var eventUTF16Length = 0
+    private var discardTokenUntilBoundary = false
 
     mutating func reset() {
         text = ""; processID = nil; sessionID &+= 1; cumulativeUTF16Offset = 0; eventUTF16Length = 0
+        discardTokenUntilBoundary = false
+    }
+
+    private mutating func trimToBudget() {
+        while text.utf16.count > Self.maximumCharacters {
+            // Keep only complete tokens. A truncated current token cannot be scored.
+            guard let firstSpace = text.firstIndex(where: \.isWhitespace) else {
+                text = ""
+                discardTokenUntilBoundary = true
+                return
+            }
+            text.removeSubrange(text.startIndex...firstSpace)
+        }
     }
 
     mutating func append(_ characters: String, processID: Int32) {
@@ -45,19 +60,19 @@ struct PredictionInputBuffer: Sendable {
         cumulativeUTF16Offset = offset
         eventUTF16Length = characters.utf16.count
         self.processID = processID
-        text.append(characters)
-        if text.count > Self.maximumCharacters {
-            text = String(text.suffix(Self.maximumCharacters))
-            // Do not present a truncated token as a complete dictionary word.
-            if let firstSpace = text.firstIndex(where: \.isWhitespace) {
-                text.removeSubrange(text.startIndex...firstSpace)
-            } else { text = "" }
+        if discardTokenUntilBoundary {
+            guard let boundary = characters.firstIndex(where: \.isWhitespace) else { return }
+            discardTokenUntilBoundary = false
+            text = String(characters[boundary...])
+        } else {
+            text.append(characters)
         }
+        trimToBudget()
     }
 
     mutating func replaceSuffix(original: String, replacement: String) -> Bool {
-        guard !original.isEmpty, text.hasSuffix(original),
-              replacement.count <= Self.maximumCharacters,
+        guard !discardTokenUntilBoundary, !original.isEmpty, text.hasSuffix(original),
+              replacement.utf16.count <= Self.maximumCharacters,
               cumulativeUTF16Offset >= original.utf16.count else { return false }
         let (offset, overflow) = (cumulativeUTF16Offset - original.utf16.count)
             .addingReportingOverflow(replacement.utf16.count)
@@ -65,7 +80,7 @@ struct PredictionInputBuffer: Sendable {
         cumulativeUTF16Offset = offset
         text.removeLast(original.count)
         text.append(replacement)
-        if text.count > Self.maximumCharacters { text = String(text.suffix(Self.maximumCharacters)) }
+        trimToBudget()
         return true
     }
 
@@ -81,7 +96,7 @@ struct PredictionInputBuffer: Sendable {
         guard !starts.isEmpty else { return nil }
         let start = starts[max(0, starts.count - 2)]
         let suffix = String(text[start...])
-        guard suffix.count <= 192 else { return nil }
+        guard suffix.utf16.count <= 192 else { return nil }
         let preceding = text[..<start].split(whereSeparator: \.isWhitespace).suffix(4).map(String.init)
         return PredictionSnapshot(suffix: suffix, precedingWords: preceding,
             sourceLayoutID: sourceLayoutID, processID: processID,

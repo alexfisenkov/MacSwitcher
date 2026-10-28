@@ -61,6 +61,21 @@ class ProductTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 build.validate_output(output)
 
+    def test_builder_refuses_nested_applications_and_symlinked_ancestor(self):
+        build = load("build_app")
+        for output in (Path("/Applications/Utility/MacSwitcher.app"),
+                       Path("/System/Volumes/Data/Applications/Utility/MacSwitcher.app"),
+                       Path.home() / "Applications/Utility/MacSwitcher.app"):
+            with self.assertRaises(ValueError):
+                build.validate_output(output)
+        with tempfile.TemporaryDirectory(dir="/private/tmp") as directory:
+            root = Path(directory)
+            (root / "real").mkdir()
+            (root / "alias").symlink_to(root / "real", target_is_directory=True)
+            with self.assertRaises(ValueError):
+                build.validate_output(root / "alias/MacSwitcher.app")
+            build.validate_output(root / "real/MacSwitcher.app")
+
     def test_release_identity_cannot_silently_be_ad_hoc(self):
         build = load("build_app")
         for identity in ("-", "", "Apple Development: Example (0123456789)"):

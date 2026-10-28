@@ -59,12 +59,18 @@ def git_state(root):
 
 
 def validate_output(output):
+    output = Path(os.path.abspath(os.path.expanduser(output)))
     if output.name != "MacSwitcher.app":
         raise ValueError("Build output must be named MacSwitcher.app")
-    if output.parent == Path("/Applications") or output.parent == Path.home() / "Applications":
-        raise ValueError("Build output cannot be an installed Applications directory")
-    if output.is_symlink():
-        raise ValueError("Build output must not be a symlink")
+    installed_roots = (Path("/Applications"), Path.home() / "Applications",
+                       Path("/System/Volumes/Data/Applications"))
+    if any(root == output or root in output.parents for root in installed_roots):
+        raise ValueError("Build output cannot be inside an installed Applications directory")
+    if any(part.is_symlink() for part in (output, *output.parents)):
+        raise ValueError("Build output must not use a symlinked path")
+    resolved = output.resolve(strict=False)
+    if any(root == resolved or root in resolved.parents for root in installed_roots):
+        raise ValueError("Build output cannot resolve inside an installed Applications directory")
 
 
 def validate_identity(identity):
@@ -189,6 +195,7 @@ def main(argv=None):
     sparkle_license = framework_source.parents[2] / "LICENSE"
     if not sparkle_license.is_file():
         raise RuntimeError("Sparkle artifact LICENSE is missing")
+    validate_output(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     # Sign in the system temporary directory: synchronized folders can attach
     # Finder metadata between xattr and codesign, making that check racy.
@@ -247,6 +254,7 @@ def main(argv=None):
         run(["/usr/bin/xattr", "-cr", str(staged)])
         run(["/usr/bin/codesign", "--verify", "--strict", "--deep", str(staged)])
         run([str(contents / "MacOS/RuSwitcher"), "--self-test-resources"])
+        validate_output(output)
         if output.exists():
             stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             backup = output.with_name("MacSwitcher.previous-" + stamp + "-" + uuid.uuid4().hex[:8] + ".app")

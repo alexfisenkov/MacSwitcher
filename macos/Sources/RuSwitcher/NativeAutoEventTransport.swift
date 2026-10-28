@@ -92,7 +92,8 @@ extension NativeAutoEventTransport {
                       let range = focus.selectionRange(),
                       let text = focus.text(in: CFRange(location: start, length: length), allowValueFallback: false) else { return nil }
                 var raw: AnyObject?
-                guard AXUIElementCopyAttributeValue(focus.element, kAXValueAttribute as CFString, &raw) == .success,
+                guard focus.allowsTextRead(),
+                      AXUIElementCopyAttributeValue(focus.element, kAXValueAttribute as CFString, &raw) == .success,
                       let whole = raw as? String, whole.utf16.count == length, whole == text else { return nil }
                 return NativeAutomaticTextObservation(textFromOriginalStart: text,
                     caretUTF16Location: range.location, selectionLength: range.length)
@@ -258,17 +259,7 @@ private extension CombinedShiftFocus {
     /// applications that do not enable macOS Secure Event Input. Missing optional
     /// subroles are allowed; a failed supported read is not an eligibility signal.
     func nativeFieldHasNoSecureSubrole(prepareRead: () -> Bool) -> Bool {
-        guard prepareRead() else { return false }
-        var raw: AnyObject?
-        switch AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &raw) {
-        case .success:
-            guard let subrole = raw as? String else { return false }
-            return subrole != kAXSecureTextFieldSubrole
-        case .attributeUnsupported, .noValue:
-            return true
-        default:
-            return false
-        }
+        prepareRead() && allowsTextRead()
     }
 
     /// Capability queries only. An absent explicit editable signal requires a

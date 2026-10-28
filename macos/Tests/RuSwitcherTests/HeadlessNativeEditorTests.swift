@@ -249,4 +249,22 @@ final class HeadlessNativeEditorTests: XCTestCase {
             XCTAssertEqual(field.view.string, field === tooLong ? original : "ghbd")
         }
     }
+
+    @MainActor
+    func testWholeFieldUTF16LimitIsExactInRealHeadlessTextStorage() {
+        let prefix = "e\u{301} " + String(repeating: "x", count: NativeFieldEditPlan.maximumFieldUnits - 8)
+        let atLimit = Field(text: prefix + "ghbdZ", caret: prefix.utf16.count + 4)
+        atLimit.start = prefix.utf16.count
+        XCTAssertEqual(atLimit.snapshot.text.utf16.count, NativeFieldEditPlan.maximumFieldUnits)
+        XCTAssertEqual(atLimit.run(), .confirmed)
+        atLimit.flush()
+        XCTAssertEqual(atLimit.view.string, prefix + "привZ")
+        XCTAssertNil(atLimit.view.window)
+
+        let beyond = Field(text: prefix + "ghbdZZ", caret: prefix.utf16.count + 4)
+        beyond.start = prefix.utf16.count
+        XCTAssertEqual(beyond.run(), .refused)
+        XCTAssertEqual(beyond.batchCalls, 0)
+        XCTAssertEqual(beyond.view.string, prefix + "ghbdZZ")
+    }
 }

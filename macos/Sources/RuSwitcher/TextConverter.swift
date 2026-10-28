@@ -449,7 +449,7 @@ final class TextConverter {
     }
 
     private func wholeFieldObservation(focus: CombinedShiftFocus) -> NativeFieldObservation? {
-        guard !AutoSwitchPolicy.secureInputActive else { return nil }
+        guard focus.allowsTextRead() else { return nil }
         if let wholeFieldObservationOverride { return wholeFieldObservationOverride(focus) }
         guard focus.fieldBoundary == nil,
               let selection = focus.selectionRange(), selection.location >= 0,
@@ -473,6 +473,7 @@ final class TextConverter {
         guard let initial = focus.initialSelection, initial.length > 0,
               initial.length <= NativeFieldEditPlan.maximumSelectedReplacementUnits,
               execution.isValid(timeout: nativeAXTimeout),
+              focus.allowsTextRead(),
               let selected = focus.selectionSnapshot(),
               let field = wholeFieldObservation(focus: focus),
               field.text.utf16.count <= NativeFieldEditPlan.maximumFieldUnits,
@@ -637,6 +638,7 @@ final class TextConverter {
         guard AXUIElementCopyAttributeValue(axApp, kAXFocusedUIElementAttribute as CFString, &focusedRaw) == .success,
               let focused = focusedRaw else { return false }
         let element = focused as! AXUIElement
+        guard CombinedShiftFocus(processID: app.processIdentifier, element: element).allowsTextRead() else { return false }
         var selectedRaw: AnyObject?
         if AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString, &selectedRaw) == .success,
            let text = selectedRaw as? String { return !text.isEmpty }
@@ -1231,6 +1233,7 @@ final class TextConverter {
         guard AXUIElementCopyAttributeValue(axApp, kAXFocusedUIElementAttribute as CFString, &focusedRaw) == .success,
               let focused = focusedRaw else { return false }
         let element = focused as! AXUIElement
+        guard CombinedShiftFocus(processID: app.processIdentifier, element: element).allowsTextRead() else { return false }
         var selRaw: AnyObject?
         guard AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString, &selRaw) == .success,
               let sel = selRaw as? String else { return false }

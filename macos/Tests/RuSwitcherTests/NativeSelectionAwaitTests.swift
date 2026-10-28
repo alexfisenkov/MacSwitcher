@@ -4,6 +4,37 @@ import XCTest
 
 final class NativeSelectionAwaitTests: XCTestCase {
     @MainActor
+    func testSecureSubroleRejectsBeforeSelectedOrWholeTextRead() {
+        let field = ProductionCombinedShiftEditingTests.Field(pid: 5202, text: "synthetic")
+        field.caret = 0
+        field.selection = 9
+        var wholeReads = 0
+        let converter = TextConverter(wholeFieldObservationOverride: { _ in
+            wholeReads += 1
+            return field.observation
+        })
+        func baseline() -> TextConverter.NativeSelectionBaseline? {
+            let execution = CombinedShiftExecutionContext(focus: field.focus(), inputRevision: 1,
+                currentInputRevision: { 1 })
+            return converter.nativeSelectionBaseline(execution: execution)
+        }
+        field.subrole = (.success, kAXSecureTextFieldSubrole as NSString)
+        XCTAssertNil(baseline())
+        XCTAssertEqual(field.observedCount, 0)
+        XCTAssertEqual(wholeReads, 0)
+        field.subrole = (.cannotComplete, nil)
+        XCTAssertNil(baseline())
+        field.subrole = (.success, NSNumber(value: 1))
+        XCTAssertNil(baseline())
+        XCTAssertEqual(field.observedCount, 0)
+        XCTAssertEqual(wholeReads, 0)
+        field.subrole = (.attributeUnsupported, nil)
+        XCTAssertNotNil(baseline())
+        XCTAssertGreaterThan(field.observedCount, 0)
+        XCTAssertEqual(wholeReads, 1)
+    }
+
+    @MainActor
     func testSameRangeExternalFieldChangeInvalidatesAwaitedSelection() throws {
         let field = ProductionCombinedShiftEditingTests.Field(pid: 5201,
             text: "ghbdtn MacSwitcher")

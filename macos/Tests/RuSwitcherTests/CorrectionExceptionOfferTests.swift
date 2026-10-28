@@ -2,6 +2,19 @@ import XCTest
 @testable import RuSwitcher
 
 final class CorrectionExceptionOfferTests: XCTestCase {
+    func testOversizedPersonalDictionaryIsPreservedAndReportsSizeLimit() throws {
+        let directory = URL(fileURLWithPath: "/private/tmp").appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("PersonalDictionary.json")
+        let data = Data(repeating: 0x61, count: 1_048_577)
+        try data.write(to: file)
+        let store = PersonalWordStore(fileURL: file)
+        XCTAssertEqual(store.readOnlyError, PersonalWordStore.StoreError.tooLarge.localizedDescription)
+        XCTAssertThrowsError(try store.addWord("example", language: "en"))
+        XCTAssertEqual(try Data(contentsOf: file), data)
+    }
+
     @MainActor
     func testOnlyExplicitAcceptancePersistsPhraseAfterConfirmedUndoOffer() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

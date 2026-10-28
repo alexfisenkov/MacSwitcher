@@ -58,6 +58,8 @@ final class PersonalWordStore: @unchecked Sendable {
                 wordKeys = Self.wordKeys(for: document)
                 phraseKeys = Self.phraseKeys(for: document)
             }
+        } catch StoreError.tooLarge {
+            loadError = StoreError.tooLarge.localizedDescription
         } catch {
             loadError = StoreError.invalidFormat.localizedDescription
         }

@@ -152,6 +152,7 @@ struct TriggerConfig {
 }
 
 final class KeyboardMonitor: @unchecked Sendable {
+    private static let maximumHistoryKeys = 512
     fileprivate var eventTap: CFMachPort?
     private var eventTapHost: KeyboardEventTapHost?
     fileprivate var inputFence = InputEventFence()
@@ -177,6 +178,8 @@ final class KeyboardMonitor: @unchecked Sendable {
     /// в терминале, где нет OS-выделения. Любая пунктуация/структурная клавиша/сдвиг курсора
     /// (fullReset) очищает буфер → тогда «вся строка» откатывается на последнее слово.
     private(set) var lineKeys: [TypedKey] = []
+    private var wordHistoryOverflowed = false
+    private var lineHistoryOverflowed = false
     /// Фронтмост-приложение на момент границы слова — чтобы авто-путь не перепечатал
     /// в другое поле, если фокус уехал (Cmd-Tab/Spotlight) без клика/Tab.
     private(set) var prevWordBundleID: String?
@@ -441,6 +444,8 @@ final class KeyboardMonitor: @unchecked Sendable {
         currentWordKeys = []
         prevWordKeys = []
         lineKeys = []
+        wordHistoryOverflowed = false
+        lineHistoryOverflowed = false
         keysTypedSinceConversion = false
         currentWordSourceID = nil
         prevWordSourceID = nil
@@ -480,14 +485,16 @@ final class KeyboardMonitor: @unchecked Sendable {
         let trailingSpaces = afterPrefix.reversed().prefix(while: \.isWhitespace).count
         let last = afterPrefix.split(whereSeparator: \.isWhitespace).last.map(String.init) ?? ""
         let keys = last.map { TypedKey(keyCode: 0, shift: $0.isUppercase, caps: false, char: $0) }
-        currentWordKeys = trailingSpaces == 0 ? keys : []
+        wordHistoryOverflowed = trailingSpaces == 0 && keys.count > Self.maximumHistoryKeys
+        currentWordKeys = trailingSpaces == 0 && !wordHistoryOverflowed ? keys : []
         currentWordLength = currentWordKeys.count
         currentWordSourceID = currentWordKeys.isEmpty ? nil : resultLayoutID
-        prevWordKeys = trailingSpaces > 0 ? keys : []
+        prevWordKeys = trailingSpaces > 0 && keys.count <= Self.maximumHistoryKeys ? keys : []
         wordBeforeBoundaryLength = prevWordKeys.count
         prevWordSourceID = prevWordKeys.isEmpty ? nil : resultLayoutID
         boundaryCount = trailingSpaces
         lineKeys = []
+        lineHistoryOverflowed = true // The confirmed field prefix is not a typed line history.
         lineSourceID = nil
         keysTypedSinceConversion = false
     }
@@ -497,6 +504,7 @@ final class KeyboardMonitor: @unchecked Sendable {
     /// его (только строку — словный буфер трогаем как раньше).
     func resetLineBuffer(sourceLayoutID: String = LayoutSwitcher.currentLayoutID()) {
         observeInputSource(sourceLayoutID)
+        lineHistoryOverflowed = lineHistoryOverflowed || wordHistoryOverflowed || !lineKeys.isEmpty
         lineKeys = []
         lineSourceID = nil
         if let first = combinedShiftFirstRequest,
@@ -534,6 +542,8 @@ final class KeyboardMonitor: @unchecked Sendable {
         currentWordKeys = []
         prevWordKeys = []
         lineKeys = []
+        wordHistoryOverflowed = false
+        lineHistoryOverflowed = false
         currentWordSourceID = nil
         prevWordSourceID = nil
         lineSourceID = nil
@@ -616,6 +626,8 @@ final class KeyboardMonitor: @unchecked Sendable {
         prevWordSourceID = prevWordKeys.isEmpty ? nil : resultLayoutID
         boundaryCount = trailingSpaces
         lineKeys = []  // a mixed-language predictive window is not a reliable line mapping
+        wordHistoryOverflowed = false
+        lineHistoryOverflowed = true
         lineSourceID = nil
         keysTypedSinceConversion = false
     }
@@ -670,6 +682,40 @@ final class KeyboardMonitor: @unchecked Sendable {
         else if currentWordSourceID != id { currentWordSourceID = nil }  // mixed-source word is unsafe to retype
         if lineKeys.isEmpty { lineSourceID = id }
         else if lineSourceID != id { lineSourceID = nil }
+    }
+
+    private func appendHistoryKey(_ key: TypedKey) {
+        if !wordHistoryOverflowed {
+            if currentWordKeys.count < Self.maximumHistoryKeys {
+                currentWordKeys.append(key)
+                currentWordLength += 1
+            } else {
+                currentWordKeys = []
+                currentWordLength = 0
+                currentWordSourceID = nil
+                wordHistoryOverflowed = true
+            }
+        }
+        if !lineHistoryOverflowed {
+            if lineKeys.count < Self.maximumHistoryKeys {
+                lineKeys.append(key)
+            } else {
+                lineKeys = []
+                lineSourceID = nil
+                lineHistoryOverflowed = true
+            }
+        }
+    }
+
+    private func appendHistorySpace() {
+        guard !lineHistoryOverflowed, !lineKeys.isEmpty else { return }
+        if lineKeys.count < Self.maximumHistoryKeys {
+            lineKeys.append(TypedKey(keyCode: KC.space, shift: false, caps: false, char: " "))
+        } else {
+            lineKeys = []
+            lineSourceID = nil
+            lineHistoryOverflowed = true
+        }
     }
 
     private func handleCombinedShift(flags: CGEventFlags, keyCode: UInt16, timestamp: UInt64) {
@@ -809,7 +855,13 @@ final class KeyboardMonitor: @unchecked Sendable {
 
         // Пробел — единственная граница через которую можно вернуться
         if keyCode == KC.space {
-            if currentWordLength > 0 {
+            if wordHistoryOverflowed {
+                wordBeforeBoundaryLength = 0
+                boundaryCount = 0
+                prevWordKeys = []
+                prevWordSourceID = nil
+                wordHistoryOverflowed = false
+            } else if currentWordLength > 0 {
                 wordBeforeBoundaryLength = currentWordLength
                 boundaryCount = 1
                 prevWordKeys = currentWordKeys
@@ -821,7 +873,7 @@ final class KeyboardMonitor: @unchecked Sendable {
             currentWordLength = 0
             currentWordKeys = []
             currentWordSourceID = nil
-            if !lineKeys.isEmpty { lineKeys.append(TypedKey(keyCode: KC.space, shift: false, caps: false, char: " ")) }  // #24: пробел в буфер строки (не ведущий)
+            appendHistorySpace()
             return
         }
 
@@ -839,6 +891,7 @@ final class KeyboardMonitor: @unchecked Sendable {
 
         // Backspace
         if keyCode == KC.backspace {
+            if wordHistoryOverflowed { return } // The remaining real word is still untrusted.
             if currentWordLength > 0 {
                 currentWordLength -= 1
                 if !currentWordKeys.isEmpty { currentWordKeys.removeLast() }
@@ -857,11 +910,9 @@ final class KeyboardMonitor: @unchecked Sendable {
         }
 
         if KeyMapping.keycodeToEN[keyCode] != nil {
-            rememberTypedSource(renderedSourceLayoutID)
+            if !wordHistoryOverflowed { rememberTypedSource(renderedSourceLayoutID) }
             let tk = TypedKey(keyCode: keyCode, shift: flags.contains(.maskShift), caps: flags.contains(.maskAlphaShift))
-            currentWordKeys.append(tk)
-            lineKeys.append(tk)   // #24: буква в буфер строки
-            currentWordLength += 1
+            appendHistoryKey(tk)
             wordBeforeBoundaryLength = 0
             boundaryCount = 0
             prevWordKeys = []
@@ -876,10 +927,16 @@ final class KeyboardMonitor: @unchecked Sendable {
     /// Обработка символа, проброшенного через удалённый стол (keyCode 0 + юникод).
     /// Работаем по самому символу: пробел — граница слова, backspace — откат,
     /// буква — кладём реальный символ в буфер (конверсия пойдёт по нему, см. convertKeys).
-    private func handleForwardedChar(_ ch: Character, renderedSourceLayoutID: String?) {
+    func handleForwardedChar(_ ch: Character, renderedSourceLayoutID: String?) {
         // Пробел — граница слова (как локальный keyCode space)
         if ch == " " {
-            if currentWordLength > 0 {
+            if wordHistoryOverflowed {
+                wordBeforeBoundaryLength = 0
+                boundaryCount = 0
+                prevWordKeys = []
+                prevWordSourceID = nil
+                wordHistoryOverflowed = false
+            } else if currentWordLength > 0 {
                 wordBeforeBoundaryLength = currentWordLength
                 boundaryCount = 1
                 prevWordKeys = currentWordKeys
@@ -891,7 +948,7 @@ final class KeyboardMonitor: @unchecked Sendable {
             currentWordLength = 0
             currentWordKeys = []
             currentWordSourceID = nil
-            if !lineKeys.isEmpty { lineKeys.append(TypedKey(keyCode: KC.space, shift: false, caps: false, char: " ")) }  // #24
+            appendHistorySpace()
             return
         }
         // Перенос строки / таб — полный сброс
@@ -901,6 +958,7 @@ final class KeyboardMonitor: @unchecked Sendable {
         }
         // Backspace / Delete — откат одной буквы
         if ch == "\u{8}" || ch == "\u{7f}" {
+            if wordHistoryOverflowed { return } // No reliable suffix until a new boundary.
             if currentWordLength > 0 {
                 currentWordLength -= 1
                 if !currentWordKeys.isEmpty { currentWordKeys.removeLast() }
@@ -912,11 +970,9 @@ final class KeyboardMonitor: @unchecked Sendable {
         }
         // Буква — кладём реальный символ (keyCode 0 = «проброшено»). shift несём из регистра.
         if ch.isLetter {
-            rememberTypedSource(renderedSourceLayoutID)
+            if !wordHistoryOverflowed { rememberTypedSource(renderedSourceLayoutID) }
             let tk = TypedKey(keyCode: 0, shift: ch.isUppercase, caps: false, char: ch)
-            currentWordKeys.append(tk)
-            lineKeys.append(tk)   // #24
-            currentWordLength += 1
+            appendHistoryKey(tk)
             wordBeforeBoundaryLength = 0
             boundaryCount = 0
             prevWordKeys = []

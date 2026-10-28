@@ -23,6 +23,7 @@ final class ProductionCombinedShiftEditingTests: XCTestCase {
         var queuedText = 0
         var queuedSelection = 0
         var observedCount = 0
+        var subrole: (AXError, AnyObject?) = (.attributeUnsupported, nil)
         var queuedLayoutTargets: [String] = []
 
         init(pid: Int32, text: String, element: AXUIElement? = nil) {
@@ -52,7 +53,8 @@ final class ProductionCombinedShiftEditingTests: XCTestCase {
                         return valid ? nil : .focusChanged
                     },
                     selectionRange: { [self] in selectedRange() },
-                    text: { [self] in substring($0) }))
+                    text: { [self] in substring($0) },
+                    secureSubrole: { [self] in subrole }))
         }
 
         var observation: NativeFieldObservation {

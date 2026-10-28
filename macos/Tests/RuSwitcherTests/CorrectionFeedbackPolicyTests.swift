@@ -25,6 +25,9 @@ final class CorrectionFeedbackPolicyTests: XCTestCase {
         XCTAssertTrue(CorrectionFeedbackPolicy.retryMessage(languageCode: "ru").contains("выделите фрагмент"))
         XCTAssertTrue(CorrectionFeedbackPolicy.retryMessage(languageCode: "en").contains("select the text"))
         XCTAssertTrue(CorrectionFeedbackPolicy.recoveryMessage(languageCode: "ru").contains("Исходный текст сохранён"))
+        let withoutCopy = CorrectionFeedbackPolicy.recoveryMessage(languageCode: "ru", hasRecovery: false)
+        XCTAssertTrue(withoutCopy.contains("Проверьте поле"))
+        XCTAssertFalse(withoutCopy.contains("сохранён"))
         XCTAssertTrue(CorrectionFeedbackPolicy.sourceMessage(languageCode: "ru").contains("Выберите нужную раскладку"))
         XCTAssertTrue(CorrectionFeedbackPolicy.sourceMessage(languageCode: "en").contains("Choose the needed keyboard layout"))
     }

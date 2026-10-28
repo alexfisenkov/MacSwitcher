@@ -77,6 +77,28 @@ struct CombinedShiftFocus: @unchecked Sendable {
         return AXUIElementSetMessagingTimeout(element, timeout)
     }
 
+    /// Reject secure fields before either selected-range or whole-value text is requested.
+    /// A missing optional subrole is compatible; malformed or failed reads fail closed.
+    func allowsTextRead() -> Bool {
+        guard !AutoSwitchPolicy.secureInputActive else { return false }
+        var raw: AnyObject?
+        let status: AXError
+        if let fieldBoundary {
+            (status, raw) = fieldBoundary.secureSubrole?() ?? (.attributeUnsupported, nil)
+        } else {
+            status = AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &raw)
+        }
+        switch status {
+        case .success:
+            guard let subrole = raw as? String else { return false }
+            return subrole != kAXSecureTextFieldSubrole
+        case .attributeUnsupported, .noValue:
+            return true
+        default:
+            return false
+        }
+    }
+
     static func capture(processID: Int32, timeout: Float = 0.05, includeSelection: Bool = true) -> CombinedShiftFocus? {
         guard timeout.isFinite, timeout > 0 else { return nil }
         let app = AXUIElementCreateApplication(processID)
@@ -192,7 +214,7 @@ struct CombinedShiftFocus: @unchecked Sendable {
     }
 
     func text(in range: CFRange, allowValueFallback: Bool = true) -> String? {
-        guard !AutoSwitchPolicy.secureInputActive else { return nil }
+        guard allowsTextRead() else { return nil }
         if let fieldBoundary { return fieldBoundary.text(range) }
         var requestedRange = range
         var raw: AnyObject?
@@ -259,4 +281,6 @@ struct CombinedShiftFieldBoundary {
     let validationFailure: () -> CombinedShiftExecutionFailure?
     let selectionRange: () -> CFRange?
     let text: (CFRange) -> String?
+    /// Synthetic AX subrole response; live fields always use AX directly.
+    var secureSubrole: (() -> (AXError, AnyObject?))? = nil
 }

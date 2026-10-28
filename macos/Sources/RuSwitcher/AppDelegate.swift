@@ -186,7 +186,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func showUnknownEditNotice() {
         let hasRecovery = textConverter.hasUnconfirmedAXEdit
         showFeedback(title: "MacSwitcher",
-            body: CorrectionFeedbackPolicy.recoveryMessage(languageCode: L10n.languageCode),
+            body: CorrectionFeedbackPolicy.recoveryMessage(languageCode: L10n.languageCode,
+                hasRecovery: hasRecovery),
             kind: .unknownEdit,
             actionTitle: hasRecovery ? (L10n.languageCode == "ru" ? "Показать исходный текст" : "Show original text") : nil,
             onAction: hasRecovery ? { [weak self] in self?.openRecoveryOriginals() } : nil)

@@ -106,6 +106,34 @@ final class PredictionRuntimeTests: XCTestCase {
         XCTAssertEqual(buffer.text, "")
     }
 
+    func testCombiningMarksCannotGrowOneGraphemeBeyondUTF16Budget() {
+        var buffer = PredictionInputBuffer()
+        buffer.append("a", processID: 123)
+        for _ in 0..<100 { buffer.append(String(repeating: "\u{301}", count: 8), processID: 123) }
+        XCTAssertLessThanOrEqual(buffer.text.utf16.count, 384)
+        XCTAssertNil(buffer.snapshot(sourceLayoutID: "en", inputRevision: 1, generation: 1))
+        buffer.append(" ", processID: 123)
+        buffer.append("normal", processID: 123)
+        XCTAssertEqual(buffer.snapshot(sourceLayoutID: "en", inputRevision: 2, generation: 2)?.suffix, "normal")
+    }
+
+    func testSeededUnicodeAndBoundaryStreamKeepsPredictionWindowBounded() {
+        var buffer = PredictionInputBuffer()
+        var seed: UInt64 = 0xA11CE5EED
+        let fragments = ["a", " ", "😀", "e\u{301}", String(repeating: "\u{301}", count: 8)]
+        for index in 0..<5_000 {
+            seed ^= seed << 13
+            seed ^= seed >> 7
+            seed ^= seed << 17
+            buffer.append(fragments[Int(seed % UInt64(fragments.count))], processID: index < 2_500 ? 123 : 124)
+            XCTAssertLessThanOrEqual(buffer.text.utf16.count, 384, "seeded event \(index)")
+            if let snapshot = buffer.snapshot(sourceLayoutID: "en", inputRevision: UInt64(index), generation: 1) {
+                XCTAssertLessThanOrEqual(snapshot.suffix.utf16.count, 192)
+                XCTAssertEqual(snapshot.processID, index < 2_500 ? 123 : 124)
+            }
+        }
+    }
+
     @MainActor
     func testAutomaticWriterRefusesStaleFieldBeforeCommittingUndoState() {
         let converter = TextConverter()

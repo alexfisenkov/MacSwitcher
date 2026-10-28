@@ -17,8 +17,13 @@ enum CorrectionFeedbackPolicy {
             : "Text was not changed. Click the intended field, select the text, and press Shift twice again."
     }
 
-    static func recoveryMessage(languageCode: String) -> String {
-        languageCode == "ru"
+    static func recoveryMessage(languageCode: String, hasRecovery: Bool = true) -> String {
+        if !hasRecovery {
+            return languageCode == "ru"
+                ? "Не удалось проверить, изменился ли текст. Проверьте поле перед повторной попыткой."
+                : "Could not verify whether the text changed. Check the field before trying again."
+        }
+        return languageCode == "ru"
             ? "Не удалось проверить результат. Исходный текст сохранён в MacSwitcher."
             : "Could not verify the result. The original text is preserved in MacSwitcher."
     }
