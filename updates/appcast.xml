@@ -6,6 +6,17 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/alexfisenkov/MacSwitcher</link>
     <description>Signed MacSwitcher releases</description>
     <item>
+      <title>MacSwitcher 0.1.0-alpha.21</title>
+      <link>https://github.com/alexfisenkov/MacSwitcher/releases/tag/v0.1.0-alpha.21</link>
+      <pubDate>Thu, 29 Oct 2026 09:56:26 +0000</pubDate>
+      <description>Добавлен отдельный точный словарь: миллионы русских словоформ и расширенный английский набор. Настройки и жесты Shift сохранены.</description>
+      <sparkle:version>21</sparkle:version>
+      <sparkle:shortVersionString>0.1.0-alpha.21</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <sparkle:channel>alpha</sparkle:channel>
+      <enclosure url="https://github.com/alexfisenkov/MacSwitcher/releases/download/v0.1.0-alpha.21/MacSwitcher-0.1.0-alpha.21-universal.zip" length="42641777" type="application/octet-stream" sparkle:edSignature="/qX0kNwt4S84VL/N7iNlZZBDAW9jSgkllHueH6MawBdU6yDK3Hhtf7dS1gJZCBPCDTe5ZYR93T8eyqIpy7jRAg=="></enclosure>
+    </item>
+    <item>
       <title>MacSwitcher 0.1.0-alpha.20</title>
       <link>https://github.com/alexfisenkov/MacSwitcher/releases/tag/v0.1.0-alpha.20</link>
       <pubDate>Wed, 28 Oct 2026 17:07:53 +0000</pubDate>
@@ -139,6 +150,6 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: XNZcWyrLbyYkM/V8N3+g317u8HVVM/W3NafcBe7OsZeoeTc9Sge9+vgF4cAM9ezZDrziWH8gIJLUwZh/yvWYCA==
-length: 13625
+edSignature: pHAU7TnOWFa4ZIDujJvpTLc6JM4143LyJGo8N6UcEEp0FOHJ4dLZ6NTMx0wkUDuVmR6fE2EzRRIry3t14t9oDw==
+length: 14669
 -->
