@@ -467,22 +467,37 @@ final class TextConverter {
     /// Exact bounded field and selection read used on both sides of an async
     /// lexical lookup. Revision/PID/focus are checked by execution; a same-
     /// range external edit is detected by the complete field comparison.
-    func nativeSelectionBaseline(execution: CombinedShiftExecutionContext)
+    func nativeSelectionBaseline(execution: CombinedShiftExecutionContext,
+                                 onFailure: (RuntimeDiagnosticFailureReason) -> Void = RuntimeDiagnostics.recordFailure)
         -> NativeSelectionBaseline? {
         let focus = execution.focus
         guard let initial = focus.initialSelection, initial.length > 0,
-              initial.length <= NativeFieldEditPlan.maximumSelectedReplacementUnits,
-              execution.isValid(timeout: nativeAXTimeout),
-              focus.allowsTextRead(),
-              let selected = focus.selectionSnapshot(),
-              let field = wholeFieldObservation(focus: focus),
-              field.text.utf16.count <= NativeFieldEditPlan.maximumFieldUnits,
+              initial.length <= NativeFieldEditPlan.maximumSelectedReplacementUnits else {
+            onFailure(.selectionStateBlocked); return nil
+        }
+        guard execution.isValid(timeout: nativeAXTimeout) else {
+            onFailure(.selectionInvalidExecution); return nil
+        }
+        guard focus.allowsTextRead() else {
+            onFailure(.selectionFieldUnavailable); return nil
+        }
+        guard let selected = focus.selectionSnapshot() else {
+            onFailure(.selectionSnapshotMissing); return nil
+        }
+        guard let field = wholeFieldObservation(focus: focus) else {
+            onFailure(.selectionFieldUnavailable); return nil
+        }
+        guard field.text.utf16.count <= NativeFieldEditPlan.maximumFieldUnits,
               field.caretUTF16Location == selected.range.location,
-              field.selectionLength == selected.range.length else { return nil }
+              field.selectionLength == selected.range.length else {
+            onFailure(.selectionFieldMismatch); return nil
+        }
         let units = Array(field.text.utf16)
         let start = selected.range.location, length = selected.range.length
         guard start <= units.count, length <= units.count - start,
-              units[start..<(start + length)].elementsEqual(selected.text.utf16) else { return nil }
+              units[start..<(start + length)].elementsEqual(selected.text.utf16) else {
+            onFailure(.selectionTextMismatch); return nil
+        }
         return NativeSelectionBaseline(selection: selected, field: field)
     }
 
@@ -702,17 +717,25 @@ final class TextConverter {
                                 execution: CombinedShiftExecutionContext,
                                 restorePrevious: Bool,
                                 observedSourceLayoutID: String,
-                                knownWord: ((String, String) -> Bool?)? = nil) -> PreparedNativeSelection? {
+                                knownWord: ((String, String) -> Bool?)? = nil,
+                                onFailure: (RuntimeDiagnosticFailureReason) -> Void = RuntimeDiagnostics.recordFailure)
+                                -> PreparedNativeSelection? {
         let focus = execution.focus
         guard !observedSourceLayoutID.isEmpty,
-              observedSourceLayoutID == context.targetLayoutID,
-              !isConverting, !hasUnconfirmedAXEdit(in: focus),
+              observedSourceLayoutID == context.targetLayoutID else {
+            onFailure(.selectionSourceMismatch); return nil
+        }
+        guard !isConverting, !hasUnconfirmedAXEdit(in: focus),
               unconfirmedAXEdits.count < Self.maximumUnconfirmedFields,
               let initial = focus.initialSelection, initial.length > 0,
-              initial.length <= NativeFieldEditPlan.maximumSelectedReplacementUnits,
-              focus.setMessagingTimeout(nativeAXTimeout) == .success else { return nil }
+              initial.length <= NativeFieldEditPlan.maximumSelectedReplacementUnits else {
+            onFailure(.selectionStateBlocked); return nil
+        }
+        guard focus.setMessagingTimeout(nativeAXTimeout) == .success else {
+            onFailure(.selectionTimeout); return nil
+        }
         defer { _ = focus.setMessagingTimeout(0.05) }
-        guard let baseline = nativeSelectionBaseline(execution: execution) else { return nil }
+        guard let baseline = nativeSelectionBaseline(execution: execution, onFailure: onFailure) else { return nil }
         let original = baseline.selection
         let before = baseline.field
         let start = original.range.location, length = original.range.length
@@ -723,14 +746,20 @@ final class TextConverter {
             && lastSelectionRange.map { $0.location == start && $0.length == length } == true
         let policy = restoring ? nil : selectionPolicy(original.text, context: context,
             knownWord: knownWord)
-        guard restoring || policy != nil else { return nil }
+        guard restoring || policy != nil else {
+            onFailure(.selectionPolicyNoChange); return nil
+        }
         let replacement = restoring ? lastOriginal : policy!.replacement
         guard replacement != original.text, !replacement.isEmpty,
               !isConverting, !hasUnconfirmedAXEdit(in: focus),
               unconfirmedAXEdits.count < Self.maximumUnconfirmedFields,
-              canRetainAXSource(original: original.text, replacement: replacement),
-              execution.isValid(timeout: nativeAXTimeout),
-              wholeFieldObservation(focus: focus) == before else { return nil }
+              canRetainAXSource(original: original.text, replacement: replacement) else {
+            onFailure(.selectionReplacementRejected); return nil
+        }
+        guard execution.isValid(timeout: nativeAXTimeout),
+              wholeFieldObservation(focus: focus) == before else {
+            onFailure(.selectionRevalidationFailed); return nil
+        }
         let resultContext = restoring ? (lastLayoutContext?.reversed ?? context)
             : selectedResultContext(policy!, requested: context)
         return PreparedNativeSelection(focus: focus, inputRevision: execution.inputRevision,
@@ -1054,8 +1083,12 @@ final class TextConverter {
                  passthroughSuffix: String = "", typedSuffix: String = "", context: CombinedShiftContext? = nil,
                  execution: CombinedShiftExecutionContext? = nil,
                  inputBarrierIsActive: (() -> Bool)? = nil) -> Bool {
-        guard context == nil || execution != nil else { return false }
-        guard inputBarrierIsActive == nil || (execution != nil && inputBarrierIsActive?() == true) else { return false }
+        guard context == nil || execution != nil else {
+            RuntimeDiagnostics.recordFailure(.wordContextUnavailable); return false
+        }
+        guard inputBarrierIsActive == nil || (execution != nil && inputBarrierIsActive?() == true) else {
+            RuntimeDiagnostics.recordFailure(.wordInputBarrierUnavailable); return false
+        }
         let keys: [TypedKey]
         let trailingSpaces: Int
         if !wordKeys.isEmpty {
@@ -1063,13 +1096,17 @@ final class TextConverter {
         } else if !prevWordKeys.isEmpty && boundaryCount > 0 {
             keys = prevWordKeys; trailingSpaces = boundaryCount
         } else {
-            guard inputBarrierIsActive == nil else { return false }
+            guard inputBarrierIsActive == nil else {
+                RuntimeDiagnostics.recordFailure(.wordBufferUnavailable); return false
+            }
             // нет буфера — возможно, выделен мышью старый текст: пусть решает clipboard
             return convertViaClipboard(wordLength: 0, prevWordLength: 0, boundaryCount: 0, context: context, execution: execution)
         }
 
         guard let pair = DynamicKeyMapping.convertKeys(keys, context: context) else {
-            guard context == nil, inputBarrierIsActive == nil else { return false }  // explicit mapping failure cannot justify count-based deletion
+            guard context == nil, inputBarrierIsActive == nil else {
+                RuntimeDiagnostics.recordFailure(.wordMappingUnavailable); return false
+            }  // explicit mapping failure cannot justify count-based deletion
             // Clipboard-путь про суффикс не знает (селекция посчиталась бы неверно) —
             // точность важнее полноты: с суффиксом тихо отказываемся.
             guard passthroughSuffix.isEmpty else {
@@ -1080,9 +1117,13 @@ final class TextConverter {
             return convertViaClipboard(wordLength: wordKeys.count, prevWordLength: prevWordKeys.count, boundaryCount: boundaryCount)
         }
 
-        guard !isConverting else { return false }
+        guard !isConverting else {
+            RuntimeDiagnostics.recordFailure(.wordConversionBusy); return false
+        }
         if context != nil {
-            guard pair.original != pair.converted, pair.original.count == keys.count else { return false }
+            guard pair.original != pair.converted, pair.original.count == keys.count else {
+                RuntimeDiagnostics.recordFailure(.wordMappingNoChange); return false
+            }
         }
         let spaces = String(repeating: " ", count: trailingSpaces)
         let bsCount = keys.count + passthroughSuffix.count + trailingSpaces
@@ -1094,7 +1135,9 @@ final class TextConverter {
         if let execution {
             let resultContext = context.map { DynamicKeyMapping.resultContext(for: insert, requested: $0) }
             guard performNativeBufferEdit(original: original, replacement: insert, execution: execution,
-                inputBarrierIsActive: inputBarrierIsActive, context: resultContext) else { return false }
+                inputBarrierIsActive: inputBarrierIsActive, context: resultContext) else {
+                RuntimeDiagnostics.recordFailure(.wordNativeEditRefused); return false
+            }
             lastOriginal = original
             lastConverted = insert
             lastWasBuffer = true
@@ -1129,23 +1172,38 @@ final class TextConverter {
     func convertVerifiedLastWord(context: CombinedShiftContext,
                                  execution: CombinedShiftExecutionContext,
                                  inputBarrierIsActive: @escaping () -> Bool) -> Bool {
-        guard !isConverting, !hasUnconfirmedAXEdit(in: execution.focus),
-              inputBarrierIsActive(), execution.isValid(timeout: nativeAXTimeout),
-              let initial = execution.focus.initialSelection, initial.length == 0,
-              let observed = wholeFieldObservation(focus: execution.focus),
+        guard !isConverting, !hasUnconfirmedAXEdit(in: execution.focus) else {
+            RuntimeDiagnostics.recordFailure(.verifiedWordStateBlocked); return false
+        }
+        guard inputBarrierIsActive(), execution.isValid(timeout: nativeAXTimeout) else {
+            RuntimeDiagnostics.recordFailure(.wordInputBarrierUnavailable); return false
+        }
+        guard let initial = execution.focus.initialSelection, initial.length == 0 else {
+            RuntimeDiagnostics.recordFailure(.verifiedWordCaretUnavailable); return false
+        }
+        guard let observed = wholeFieldObservation(focus: execution.focus) else {
+            RuntimeDiagnostics.recordFailure(.verifiedWordFieldUnavailable); return false
+        }
+        guard
               observed.selectionLength == 0,
               observed.caretUTF16Location == initial.location,
               observed.caretUTF16Location == observed.text.utf16.count,
               observed.text.utf16.count <= NativeFieldEditPlan.maximumFieldUnits,
-              !TextConverter.containsRTL(observed.text) else { return false }
+              !TextConverter.containsRTL(observed.text) else {
+            RuntimeDiagnostics.recordFailure(.verifiedWordFieldMismatch); return false
+        }
         var characters = Array(observed.text)
         var spaces = ""
         while let last = characters.last, last == " " {
-            guard spaces.count < 16 else { return false }
+            guard spaces.count < 16 else {
+                RuntimeDiagnostics.recordFailure(.verifiedWordTrailingSpaceLimit); return false
+            }
             spaces.insert(last, at: spaces.startIndex)
             characters.removeLast()
         }
-        guard let last = characters.last, last.isLetter else { return false }
+        guard let last = characters.last, last.isLetter else {
+            RuntimeDiagnostics.recordFailure(.verifiedWordNoFinalLetter); return false
+        }
         var token: [Character] = []
         while let character = characters.last {
             let internalKeyLetter = !token.isEmpty && !character.isLetter
@@ -1154,26 +1212,38 @@ final class TextConverter {
             guard character.isLetter || internalKeyLetter else { break }
             token.insert(character, at: token.startIndex)
             characters.removeLast()
-            guard token.count <= 24 else { return false }
+            guard token.count <= 24 else {
+                RuntimeDiagnostics.recordFailure(.verifiedWordTokenLimit); return false
+            }
         }
-        guard characters.last == nil || characters.last?.isWhitespace == true else { return false }
+        guard characters.last == nil || characters.last?.isWhitespace == true else {
+            RuntimeDiagnostics.recordFailure(.verifiedWordBoundaryInvalid); return false
+        }
         let word = String(token)
         guard !word.isEmpty, word.utf16.count <= 24,
               !word.unicodeScalars.contains(where: {
                   $0.properties.generalCategory == .nonspacingMark
-              }) else { return false }
+              }) else {
+            RuntimeDiagnostics.recordFailure(.verifiedWordTokenInvalid); return false
+        }
         let converted = DynamicKeyMapping.convert(word, context: context)
         guard converted != word, !converted.isEmpty,
-              converted.allSatisfy(\.isLetter),
-              inputBarrierIsActive(), execution.isValid(timeout: nativeAXTimeout),
-              wholeFieldObservation(focus: execution.focus) == observed else { return false }
+              converted.allSatisfy(\.isLetter) else {
+            RuntimeDiagnostics.recordFailure(.verifiedWordNoConversion); return false
+        }
+        guard inputBarrierIsActive(), execution.isValid(timeout: nativeAXTimeout),
+              wholeFieldObservation(focus: execution.focus) == observed else {
+            RuntimeDiagnostics.recordFailure(.verifiedWordRevalidationFailed); return false
+        }
         let original = word + spaces
         let replacement = converted + spaces
         let resultContext = DynamicKeyMapping.resultContext(for: replacement,
             requested: context)
         guard performNativeBufferEdit(original: original, replacement: replacement,
             execution: execution, inputBarrierIsActive: inputBarrierIsActive,
-            context: resultContext) else { return false }
+            context: resultContext) else {
+            RuntimeDiagnostics.recordFailure(.wordNativeEditRefused); return false
+        }
         lastOriginal = original
         lastConverted = replacement
         lastWasBuffer = true
@@ -1832,12 +1902,21 @@ final class TextConverter {
                                          context: CombinedShiftContext? = nil,
                                          layouts: (source: String, target: String)? = nil) -> Bool {
         if let inputBarrierIsActive {
-            guard !isConverting, !hasUnconfirmedAXEdit(in: execution.focus), inputBarrierIsActive(),
-                  let caret = execution.focus.initialSelection, caret.length == 0,
-                  caret.location >= original.utf16.count,
-                  let snapshot = CombinedShiftSelectionSnapshot(
+            guard !isConverting, !hasUnconfirmedAXEdit(in: execution.focus) else {
+                RuntimeDiagnostics.recordFailure(.wordNativeStateBlocked); return false
+            }
+            guard inputBarrierIsActive() else {
+                RuntimeDiagnostics.recordFailure(.wordInputBarrierUnavailable); return false
+            }
+            guard let caret = execution.focus.initialSelection, caret.length == 0,
+                  caret.location >= original.utf16.count else {
+                RuntimeDiagnostics.recordFailure(.wordNativeCaretMismatch); return false
+            }
+            guard let snapshot = CombinedShiftSelectionSnapshot(
                     range: CFRange(location: caret.location - original.utf16.count, length: original.utf16.count),
-                    text: original) else { return false }
+                    text: original) else {
+                RuntimeDiagnostics.recordFailure(.wordNativeSnapshotInvalid); return false
+            }
             isConverting = true
             defer { isConverting = false }
             guard replaceNativeRange(original: snapshot, replacement: replacement, expectedSelection: caret,

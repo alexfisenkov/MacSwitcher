@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private lazy var predictionCoordinator = PredictionCoordinator(monitor: keyboardMonitor, converter: textConverter)
     private let settingsController = SettingsWindowController()
     private let perAppLayoutManager = PerAppLayoutManager()
+    private let electronAccessibilityBridge = ElectronAccessibilityBridge()
     private var permissionCheckTimer: Timer?
     private var iconRefreshTimer: Timer?
     private var monitoringActive = false
@@ -60,6 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func setupSettingsCallbacks() {
         settingsController.onAutoSwitchChanged = { [weak self] _ in
             self?.resetCombinedShiftAfterPause()
+            self?.syncElectronAccessibilityBridge()
             // Не адресуем пункт по индексу: меню группирует пункты по назначению,
             // а recovery и раскладки появляются динамически. Пересборка — как у соседних колбэков.
             self?.rebuildMenu()
@@ -459,6 +461,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         monitoringActive = true
+        syncElectronAccessibilityBridge()
         configurePredictionPreferences()
         keyboardMonitor.onCombinedShift = { [weak self] request in
             self?.handleCombinedShift(request)
@@ -552,6 +555,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     // only after main returns; pending originals remain retained.
                     self.reconfigureTap()
                 }
+                self.electronAccessibilityBridge.refresh()
                 self.updateStatusIcon()
             }
         }
@@ -1098,11 +1102,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    private func syncElectronAccessibilityBridge() {
+        if ElectronAccessibilityBridge.shouldRun(monitoringActive: monitoringActive,
+                autoSwitchEnabled: SettingsManager.shared.autoSwitchEnabled) {
+            electronAccessibilityBridge.start()
+        } else {
+            electronAccessibilityBridge.stop()
+        }
+    }
+
     // MARK: - Actions
 
     @objc private func toggleAutoSwitch(_ sender: NSMenuItem) {
         SettingsManager.shared.autoSwitchEnabled.toggle()
         resetCombinedShiftAfterPause()
+        syncElectronAccessibilityBridge()
         let enabled = SettingsManager.shared.autoSwitchEnabled
         sender.state = enabled ? .on : .off
         settingsController.updateAutoSwitchState(enabled)
@@ -1252,6 +1266,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         predictionCoordinator.invalidate()
+        electronAccessibilityBridge.stop()
         perAppLayoutManager.stop()
         keyboardMonitor.stop()
         // Не теряем буфер обмена в 2-секундном окне отложенного восстановления

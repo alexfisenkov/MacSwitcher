@@ -1,9 +1,9 @@
 {
-  "version": "0.1.0-alpha.22",
+  "version": "0.1.0-alpha.23",
   "short_version": "0.1.0",
-  "build": 22,
+  "build": 23,
   "channel": "alpha",
   "url": "https://github.com/alexfisenkov/MacSwitcher/releases",
-  "notes": "Повышена устойчивость подтверждения выделения перед заменой текста. Интервал Shift и словари сохранены.",
+  "notes": "Восстановление автокоррекции после временной недоступности поля и независимая подготовка редакторов Electron.",
   "native_backend_accepted": false
 }
