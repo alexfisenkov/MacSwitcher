@@ -2,12 +2,82 @@ import ApplicationServices
 import XCTest
 @testable import RuSwitcher
 
+/// Waits for the submitted coordinator task, including a no-proposal or cancelled
+/// task. It observes numeric IDs only and never treats unchanged field text as idle.
+@MainActor
+final class PredictionEvaluationProbe {
+    private(set) var latestSubmitted: PredictionEvaluationID?
+    private var lastSettled: PredictionEvaluationID?
+    private var outcomes: [PredictionEvaluationID: PredictionEvaluationOutcome] = [:]
+    private var completionCounts: [PredictionEvaluationID: Int] = [:]
+    private var retryCounts: [PredictionEvaluationID: Int] = [:]
+    private var recent: [(PredictionEvaluationID, PredictionEvaluationOutcome)] = []
+    var onRetryScheduled: ((PredictionEvaluationID) -> Void)?
+
+    var lastOutcome: PredictionEvaluationOutcome? {
+        lastSettled.flatMap { outcomes[$0] }
+    }
+
+    func outcome(for evaluationID: PredictionEvaluationID) -> PredictionEvaluationOutcome? {
+        outcomes[evaluationID]
+    }
+
+    func completionCount(for evaluationID: PredictionEvaluationID) -> Int {
+        completionCounts[evaluationID] ?? 0
+    }
+
+    func retryCount(for evaluationID: PredictionEvaluationID) -> Int {
+        retryCounts[evaluationID] ?? 0
+    }
+
+    func submitted(_ evaluationID: PredictionEvaluationID?) {
+        latestSubmitted = evaluationID
+    }
+
+    func finished(_ evaluationID: PredictionEvaluationID, _ outcome: PredictionEvaluationOutcome) {
+        let count = (completionCounts[evaluationID] ?? 0) + 1
+        completionCounts[evaluationID] = count
+        XCTAssertEqual(count, 1, "Duplicate evaluation completion for sequence \(evaluationID.sequence)")
+        outcomes[evaluationID] = outcome
+        recent.append((evaluationID, outcome))
+        if recent.count > 12 { recent.removeFirst() }
+    }
+
+    func retryScheduled(_ evaluationID: PredictionEvaluationID) {
+        retryCounts[evaluationID, default: 0] += 1
+        onRetryScheduled?(evaluationID)
+    }
+
+    func awaitLatest(expected: PredictionEvaluationOutcome? = nil,
+                     file: StaticString = #filePath, line: UInt = #line) {
+        let deadline = Date(timeIntervalSinceNow: 2.0)
+        while let evaluationID = latestSubmitted, evaluationID != lastSettled {
+            while outcomes[evaluationID] == nil && Date() < deadline {
+                RunLoop.main.run(until: min(Date(timeIntervalSinceNow: 0.010), deadline))
+            }
+            let stages = recent.map { "\($0.0.sequence):\($0.0.sessionID):\($0.0.inputRevision):\($0.1.rawValue)" }
+                .joined(separator: ",")
+            guard let outcome = outcomes[evaluationID] else {
+                XCTFail("Evaluation did not finish for session \(evaluationID.sessionID), revision \(evaluationID.inputRevision); recent=\(stages)",
+                    file: file, line: line)
+                return
+            }
+            lastSettled = evaluationID
+            if let expected, outcome != expected {
+                XCTFail("Expected evaluation \(expected.rawValue), got \(outcome.rawValue); recent=\(stages)",
+                    file: file, line: line)
+            }
+        }
+    }
+}
+
 final class ProductionPredictionCoordinatorTests: XCTestCase {
     typealias Field = ProductionCombinedShiftEditingTests.Field
 
     @MainActor
     private final class Rig {
         let monitor = KeyboardMonitor()
+        let probe = PredictionEvaluationProbe()
         let fields: [Field]
         let englishID: String
         let russianID: String
@@ -73,7 +143,12 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
             value.onSourceFailure = { [unowned self] target, outcome in
                 sourceFailures.append((target, outcome, activeLease == nil))
             }
-            monitor.onPredictionInput = { [weak value] in value?.submit($0) }
+            value.onEvaluationFinished = { [weak probe] evaluationID, outcome in probe?.finished(evaluationID, outcome) }
+            value.onRenderRetryScheduled = { [weak probe] evaluationID in probe?.retryScheduled(evaluationID) }
+            monitor.onPredictionInput = { [weak value, weak probe] snapshot in
+                value?.submit(snapshot)
+                probe?.submitted(value?.latestSubmittedEvaluationID)
+            }
             monitor.onPredictionInvalidated = { [weak value] in value?.invalidate() }
             return value
         }()
@@ -98,6 +173,10 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
             monitor.recordPredictionText(text, processID: destination.pid, sourceLayoutID: source ?? sourceID)
         }
 
+        func settle(expected: PredictionEvaluationOutcome? = nil) {
+            probe.awaitLatest(expected: expected)
+        }
+
         func deliverPhysicalEnglishKeys(_ raw: String) {
             for character in raw {
                 if character == " " { deliver(" "); continue }
@@ -119,8 +198,131 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
     }
 
     @MainActor
-    private func spin(_ seconds: TimeInterval = 0.16) {
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: seconds))
+    func testEvaluationCompletionDistinguishesNoProposalSuppressionApplicationAndCancellation() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2040, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        _ = rig.coordinator
+        rig.settle() // No submission must not wait for a completion that cannot exist.
+
+        rig.deliver("hello")
+        rig.settle(expected: .noProposal)
+        XCTAssertEqual(field.queuedText, 0)
+
+        field.text = ""; field.caret = 0; field.selection = 0
+        rig.monitor.resetPredictionContext()
+        rig.deliver("ghbd")
+        rig.settle(expected: .applied)
+        let notice = try XCTUnwrap(rig.notices.last)
+        rig.coordinator.undoCorrection(id: notice.id) { result in
+            guard case .confirmed = result else { XCTFail("Expected confirmed undo"); return }
+        }
+
+        field.text = ""; field.caret = 0; field.selection = 0
+        rig.monitor.resetPredictionContext()
+        rig.deliver("ghbd")
+        rig.settle(expected: .suppressed)
+        XCTAssertEqual(field.text, "ghbd")
+
+        field.text = ""; field.caret = 0; field.selection = 0
+        rig.monitor.resetPredictionContext()
+        rig.deliver("ghbd")
+        XCTAssertNotNil(rig.probe.latestSubmitted)
+        rig.coordinator.invalidate()
+        rig.settle(expected: .cancelledBeforeEvaluation)
+        XCTAssertEqual(field.text, "ghbd")
+        XCTAssertEqual(field.queuedText, 2) // One forward and one undo, no cancelled write.
+    }
+
+    @MainActor
+    func testIdenticalSnapshotCountersHaveDistinctSubmissionTokens() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2041, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        _ = rig.coordinator
+        rig.deliver("g")
+        let first = try XCTUnwrap(rig.probe.latestSubmitted)
+        rig.deliver("h")
+        let second = try XCTUnwrap(rig.probe.latestSubmitted)
+        rig.deliver("bd")
+        let latest = try XCTUnwrap(rig.probe.latestSubmitted)
+
+        XCTAssertEqual(first.sessionID, second.sessionID)
+        XCTAssertEqual(first.inputRevision, second.inputRevision)
+        XCTAssertEqual(first.generation, second.generation)
+        XCTAssertNotEqual(first.sequence, second.sequence)
+        XCTAssertNotEqual(second.sequence, latest.sequence)
+        rig.settle(expected: .applied)
+        XCTAssertEqual(field.text, "прив")
+        XCTAssertEqual(field.queuedText, 1)
+        XCTAssertEqual(rig.probe.outcome(for: first), .cancelledBeforeEvaluation)
+        XCTAssertEqual(rig.probe.outcome(for: second), .cancelledBeforeEvaluation)
+        XCTAssertEqual(rig.probe.completionCount(for: first), 1)
+        XCTAssertEqual(rig.probe.completionCount(for: second), 1)
+        XCTAssertEqual(rig.probe.completionCount(for: latest), 1)
+    }
+
+    @MainActor
+    func testMainQueueCongestionCannotEndWaitBeforeSubmittedEvaluation() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2042, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        _ = rig.coordinator
+        rig.deliver("ghbd")
+        let evaluationID = try XCTUnwrap(rig.probe.latestSubmitted)
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(20)) {
+            Thread.sleep(forTimeInterval: 0.200) // Test-only main queue contention before 70 ms debounce.
+        }
+        rig.settle(expected: .applied)
+        XCTAssertEqual(rig.probe.completionCount(for: evaluationID), 1)
+        XCTAssertEqual(field.text, "прив")
+        XCTAssertEqual(field.queuedText, 1)
+    }
+
+    @MainActor
+    func testSupersededRenderRetryCompletesOnceAndCannotFinishNewSubmission() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2043, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        let coordinator = rig.coordinator
+        rig.deliver("ghbd")
+        let old = try XCTUnwrap(rig.probe.latestSubmitted)
+        field.text = "ghbX" // Same caret, but rendered suffix is not the submitted source.
+        rig.probe.onRetryScheduled = { [weak coordinator] evaluationID in
+            if evaluationID == old { coordinator?.invalidate() }
+        }
+        rig.settle(expected: .cancelledBeforeEvaluation)
+        XCTAssertEqual(rig.probe.retryCount(for: old), 1)
+        XCTAssertEqual(rig.probe.completionCount(for: old), 1)
+        XCTAssertEqual(field.queuedText, 0)
+
+        rig.probe.onRetryScheduled = nil
+        field.text = ""; field.caret = 0; field.selection = 0
+        rig.monitor.resetPredictionContext()
+        rig.deliver("ghbd")
+        let current = try XCTUnwrap(rig.probe.latestSubmitted)
+        XCTAssertNotEqual(old.sequence, current.sequence)
+        rig.settle(expected: .applied)
+        XCTAssertEqual(field.text, "прив")
+        XCTAssertEqual(field.queuedText, 1)
+        XCTAssertEqual(rig.probe.completionCount(for: current), 1)
+        XCTAssertEqual(rig.probe.completionCount(for: old), 1)
+    }
+
+    @MainActor
+    func testRenderRetryExhaustionKeepsOneTokenAndOneTerminalCompletion() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2044, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        _ = rig.coordinator
+        rig.deliver("ghbd")
+        let evaluationID = try XCTUnwrap(rig.probe.latestSubmitted)
+        field.text = "ghbX"
+        rig.settle(expected: .renderRetryExhausted)
+        XCTAssertEqual(rig.probe.retryCount(for: evaluationID), 3)
+        XCTAssertEqual(rig.probe.completionCount(for: evaluationID), 1)
+        XCTAssertEqual(field.text, "ghbX")
+        XCTAssertEqual(field.queuedText, 0)
     }
 
     @MainActor
@@ -133,17 +335,17 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         _ = rig.coordinator
 
         rig.deliver("ghbd")
-        spin()
+        rig.settle(expected: .applied)
         XCTAssertEqual(a.text, "прив")
         XCTAssertEqual(a.queuedText, 1)
         XCTAssertEqual(rig.sourceID, pair.ru)
 
         rig.deliver("ет")
-        spin()
+        rig.settle()
         XCTAssertEqual(a.text, "привет")
         rig.deliver(" ")
         rig.deliver("руддщ")
-        spin()
+        rig.settle(expected: .applied)
         XCTAssertEqual(a.text, "привет hello")
         XCTAssertEqual(a.queuedText, 2)
 
@@ -151,7 +353,7 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         rig.sourceID = pair.en
         rig.monitor.resetPredictionContext()
         rig.deliver("ghbdtn")
-        spin()
+        rig.settle(expected: .applied)
         XCTAssertEqual(b.text, "привет")
         XCTAssertEqual(a.text, "привет hello")
         XCTAssertEqual(rig.applied.count, 3)
@@ -164,7 +366,7 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
         _ = rig.coordinator
         rig.deliver("ghbd")
-        spin()
+        rig.settle(expected: .applied)
         XCTAssertEqual(field.text, "прив")
         let notice = try XCTUnwrap(rig.notices.last)
 
@@ -178,7 +380,7 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         XCTAssertEqual(rig.sourceID, pair.en)
 
         rig.deliver("tn")
-        spin()
+        rig.settle(expected: .applied)
         XCTAssertEqual(field.text, "привет")
     }
 
@@ -189,7 +391,7 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
         _ = rig.coordinator
         rig.deliver("ghbd")
-        spin()
+        rig.settle(expected: .applied)
         XCTAssertEqual(field.text, "прив")
         let notice = try XCTUnwrap(rig.notices.last)
         rig.sourceOutcome = .refused
@@ -215,7 +417,7 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
         _ = rig.coordinator
         rig.deliver("ghbd")
-        spin()
+        rig.settle(expected: .applied)
         let first = try XCTUnwrap(rig.notices.last)
         rig.coordinator.undoCorrection(id: first.id) { result in
             guard case .confirmed = result else { XCTFail("Expected confirmed undo"); return }
@@ -223,7 +425,7 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         XCTAssertEqual(field.text, "ghbd")
 
         rig.deliver("tn") // ghbdtn -> привет is a different automatic proposal.
-        spin()
+        rig.settle(expected: .applied)
         XCTAssertEqual(field.text, "привет")
 
         field.text = ""
@@ -232,7 +434,7 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         rig.sourceID = pair.en
         rig.monitor.resetPredictionContext()
         rig.deliver("ghbd")
-        spin()
+        rig.settle(expected: .suppressed)
         XCTAssertEqual(field.text, "ghbd", "The original one-shot proposal must still be suppressed")
     }
 
@@ -244,7 +446,7 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         _ = rig.coordinator
         rig.remainingBudget = 0.010
         rig.deliver("ghbd")
-        spin()
+        rig.settle(expected: .refused)
         XCTAssertEqual(field.text, "ghbd")
         XCTAssertEqual(field.queuedSelection, 0)
         XCTAssertEqual(field.queuedText, 0)
@@ -257,13 +459,13 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         rig.remainingBudget = 0.250
         field.dropInsertion = true
         rig.deliver("ghbd")
-        spin()
+        rig.settle(expected: .textUnconfirmed)
         XCTAssertEqual(field.queuedText, 1)
         XCTAssertTrue(rig.converter.hasUnconfirmedAXEdit(in: field.focus()))
         XCTAssertEqual(rig.converter.unconfirmedOriginals.first?.text, "ghbd")
         XCTAssertEqual(rig.unknownNotices, 1)
         rig.deliver("!")
-        spin()
+        rig.settle()
         XCTAssertEqual(field.queuedText, 1)
     }
 
@@ -277,7 +479,7 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         unknown.dropInsertion = true
 
         rig.deliver("ghbd")
-        spin()
+        rig.settle(expected: .textUnconfirmed)
         XCTAssertEqual(unknown.queuedText, 1)
         XCTAssertTrue(rig.converter.hasUnconfirmedAXEdit(in: unknown.focus()))
         XCTAssertEqual(rig.beginLeaseAttempts, 1)
@@ -287,7 +489,7 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         rig.sourceID = pair.en
         rig.monitor.resetPredictionContext()
         rig.deliver("ghbd")
-        spin()
+        rig.settle(expected: .refused)
         XCTAssertEqual(rig.beginLeaseAttempts, 1,
             "The same quarantined field must not open another input lease")
         XCTAssertEqual(unknown.queuedText, 1)
@@ -295,7 +497,7 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         rig.currentField = other
         rig.monitor.resetPredictionContext()
         rig.deliver("ghbd")
-        spin()
+        rig.settle(expected: .applied)
         XCTAssertEqual(other.text, "прив")
         XCTAssertEqual(other.queuedText, 1)
         XCTAssertTrue(rig.converter.hasUnconfirmedAXEdit(in: unknown.focus()))
@@ -311,7 +513,7 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         rig.sourceOutcome = .unconfirmed
 
         rig.deliver("ghbd")
-        spin()
+        rig.settle(expected: .textUnconfirmed)
         XCTAssertEqual(field.queuedText, 1, "This is an unknown post-queue result")
         XCTAssertTrue(rig.converter.hasUnconfirmedAXEdit(in: field.focus()))
         XCTAssertEqual(rig.sourceSelections, [],
@@ -330,7 +532,7 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         _ = rig.coordinator
         rig.deliver("ghbd")
         rig.currentField = b
-        spin()
+        rig.settle()
         XCTAssertEqual(a.text, "ghbd")
         XCTAssertEqual(a.queuedText, 0)
         XCTAssertEqual(b.queuedText, 0)
@@ -339,7 +541,7 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         rig.monitor.resetPredictionContext()
         a.secure = true
         rig.deliver("ghbd")
-        spin()
+        rig.settle()
         XCTAssertEqual(a.queuedText, 0)
         XCTAssertEqual(rig.applied.count, 0)
     }
@@ -352,26 +554,26 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         _ = rig.coordinator
 
         rig.deliver("MacSwitcher ", source: pair.en)
-        spin()
+        rig.settle()
         XCTAssertEqual(field.text, "MacSwitcher ")
         XCTAssertEqual(field.queuedText, 0)
 
         rig.deliverPhysicalEnglishKeys("levf.")
-        spin()
+        rig.settle()
         rig.deliver(" ")
-        spin()
+        rig.settle()
         XCTAssertEqual(field.text, "MacSwitcher думаю ")
 
         // After automatic source selection, the same physical keys render in
         // Russian. No extra user Shift or expected-result paste is injected.
         rig.deliverPhysicalEnglishKeys("xnj-nj")
-        spin()
+        rig.settle()
         rig.deliver(" ")
-        spin()
+        rig.settle()
         XCTAssertEqual(field.text, "MacSwitcher думаю что-то ")
 
         rig.deliverPhysicalEnglishKeys("nfrjt")
-        spin()
+        rig.settle()
         XCTAssertEqual(field.text, "MacSwitcher думаю что-то такое")
         XCTAssertEqual(field.queuedText, 1)
     }
@@ -385,7 +587,7 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         rig.sourceOutcome = .refused
 
         rig.deliver("ghbd")
-        spin()
+        rig.settle(expected: .sourceUnconfirmed)
         XCTAssertEqual(field.text, "прив", "Text ACK is independent of source refusal")
         XCTAssertEqual(field.queuedText, 1)
         XCTAssertTrue(rig.converter.hasReconversionState)
@@ -408,7 +610,7 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         rig.sourceOutcome = .unconfirmed
 
         rig.deliver("ghbd")
-        spin()
+        rig.settle(expected: .sourceUnconfirmed)
         XCTAssertEqual(field.text, "прив")
         XCTAssertEqual(field.queuedText, 1)
         XCTAssertTrue(rig.monitor.hasPendingInputSourceTransition)
@@ -425,9 +627,9 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
 
         rig.sourceOutcome = .confirmed
         rig.deliver("ет ")
-        spin()
+        rig.settle()
         rig.deliver("руддщ")
-        spin()
+        rig.settle(expected: .applied)
         XCTAssertEqual(field.text, "привет hello")
         XCTAssertEqual(field.queuedText, 2)
     }

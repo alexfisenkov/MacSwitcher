@@ -1,5 +1,27 @@
 import AppKit
 
+/// Numeric identity of one submitted prediction; never carries typed text.
+struct PredictionEvaluationID: Hashable, Sendable {
+    let sequence: UInt64
+    let sessionID: UInt64
+    let inputRevision: UInt64
+    let generation: UInt64
+
+    init(_ snapshot: PredictionSnapshot, sequence: UInt64) {
+        self.sequence = sequence
+        sessionID = snapshot.sessionID
+        inputRevision = snapshot.inputRevision
+        generation = snapshot.generation
+    }
+}
+
+/// Closed result vocabulary for causal test observation; no field content.
+enum PredictionEvaluationOutcome: String, Equatable, Sendable {
+    case notScheduled, cancelledBeforeEvaluation, stale, engineUnavailable
+    case mappingUnavailable, noProposal, rejected, suppressed, refused, renderRetryExhausted
+    case textUnconfirmed, sourceUnconfirmed, applied
+}
+
 /// Dictionary loading/scoring runs outside the HID callback. The first event of
 /// each session captures its original AX field once (existing 50 ms timeouts);
 /// later AX reads are limited to a concrete, still-current edit. A deferred first
@@ -10,7 +32,10 @@ final class PredictionCoordinator {
     private let converter: TextConverter
     private let platform: PredictionCoordinatorPlatform
     private let engineTask: Task<PredictionEngine?, Never>
+    private var nextEvaluationSequence: UInt64 = 0
+    private(set) var latestSubmittedEvaluationID: PredictionEvaluationID?
     private var debounce: DispatchWorkItem?
+    private var pendingDebounceID: PredictionEvaluationID?
     private var evaluation: Task<Void, Never>?
     private var anchorSessionID: UInt64?
     private var anchorFocus: CombinedShiftFocus?
@@ -37,6 +62,11 @@ final class PredictionCoordinator {
     var onApplied: ((String) -> Void)?
     var onUnconfirmedEdit: (() -> Void)?
     var onSourceFailure: ((String, LayoutSelectionCommit.Outcome?) -> Void)?
+    /// Optional completion observer. Delivery follows already queued feedback;
+    /// production leaves this nil and performs no extra work.
+    var onEvaluationFinished: ((PredictionEvaluationID, PredictionEvaluationOutcome) -> Void)?
+    /// Optional numeric stage for testing a queued caret-render retry.
+    var onRenderRetryScheduled: ((PredictionEvaluationID) -> Void)?
 
     init(monitor: KeyboardMonitor, converter: TextConverter,
          platform: PredictionCoordinatorPlatform? = nil, engine: PredictionEngine? = nil,
@@ -84,15 +114,34 @@ final class PredictionCoordinator {
 
     func invalidate() {
         debounce?.cancel(); debounce = nil
+        if let pendingDebounceID {
+            self.pendingDebounceID = nil
+            reportEvaluationFinished(pendingDebounceID, .cancelledBeforeEvaluation)
+        }
         evaluation?.cancel(); evaluation = nil
+    }
+
+    private func reportEvaluationFinished(_ evaluationID: PredictionEvaluationID,
+                                          _ outcome: PredictionEvaluationOutcome) {
+        guard onEvaluationFinished != nil else { return }
+        DispatchQueue.main.async { [weak self] in self?.onEvaluationFinished?(evaluationID, outcome) }
     }
 
     func submit(_ snapshot: PredictionSnapshot) {
         invalidate()
+        let evaluationID: PredictionEvaluationID?
+        if onEvaluationFinished != nil {
+            nextEvaluationSequence &+= 1
+            evaluationID = PredictionEvaluationID(snapshot, sequence: nextEvaluationSequence)
+        } else {
+            evaluationID = nil
+        }
+        latestSubmittedEvaluationID = evaluationID
         let bundleID = platform.frontmost().bundleID
         let route = platform.route(bundleID, snapshot.suffix, snapshot.sourceLayoutID)
         guard route != .blocked, !platform.deniedApp(bundleID) || route == .nativeCanary else {
             anchorSessionID = nil; anchorFocus = nil; pendingCaretAnchor = nil
+            if let evaluationID { reportEvaluationFinished(evaluationID, .notScheduled) }
             return // blocked editors must not incur a synchronous AX capture
         }
         if anchorSessionID != snapshot.sessionID {
@@ -104,10 +153,12 @@ final class PredictionCoordinator {
         }
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
+            if let evaluationID, self.pendingDebounceID == evaluationID { self.pendingDebounceID = nil }
             RuntimeDiagnostics.record(.autoWorkStarted)
-            self.evaluation = Task { [weak self] in await self?.evaluate(snapshot) }
+            self.evaluation = Task { [weak self] in await self?.evaluate(snapshot, evaluationID: evaluationID) }
         }
         debounce = work
+        pendingDebounceID = evaluationID
         // The original key must reach the destination before AX suffix verification.
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(snapshot.atBoundary ? 12 : 70), execute: work)
     }
@@ -136,16 +187,23 @@ final class PredictionCoordinator {
         RuntimeDiagnostics.record(.autoAnchorAccepted)
     }
 
-    private func retryRenderVerification(_ snapshot: PredictionSnapshot, attempt: Int) {
+    private func retryRenderVerification(_ snapshot: PredictionSnapshot, attempt: Int,
+                                         evaluationID: PredictionEvaluationID?) -> Bool {
         // AX may briefly lag the event queue. Retry only this current snapshot and
         // original field; a new key, focus reset or explicit cancellation stops it.
-        guard attempt < 3, isCurrent(snapshot) else { return }
+        guard attempt < 3, isCurrent(snapshot) else { return false }
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            self.evaluation = Task { [weak self] in await self?.evaluate(snapshot, renderAttempt: attempt + 1) }
+            if let evaluationID, self.pendingDebounceID == evaluationID { self.pendingDebounceID = nil }
+            self.evaluation = Task { [weak self] in
+                await self?.evaluate(snapshot, evaluationID: evaluationID, renderAttempt: attempt + 1)
+            }
         }
         debounce = work
+        pendingDebounceID = evaluationID
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(15), execute: work)
+        if let evaluationID { onRenderRetryScheduled?(evaluationID) }
+        return true
     }
 
     private func isCurrent(_ snapshot: PredictionSnapshot) -> Bool {
@@ -165,10 +223,14 @@ final class PredictionCoordinator {
                 revision: monitor.inputRevision, generation: monitor.predictionGeneration)
     }
 
-    private func evaluate(_ snapshot: PredictionSnapshot, renderAttempt: Int = 0) async {
-        guard isCurrent(snapshot) else { RuntimeDiagnostics.record(.autoEvaluationStale); return }
-        guard let engine = await engineTask.value else { RuntimeDiagnostics.record(.autoEngineUnavailable); return }
-        guard isCurrent(snapshot) else { RuntimeDiagnostics.record(.autoEvaluationStale); return }
+    private func evaluate(_ snapshot: PredictionSnapshot, evaluationID: PredictionEvaluationID?,
+                          renderAttempt: Int = 0) async {
+        var outcome: PredictionEvaluationOutcome = .refused
+        var retryScheduled = false
+        defer { if !retryScheduled, let evaluationID { reportEvaluationFinished(evaluationID, outcome) } }
+        guard isCurrent(snapshot) else { outcome = .stale; RuntimeDiagnostics.record(.autoEvaluationStale); return }
+        guard let engine = await engineTask.value else { outcome = .engineUnavailable; RuntimeDiagnostics.record(.autoEngineUnavailable); return }
+        guard isCurrent(snapshot) else { outcome = .stale; RuntimeDiagnostics.record(.autoEvaluationStale); return }
         guard let source = LayoutSwitcher.installedLayouts().first(where: {
                   LayoutSwitcher.sourceID($0) == snapshot.sourceLayoutID
               }), let language = LayoutSwitcher.languageCode(source),
@@ -177,10 +239,10 @@ final class PredictionCoordinator {
                   LayoutSwitcher.sourceID($0) == pair.targetLayoutID
               }), let oppositeLanguage = LayoutSwitcher.languageCode(opposite),
               Set([String(language.prefix(2)), String(oppositeLanguage.prefix(2))]) == Set(["ru", "en"]) else {
-            RuntimeDiagnostics.record(.autoMappingUnavailable); return
+            outcome = .mappingUnavailable; RuntimeDiagnostics.record(.autoMappingUnavailable); return
         }
         let characterMapping = DynamicKeyMapping.buildMap(from: source, to: opposite)
-        guard !characterMapping.isEmpty else { RuntimeDiagnostics.record(.autoMappingUnavailable); return }
+        guard !characterMapping.isEmpty else { outcome = .mappingUnavailable; RuntimeDiagnostics.record(.autoMappingUnavailable); return }
         let alwaysConvertWords = SettingsManager.shared.alwaysConvertWordsSet
         let russianPriority = russianPriorityProvider()
         let proposal = await Task.detached(priority: .userInitiated) {
@@ -189,13 +251,13 @@ final class PredictionCoordinator {
                 alwaysConvertWords: alwaysConvertWords, characterMapping: characterMapping,
                 russianPriority: russianPriority)
         }.value
-        guard isCurrent(snapshot) else { RuntimeDiagnostics.record(.autoEvaluationStale); return }
-        guard let proposal else { RuntimeDiagnostics.record(.autoNoProposal); return }
+        guard isCurrent(snapshot) else { outcome = .stale; RuntimeDiagnostics.record(.autoEvaluationStale); return }
+        guard let proposal else { outcome = .noProposal; RuntimeDiagnostics.record(.autoNoProposal); return }
         RuntimeDiagnostics.record(.autoProposal)
         guard proposal.originalSuffix == snapshot.suffix,
               !Self.containsDeniedChange(original: proposal.originalSuffix, replacement: proposal.replacementSuffix),
               !phraseExceptionLookup(proposal.originalSuffix, String(language.lowercased().prefix(2))) else {
-            RuntimeDiagnostics.record(.autoProposalRejected); return
+            outcome = .rejected; RuntimeDiagnostics.record(.autoProposalRejected); return
         }
         guard let target = LayoutSwitcher.installedLayouts().first(where: {
                   [pair.sourceLayoutID, pair.targetLayoutID].contains(LayoutSwitcher.sourceID($0))
@@ -215,6 +277,7 @@ final class PredictionCoordinator {
                 sourceLayoutID: snapshot.sourceLayoutID,
                 original: proposal.originalSuffix, replacement: proposal.replacementSuffix) {
                 self.oneShotSuppression = nil
+                outcome = .suppressed
                 RuntimeDiagnostics.record(.autoProposalRejected)
                 return
             }
@@ -233,10 +296,11 @@ final class PredictionCoordinator {
         pendingCaretAnchor = pending
         guard resolved != nil else {
             RuntimeDiagnostics.record(.autoCaretMismatch)
-            retryRenderVerification(snapshot, attempt: renderAttempt)
+            retryScheduled = retryRenderVerification(snapshot, attempt: renderAttempt, evaluationID: evaluationID)
+            if !retryScheduled && renderAttempt >= 3 { outcome = .renderRetryExhausted }
             return
         }
-        guard isCurrent(snapshot) else { RuntimeDiagnostics.record(.autoEvaluationStale); return }
+        guard isCurrent(snapshot) else { outcome = .stale; RuntimeDiagnostics.record(.autoEvaluationStale); return }
         // The converter must preserve an unknown edit in this exact AX field.
         // Refuse before opening another input lease or recording a source window;
         // a different field remains eligible for its own verified edit.
@@ -294,6 +358,7 @@ final class PredictionCoordinator {
             }
             if textWasQueued {
                 monitor.resetPredictionContext()
+                outcome = .textUnconfirmed
                 RuntimeDiagnostics.record(.autoTextUnconfirmed)
             } else {
                 RuntimeDiagnostics.record(.autoEditRefused)
@@ -319,11 +384,12 @@ final class PredictionCoordinator {
             }
             rememberAutomaticEdit(focus: focus, sourceLayoutID: snapshot.sourceLayoutID,
                 resultLayoutID: resultID, receiptID: notice?.id)
-            let outcome = sourceCommit.outcome
+            let sourceOutcome = sourceCommit.outcome
             DispatchQueue.main.async { [weak self] in
-                self?.onSourceFailure?(resultID, outcome)
+                self?.onSourceFailure?(resultID, sourceOutcome)
             }
             RuntimeDiagnostics.record(sourceCommit.outcome == .unconfirmed ? .autoSourceUnconfirmed : .autoSourceFailed)
+            outcome = .sourceUnconfirmed
             return
         }
         RuntimeDiagnostics.record(.autoSourceConfirmed)
@@ -346,6 +412,7 @@ final class PredictionCoordinator {
                               proposal.replacementSuffix.split(whereSeparator: \.isWhitespace))
             .first(where: { $0 != $1 }).map { String($0.0) } ?? edit.original
         onApplied?(changedWord)
+        outcome = .applied
     }
 
     @discardableResult

@@ -136,6 +136,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
     @MainActor
     private final class AutoRig {
         let monitor = KeyboardMonitor()
+        let probe = PredictionEvaluationProbe()
         let field = Field(pid: 5110, text: "")
         let en: String
         let ru: String
@@ -192,7 +193,12 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
             value.onApplied = { [unowned self] word in applied.append(word) }
             value.onCorrection = { [unowned self] in correctionNotices.append($0) }
             value.onConfirmedAutomaticUndo = { [unowned self] in confirmedAutoUndos.append($0) }
-            monitor.onPredictionInput = { [weak value] in value?.submit($0) }
+            value.onEvaluationFinished = { [weak probe] evaluationID, outcome in probe?.finished(evaluationID, outcome) }
+            value.onRenderRetryScheduled = { [weak probe] evaluationID in probe?.retryScheduled(evaluationID) }
+            monitor.onPredictionInput = { [weak value, weak probe] snapshot in
+                value?.submit(snapshot)
+                probe?.submitted(value?.latestSubmittedEvaluationID)
+            }
             monitor.onPredictionInvalidated = { [weak value] in value?.invalidate() }
             return value
         }()
@@ -222,7 +228,9 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
             }
         }
 
-        func settle() { RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.16)) }
+        func settle(expected: PredictionEvaluationOutcome? = nil) {
+            probe.awaitLatest(expected: expected)
+        }
 
         func undoByDoubleShift(direction requestedDirection: CombinedShiftContext? = nil,
                                sourceAfterFirst: String? = nil,
@@ -599,7 +607,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         let rig = try AutoRig()
         _ = rig.coordinator
         rig.deliver("ghbd", source: rig.en)
-        rig.settle()
+        rig.settle(expected: .applied)
         XCTAssertEqual(rig.field.text, "прив")
         XCTAssertEqual(rig.sourceID, rig.ru)
 
@@ -618,7 +626,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         _ = rig.coordinator
         rig.deliver("X ", source: rig.en)
         rig.deliver("ghbd", source: rig.en)
-        rig.settle()
+        rig.settle(expected: .applied)
         XCTAssertEqual(rig.field.text, "X прив")
         let queuedBefore = rig.field.queuedText
 
@@ -633,7 +641,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         let rig = try AutoRig()
         rig.coordinator.russianPriorityProvider = { true }
         rig.deliver("f", source: rig.en)
-        rig.settle()
+        rig.settle(expected: .applied)
         XCTAssertEqual(rig.field.text, "а")
         XCTAssertEqual(rig.sourceID, rig.ru)
 
@@ -653,7 +661,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         let rig = try AutoRig()
         rig.coordinator.russianPriorityProvider = { true }
         rig.deliver("f", source: rig.en)
-        rig.settle()
+        rig.settle(expected: .applied)
         XCTAssertEqual(rig.field.text, "а")
         XCTAssertEqual(try rig.undoByDoubleShift().outcome, .confirmed(resultID: rig.en))
         XCTAssertEqual(rig.field.queuedText, 2)
@@ -662,7 +670,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         rig.field.caret = 0
         rig.monitor.resetPredictionContext()
         rig.deliver("f", source: rig.en)
-        rig.settle()
+        rig.settle(expected: .suppressed)
         XCTAssertEqual(rig.field.text, "f")
         XCTAssertEqual(rig.field.queuedText, 2)
 
@@ -670,7 +678,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         rig.field.caret = 0
         rig.monitor.resetPredictionContext()
         rig.deliver("f", source: rig.en)
-        rig.settle()
+        rig.settle(expected: .applied)
         XCTAssertEqual(rig.field.text, "а")
         XCTAssertEqual(rig.field.queuedText, 3)
     }
@@ -680,7 +688,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         let rig = try AutoRig()
         rig.coordinator.russianPriorityProvider = { true }
         rig.deliver("f", source: rig.en)
-        rig.settle()
+        rig.settle(expected: .applied)
         XCTAssertEqual(rig.field.text, "а")
         let queuedBefore = rig.field.queuedText
 
@@ -695,7 +703,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         let rig = try AutoRig()
         rig.coordinator.russianPriorityProvider = { true }
         rig.deliver("f", source: rig.en)
-        rig.settle()
+        rig.settle(expected: .applied)
         XCTAssertEqual(rig.field.text, "а")
         let beforeSession = rig.monitor.predictionSessionID
 
@@ -712,7 +720,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         let rig = try AutoRig()
         rig.coordinator.russianPriorityProvider = { true }
         rig.deliver("f", source: rig.en)
-        rig.settle()
+        rig.settle(expected: .applied)
         let beforeSession = rig.monitor.predictionSessionID
         let unrelated = "test.unrelated.layout"
 
@@ -729,7 +737,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         let rig = try AutoRig()
         rig.coordinator.russianPriorityProvider = { true }
         rig.deliver("f", source: rig.en)
-        rig.settle()
+        rig.settle(expected: .applied)
         let afterAutoSession = rig.monitor.predictionSessionID
         rig.monitor.resetLineBuffer(sourceLayoutID: rig.ru) // Late TIS read after auto ACK.
         XCTAssertEqual(rig.monitor.predictionSessionID, afterAutoSession)
@@ -747,7 +755,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         let rig = try AutoRig()
         rig.coordinator.russianPriorityProvider = { true }
         rig.deliver("f", source: rig.en)
-        rig.settle()
+        rig.settle(expected: .applied)
         let notice = try XCTUnwrap(rig.correctionNotices.last)
         rig.receiptClock += 16_000_000_000
 
@@ -766,7 +774,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         let rig = try AutoRig()
         rig.coordinator.russianPriorityProvider = { true }
         rig.deliver("f", source: rig.en)
-        rig.settle()
+        rig.settle(expected: .applied)
         XCTAssertEqual(rig.field.text, "а")
         rig.field.dropInsertion = true
 
@@ -787,7 +795,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         let rig = try AutoRig()
         rig.coordinator.russianPriorityProvider = { true }
         rig.deliver("f", source: rig.en)
-        rig.settle()
+        rig.settle(expected: .applied)
         XCTAssertEqual(rig.field.text, "а")
         rig.undoSourceOutcome = .refused
 
@@ -803,7 +811,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         let rig = try AutoRig()
         rig.coordinator.russianPriorityProvider = { true }
         rig.deliver("f", source: rig.en)
-        rig.settle()
+        rig.settle(expected: .applied)
         XCTAssertEqual(rig.field.text, "а")
 
         XCTAssertEqual(try rig.undoByDoubleShift().outcome, .confirmed(resultID: rig.en))
@@ -826,7 +834,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         let rig = try AutoRig()
         _ = rig.coordinator
         rig.deliver("ghbd", source: rig.en)
-        rig.settle()
+        rig.settle(expected: .applied)
         XCTAssertEqual(rig.field.text, "прив")
 
         XCTAssertEqual(try rig.undoByDoubleShift().outcome, .confirmed(resultID: rig.en))
@@ -845,7 +853,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         let rig = try AutoRig()
         _ = rig.coordinator
         rig.deliver("ghbd", source: rig.en)
-        rig.settle()
+        rig.settle(expected: .applied)
         XCTAssertEqual(rig.field.text, "прив")
         let notice = try XCTUnwrap(rig.correctionNotices.last)
         rig.coordinator.undoCorrection(id: notice.id) { result in
