@@ -155,6 +155,12 @@ struct PredictionEngine: Sendable {
                     && lexicon.isPersonalWord($0.core, language: target)
             }).map { $0.core + $0.suffix }
         }
+        // A normative source spelling is exact protection, independent of
+        // frequency. A failed database read cannot justify replacing text.
+        guard let sourceSpelling = lexicon.hasSupplementalSpelling(stripped.core, language: source) else {
+            throw EvaluationRefusal.unavailableLexicon
+        }
+        if sourceSpelling { return nil }
         guard let fullWordFrequency = lexicon.fullFrequency(of: word, language: source),
               let fullCoreFrequency = stripped.suffix.isEmpty ? fullWordFrequency
                 : lexicon.fullFrequency(of: stripped.core, language: source) else {
@@ -193,6 +199,21 @@ struct PredictionEngine: Sendable {
             if frequency >= 5_000 || (candidate.suffix.isEmpty && targetPrefix.completions > 0) {
                 return candidate.core + candidate.suffix
             }
+        }
+        // The unweighted tier only helps a complete, otherwise unknown word.
+        // Query every eligible candidate so punctuation-derived alternatives
+        // cannot make a silent ambiguous choice or mask a failed database read.
+        if atBoundary && rareSourceFrequency == 0 {
+            var spellingMatches: [String] = []
+            for candidate in candidates where lexicalToken(candidate.core)
+                && candidate.core.filter(\.isLetter).count >= 4 {
+                guard let matched = lexicon.hasSupplementalSpelling(candidate.core, language: target) else {
+                    throw EvaluationRefusal.unavailableLexicon
+                }
+                if matched { spellingMatches.append(candidate.core + candidate.suffix) }
+            }
+            let distinctMatches = Set(spellingMatches)
+            if distinctMatches.count == 1 { return distinctMatches.first }
         }
         return nil
     }

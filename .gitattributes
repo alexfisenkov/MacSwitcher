@@ -1,0 +1,2 @@
+# Keep the pinned upstream license notice byte-for-byte, including its whitespace.
+dictionaries/LICENSE-ESDB-Copyright.txt -whitespace

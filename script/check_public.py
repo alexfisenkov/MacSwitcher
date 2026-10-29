@@ -8,8 +8,84 @@ import re
 import sqlite3
 import subprocess
 import sys
+import unicodedata
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def validate_supplemental(manifest, failures):
+    supplemental = manifest.get("supplemental_spellings")
+    if not isinstance(supplemental, dict) or set(supplemental.get("languages", {})) != {"ru", "en"}:
+        failures.append(("dictionaries/manifest.json", "missing supplemental spelling records"))
+        return
+    modern = supplemental.get("modern_source", {})
+    try:
+        modern_path = ROOT / modern["path"]
+        if file_sha256(modern_path) != modern["sha256"]:
+            raise ValueError("modern source hash mismatch")
+        rows = [line.split("\t") for line in modern_path.read_text(encoding="utf-8").splitlines()
+                if line and not line.startswith("#")]
+        counts = {lang: sum(row[0] == lang for row in rows if len(row) == 2) for lang in ("ru", "en")}
+        if (len(rows) != modern["entries"] or counts != modern["counts"] or
+                any(len(row) != 2 or row[0] not in counts or len(row[1]) < 2 for row in rows)):
+            raise ValueError("modern source count/schema mismatch")
+    except (OSError, KeyError, ValueError, UnicodeError) as error:
+        failures.append(("dictionaries/manifest.json", f"modern source invalid: {error}"))
+    for key in ("ru_source", "en_source"):
+        try:
+            item = supplemental[key]
+            notice = ROOT / item["notice"]
+            if file_sha256(notice) != item["notice_sha256"]:
+                failures.append((item["notice"], "bundled license hash mismatch"))
+        except (OSError, KeyError):
+            failures.append(("dictionaries/manifest.json", f"missing {key} bundled license"))
+    try:
+        if file_sha256(ROOT / "dictionaries/LICENSE-ESDB-Copyright.txt") != supplemental["sources"]["Copyright"]["sha256"]:
+            failures.append(("dictionaries/LICENSE-ESDB-Copyright.txt", "ESDB notice hash mismatch"))
+    except (OSError, KeyError):
+        failures.append(("dictionaries/manifest.json", "missing ESDB notice record"))
+    patterns = {"ru": re.compile(r"[а-яё]+(?:-[а-яё]+)*\Z"),
+                "en": re.compile(r"[a-z]+(?:['-][a-z]+)*\Z")}
+    for language, entry in supplemental["languages"].items():
+        try:
+            path = ROOT / entry["output"]
+            if file_sha256(path) != entry["output_sha256"] or path.stat().st_size != entry["bytes"] or entry["bytes"] >= 100_000_000:
+                failures.append((entry["output"], "supplemental hash/size mismatch"))
+                continue
+            with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro&immutable=1", uri=True)) as database:
+                table = database.execute("SELECT sql FROM sqlite_master WHERE name='spellings' AND type='table'").fetchone()
+                if not table or "WITHOUT ROWID" not in table[0].upper():
+                    raise ValueError("spellings table schema mismatch")
+                columns = database.execute("PRAGMA table_info(spellings)").fetchall()
+                if [(row[1], row[2], row[3], row[5]) for row in columns] != [("word", "TEXT", 1, 1)]:
+                    raise ValueError("spellings columns mismatch")
+                metadata = dict(database.execute("SELECT key,value FROM metadata"))
+                count = database.execute("SELECT COUNT(*) FROM spellings").fetchone()[0]
+                if (database.execute("PRAGMA user_version").fetchone()[0] != 1 or
+                        metadata != {"entries": str(count), "language": language} or
+                        count != entry["entries"] or database.execute("PRAGMA quick_check").fetchone()[0] != "ok"):
+                    raise ValueError("metadata/count/integrity mismatch")
+                for (word,) in database.execute("SELECT word FROM spellings"):
+                    if not (1 <= len(word) <= 40 and unicodedata.normalize("NFC", word.lower()) == word and patterns[language].fullmatch(word)):
+                        raise ValueError("invalid normalized spelling")
+                frequency = ROOT / manifest["languages"][language]["full"]["output"]
+                database.execute("ATTACH DATABASE ? AS frequency", (frequency.resolve().as_uri() + "?mode=ro&immutable=1",))
+                overlap = database.execute("SELECT COUNT(*) FROM spellings s JOIN frequency.frequencies f ON s.word=f.word").fetchone()[0]
+                full_count = database.execute("SELECT COUNT(*) FROM frequency.frequencies").fetchone()[0]
+                if (overlap != entry["overlap_with_frequency"] or
+                        count - overlap != entry["new_unique_against_frequency"] or
+                        full_count + count - overlap != entry["union_with_frequency"]):
+                    raise ValueError("union/overlap mismatch")
+        except (OSError, KeyError, TypeError, ValueError, sqlite3.Error) as error:
+            failures.append((entry.get("output", "dictionaries/manifest.json"), f"invalid supplemental SQLite: {error}"))
 
 
 def main():
@@ -40,7 +116,7 @@ def main():
             if re.search(r"^\s*(?:push|pull_request|schedule|release)\s*:", content, re.MULTILINE) or "workflow_dispatch" not in content:
                 failures.append((relative, "workflow must be manual-only"))
     manifest = json.loads((ROOT / "dictionaries/manifest.json").read_text())
-    if manifest.get("schema") != 2:
+    if manifest.get("schema") not in (2, 3):
         failures.append(("dictionaries/manifest.json", "unsupported dictionary manifest schema"))
     for language, entry in manifest["languages"].items():
         data = (ROOT / entry["output"]).read_bytes()
@@ -85,11 +161,14 @@ def main():
             failures.append((protected["output"], "curated resource hash/schema/count mismatch"))
     except (KeyError, OSError, UnicodeError):
         failures.append(("dictionaries/manifest.json", "missing/invalid curated resource record"))
+    if manifest.get("schema") == 3:
+        validate_supplemental(manifest, failures)
     for path, reason in failures:
         print(f"FAIL {path}: {reason}", file=sys.stderr)
     if failures:
         return 1
-    print(f"Public checks passed: {sum(bool(p) for p in paths)} files; trigger/full SQLite/curated hashes and counts verified")
+    print(f"Public checks passed: {sum(bool(p) for p in paths)} files; trigger/full/curated"
+          + ("/supplemental" if manifest.get("schema") == 3 else "") + " hashes and counts verified")
     return 0
 
 

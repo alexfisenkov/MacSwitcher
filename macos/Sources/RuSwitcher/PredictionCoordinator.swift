@@ -72,9 +72,11 @@ final class PredictionCoordinator {
             var answer: [SmartConvert.WordQuery: Bool] = [:]
             for query in queries {
                 guard let frequency = engine.lexicon.fullFrequency(of: query.word,
-                    language: query.language) else { return nil }
+                    language: query.language),
+                    let spelling = engine.lexicon.hasSupplementalSpelling(query.word,
+                        language: query.language) else { return nil }
                 answer[query] = frequency > 0 || protectedWord(engine.lexicon,
-                    query.word, query.language)
+                    query.word, query.language) || spelling
             }
             return answer
         }.value

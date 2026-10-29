@@ -1,5 +1,5 @@
 {
-  "schema": 2,
+  "schema": 3,
   "upstream": "https://github.com/hermitdave/FrequencyWords",
   "revision": "525f9b560de45753a5ea01069454e72e9aa541c6",
   "corpus": "OpenSubtitles 2018",
@@ -56,5 +56,103 @@
     "provenance": "Project-curated public spellings of brands, technology, common given/family names, IT words and place names; no personal contacts or user text",
     "license": "CC0-1.0",
     "license_url": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  "supplemental_spellings": {
+    "transformation": "NFC/lowercase/alphabet and length 1...40; distinct exact spellings only, no frequency or runtime writes",
+    "sqlite_builder_version": "3.50.4",
+    "sources": {
+      "ru.whl": {
+        "url": "https://files.pythonhosted.org/packages/b0/67/469e9e52d046863f5959928794d3067d455a77f580bf4a662630a43eb426/pymorphy3_dicts_ru-2.4.417150.4580142-py2.py3-none-any.whl",
+        "sha256": "718bac64c73c10c16073a199402657283d9b64c04188b694f6d3e9b0d85440f4",
+        "bytes": 8442043
+      },
+      "dawg.whl": {
+        "url": "https://files.pythonhosted.org/packages/6a/84/ff1ce2071d4c650ec85745766c0047ccc3b5036f1d03559fd46bb38b5eeb/DAWG_Python-0.7.2-py2.py3-none-any.whl",
+        "sha256": "4941d5df081b8d6fcb4597e073a9f60d5c1ccc9d17cd733e8744d7ecfec94ef3",
+        "bytes": 11711
+      },
+      "Copyright": {
+        "url": "https://raw.githubusercontent.com/en-wl/wordlist-diff/7f2f4078354752045ee16a041605686561122185/Copyright",
+        "sha256": "71bffd4b74ad47fff01c8b3c666e77da92737854e568850d8728024e0a53f304",
+        "bytes": 4903
+      },
+      "en_US.txt": {
+        "url": "https://raw.githubusercontent.com/en-wl/wordlist-diff/7f2f4078354752045ee16a041605686561122185/en_US-large.txt",
+        "sha256": "815abb6f1855304a6c3f358aa1e5ce85823140a547226ce4114386f9b796c30f",
+        "bytes": 1635915
+      },
+      "en_GB.txt": {
+        "url": "https://raw.githubusercontent.com/en-wl/wordlist-diff/7f2f4078354752045ee16a041605686561122185/en_GB-large.txt",
+        "sha256": "e89e38c3685ba5830f76d804cd6998ba7048d734bd92a97f24855d96b6d26d20",
+        "bytes": 1674871
+      },
+      "en_CA.txt": {
+        "url": "https://raw.githubusercontent.com/en-wl/wordlist-diff/7f2f4078354752045ee16a041605686561122185/en_CA-large.txt",
+        "sha256": "ca1258552a81db34951374deafaa67bd676a02f0e1a026b14855f6042e46d47d",
+        "bytes": 1640130
+      },
+      "en_AU.txt": {
+        "url": "https://raw.githubusercontent.com/en-wl/wordlist-diff/7f2f4078354752045ee16a041605686561122185/en_AU-large.txt",
+        "sha256": "16a868afb85faa109be217cae3cf506d7d4eafe128a3a5fbf335ef5ee6d6c73e",
+        "bytes": 1641244
+      }
+    },
+    "ru_source": {
+      "name": "pymorphy3-dicts-ru",
+      "version": "2.4.417150.4580142",
+      "underlying_data": "OpenCorpora",
+      "license": "CC-BY-SA-3.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/3.0/",
+      "notice": "dictionaries/LICENSE-CC-BY-SA-3.0.txt",
+      "notice_sha256": "3f941b3b89cf7b8370ceb83cc76d2120d471b58735d8ca60238a751a48d7f72f"
+    },
+    "en_source": {
+      "name": "English Speller Database",
+      "revision": "7f2f4078354752045ee16a041605686561122185",
+      "license": "ESDB attribution notice",
+      "notice": "dictionaries/LICENSE-ESDB-Copyright.txt",
+      "notice_sha256": "71bffd4b74ad47fff01c8b3c666e77da92737854e568850d8728024e0a53f304"
+    },
+    "modern_source": {
+      "path": "dictionaries/modern-spellings-source.tsv",
+      "sha256": "199c2d2e6b336de35edeccfe0fbe690b491f44693617b5374a085aacfafa3ba0",
+      "entries": 533,
+      "counts": {
+        "ru": 341,
+        "en": 192
+      },
+      "license": "CC0-1.0",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/"
+    },
+    "languages": {
+      "ru": {
+        "output": "macos/Sources/RuSwitcher/Resources/ru-spellings.sqlite",
+        "output_sha256": "085248fb6b846c53e60c7e0c0392883aab7e14053c90d76fd88e2a44a6abbe39",
+        "bytes": 85635072,
+        "schema": 1,
+        "storage": "SQLite spellings(word TEXT PRIMARY KEY NOT NULL) WITHOUT ROWID; metadata; user_version=1",
+        "entries": 3063967,
+        "source_accepted_rows": 5137804,
+        "source_unique_entries": 3063822,
+        "modern_new_entries": 145,
+        "overlap_with_frequency": 491570,
+        "new_unique_against_frequency": 2572397,
+        "union_with_frequency": 3750930
+      },
+      "en": {
+        "output": "macos/Sources/RuSwitcher/Resources/en-spellings.sqlite",
+        "output_sha256": "5819a697a9e7ba8cae9e9238946bd63b299fe6f1538372e712743842176792a6",
+        "bytes": 2387968,
+        "schema": 1,
+        "storage": "SQLite spellings(word TEXT PRIMARY KEY NOT NULL) WITHOUT ROWID; metadata; user_version=1",
+        "entries": 171023,
+        "source_accepted_rows": 676543,
+        "source_unique_entries": 170997,
+        "modern_new_entries": 26,
+        "overlap_with_frequency": 111025,
+        "new_unique_against_frequency": 59998,
+        "union_with_frequency": 1447380
+      }
+    }
   }
 }

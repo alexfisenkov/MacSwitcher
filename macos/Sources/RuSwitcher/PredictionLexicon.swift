@@ -67,12 +67,15 @@ struct PredictionLexicon: Sendable {
 
     private let indexes: [String: LanguageIndex]
     private let fullLexicon: FullFrequencyLexicon
+    private let spellingLexicon: SupplementalSpellingLexicon
     private let protectedTerms: ProtectedTerms
 
     init(wordsByLanguage: [String: [String: Int]],
          fullWordsByLanguage: [String: [String: Int]] = [:],
+         spellingWordsByLanguage: [String: Set<String>] = [:],
          protectedTermsByLanguage: [String: Set<String>] = [:],
-         fullLexicon: FullFrequencyLexicon? = nil) {
+         fullLexicon: FullFrequencyLexicon? = nil,
+         spellingLexicon: SupplementalSpellingLexicon? = nil) {
         var grouped: [String: [String: Int]] = [:]
         for (language, words) in wordsByLanguage {
             let code = Self.languageCode(language)
@@ -83,13 +86,15 @@ struct PredictionLexicon: Sendable {
         }
         indexes = grouped.mapValues { LanguageIndex(words: $0) }
         self.fullLexicon = fullLexicon ?? FullFrequencyLexicon(wordsByLanguage: fullWordsByLanguage)
+        self.spellingLexicon = spellingLexicon ?? SupplementalSpellingLexicon(wordsByLanguage: spellingWordsByLanguage)
         protectedTerms = ProtectedTerms(termsByLanguage: protectedTermsByLanguage)
     }
 
     private init(indexes: [String: LanguageIndex], fullLexicon: FullFrequencyLexicon,
-                 protectedTerms: ProtectedTerms) {
+                 spellingLexicon: SupplementalSpellingLexicon, protectedTerms: ProtectedTerms) {
         self.indexes = indexes
         self.fullLexicon = fullLexicon
+        self.spellingLexicon = spellingLexicon
         self.protectedTerms = protectedTerms
     }
 
@@ -129,23 +134,37 @@ struct PredictionLexicon: Sendable {
             }
             fullURLs[language] = url
         }
+        var spellingURLs: [String: URL] = [:]
+        for language in ["ru", "en"] {
+            guard let url = bundle.url(forResource: language + "-spellings", withExtension: "sqlite") else {
+                throw LoadError.missingResource(language + "-spellings")
+            }
+            spellingURLs[language] = url
+        }
         guard let termsURL = bundle.url(forResource: "protected-terms", withExtension: "tsv") else {
             throw LoadError.missingResource("protected-terms")
         }
         let triggerLexicon = try PredictionLexicon(tsvByLanguage: contents)
         return try PredictionLexicon(indexes: triggerLexicon.indexes,
                                      fullLexicon: FullFrequencyLexicon(urlsByLanguage: fullURLs),
+                                     spellingLexicon: SupplementalSpellingLexicon(urlsByLanguage: spellingURLs),
                                      protectedTerms: ProtectedTerms(tsv: String(contentsOf: termsURL, encoding: .utf8)))
     }
 
     /// Counts are separate: full corpus includes trigger entries, so do not sum them.
     var wordCounts: [String: Int] { indexes.mapValues { $0.frequencies.count } }
     var fullWordCounts: [String: Int] { fullLexicon.wordCounts }
+    var spellingWordCounts: [String: Int] { spellingLexicon.wordCounts }
     var protectedTermCounts: [String: Int] { protectedTerms.wordCounts }
 
     /// nil is an unavailable exact database read; zero is a known missing word.
     func fullFrequency(of word: String, language: String) -> Int? {
         fullLexicon.frequency(of: word, language: language)
+    }
+
+    /// nil is an unavailable spelling database read; false is known absence.
+    func hasSupplementalSpelling(_ word: String, language: String) -> Bool? {
+        spellingLexicon.contains(word, language: language)
     }
 
     func isProtectedTerm(_ word: String, language: String) -> Bool {
