@@ -1,9 +1,9 @@
 {
-  "version": "0.1.0-alpha.21",
+  "version": "0.1.0-alpha.22",
   "short_version": "0.1.0",
-  "build": 21,
+  "build": 22,
   "channel": "alpha",
   "url": "https://github.com/alexfisenkov/MacSwitcher/releases",
-  "notes": "Добавлен отдельный точный словарь: миллионы русских словоформ и расширенный английский набор. Настройки и жесты Shift сохранены.",
+  "notes": "Повышена устойчивость подтверждения выделения перед заменой текста. Интервал Shift и словари сохранены.",
   "native_backend_accepted": false
 }

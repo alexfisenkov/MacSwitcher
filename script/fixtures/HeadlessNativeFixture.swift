@@ -93,8 +93,19 @@ private final class HeadlessFixtureApplication: NSApplication {
 
     // NSApplication has no modern focusedUIElement override. This fixture-only
     // compatibility entry publishes just our unattached synthetic text view.
+    override func accessibilityAttributeNames() -> [NSAccessibility.Attribute] {
+        super.accessibilityAttributeNames() + [
+            NSAccessibility.Attribute(rawValue: "AXFixtureMarkedEventCount"),
+            NSAccessibility.Attribute(rawValue: "AXFixtureHasPendingDelivery")]
+    }
     override func accessibilityAttributeValue(_ attribute: NSAccessibility.Attribute) -> Any? {
         if attribute == .focusedUIElement { return MainActor.assumeIsolated { activeField } }
+        if attribute.rawValue == "AXFixtureMarkedEventCount" {
+            return MainActor.assumeIsolated { NSNumber(value: markedEvents) }
+        }
+        if attribute.rawValue == "AXFixtureHasPendingDelivery" {
+            return MainActor.assumeIsolated { NSNumber(value: hasPendingDelivery) }
+        }
         return super.accessibilityAttributeValue(attribute)
     }
     override func accessibilityChildren() -> [Any]? { [field, otherField] }
@@ -266,6 +277,7 @@ private struct HeadlessNativeFixture {
         var identityReadFailures: [String: Int] = [:]
         var nilObservations = 0
         var observedStates: [String: Int] = [:]
+        var observedSelections: [String: Int] = [:]
         let started = ProcessInfo.processInfo.systemUptime
         let editDeadline = started + VerifiedNativeFieldEditor.maximumDuration
         func valid(until deadline: TimeInterval) -> Bool {
@@ -301,6 +313,10 @@ private struct HeadlessNativeFixture {
                     } else if value.text == finalText && value.selectionLength != 0 { kind = "newTextOldSelection" }
                     else { kind = "ordinaryObservation" }
                     observedStates[kind, default: 0] += 1
+                    let textKind = value.text == originalText ? "original"
+                        : value.text == finalText ? "replacement" : "other"
+                    let position = "\(textKind):\(value.caretUTF16Location):\(value.selectionLength)"
+                    observedSelections[position, default: 0] += 1
                 } else { nilObservations += 1 }
                 return value
             }, postBatch: { requested in
@@ -330,39 +346,87 @@ private struct HeadlessNativeFixture {
                                                          start: fixtureCase.start, access: access, onTextQueued: { textQueued = true })
             : VerifiedNativeFieldEditor.execute(original: fixtureCase.original, replacement: fixtureCase.replacement,
                                                 start: fixtureCase.start, access: access, onTextQueued: { textQueued = true })
+        let executorCompletedAt = ProcessInfo.processInfo.systemUptime
+        let executorMilliseconds = (executorCompletedAt - started) * 1000
         let confirmed = result == .confirmed
         var uncertain = false
         if case .uncertain = result { uncertain = true }
+        var preparationUncertain = false
+        if case .preparationUncertain = result { preparationUncertain = true }
         let aborted = !textQueued && (result == .refused || uncertain)
-        let focusAbort = fixtureCase == .programmaticFocusChange && aborted
+        // The fixture parent independently checks both field values before PASS.
+        let focusAbort = fixtureCase == .programmaticFocusChange && !textQueued
+            && (aborted || preparationUncertain)
         let dropDetected = fixtureCase == .droppedReplacement && textQueued && uncertain
+        // Parent requires exact original text/caret and unchanged second field.
+        let delayedSafeAbort = fixtureCase.delay >= 0.050
+            && (aborted || uncertain || (!textQueued && preparationUncertain))
         let expectedOutcome = focusAbort || dropDetected || confirmed ||
-            (fixtureCase.delay >= 0.050 && (aborted || uncertain))
+            delayedSafeAbort
         let expectsOriginal = !textQueued || fixtureCase == .droppedReplacement
         let expectedBase = expectsOriginal ? fixtureCase.original : fixtureCase.replacement
         let expectedTail = fixtureCase.hasContinuation ? (textQueued ? "ет" : "tn") : ""
         let expectedText = fixtureCase.prefix + expectedBase + expectedTail + fixtureCase.suffix
+        let continuationDeadline = min(editDeadline, ProcessInfo.processInfo.systemUptime + 0.020)
         if expectedOutcome && fixtureCase.hasContinuation,
            let tail = NativeSelectedTextEventTransport(replacement: expectedTail),
-           valid(until: ProcessInfo.processInfo.systemUptime + 0.020) {
+           valid(until: continuationDeadline) {
             // Fixed synthetic continuation is queued only after the executor
             // returns; it must follow the already queued complete edit batch.
-            continuationQueued = tail.post(to: target, whileCurrent: { valid(until: ProcessInfo.processInfo.systemUptime + 0.020) })
+            continuationQueued = tail.post(to: target, whileCurrent: { valid(until: continuationDeadline) })
+        }
+        // Wait for our parent fixture to receive and deliver every posted pair.
+        // An early AX snapshot must not let the sender exit with queued events.
+        let expectedEvents = posted + (continuationQueued ? 2 : 0)
+        let postExecutorStarted = executorCompletedAt
+        let postExecutorDeadline = postExecutorStarted + 1.500
+        var receiptCount: Int?
+        var receiptPending: Bool?
+        var receiptComplete = false
+        var receiptReadFailures: [String: Int] = [:]
+        while ProcessInfo.processInfo.systemUptime < postExecutorDeadline, target == getppid() {
+            let remaining = postExecutorDeadline - ProcessInfo.processInfo.systemUptime
+            guard remaining > 0,
+                  AXUIElementSetMessagingTimeout(application, Float(min(0.020, remaining / 2))) == .success else { break }
+            var countRaw: CFTypeRef?
+            var pendingRaw: CFTypeRef?
+            let countStatus = AXUIElementCopyAttributeValue(application,
+                "AXFixtureMarkedEventCount" as CFString, &countRaw)
+            let pendingStatus = AXUIElementCopyAttributeValue(application,
+                "AXFixtureHasPendingDelivery" as CFString, &pendingRaw)
+            if countStatus == .success, pendingStatus == .success,
+               let count = (countRaw as? NSNumber)?.intValue,
+               let pending = (pendingRaw as? NSNumber)?.boolValue {
+                receiptCount = count
+                receiptPending = pending
+                if count == expectedEvents && !pending { receiptComplete = true; break }
+                if count > expectedEvents { break }
+            } else {
+                receiptReadFailures["\(countStatus.rawValue):\(pendingStatus.rawValue)", default: 0] += 1
+            }
+            usleep(useconds_t(min(0.001, max(0, postExecutorDeadline - ProcessInfo.processInfo.systemUptime)) * 1_000_000))
         }
         var finalExact = false
-        if posted > 0 {
-            let deadline = ProcessInfo.processInfo.systemUptime + 0.800
-            while ProcessInfo.processInfo.systemUptime < deadline {
-                if let observation = observe(field), observation.text.utf16.elementsEqual(expectedText.utf16),
+        if receiptComplete {
+            while ProcessInfo.processInfo.systemUptime < postExecutorDeadline {
+                if let observation = observe(field, deadline: postExecutorDeadline), observation.text.utf16.elementsEqual(expectedText.utf16),
                    observation.caretUTF16Location == fixtureCase.start + expectedBase.utf16.count + expectedTail.utf16.count,
                    observation.selectionLength == 0 { finalExact = true; break }
-                usleep(1000)
+                usleep(useconds_t(min(0.001, max(0, postExecutorDeadline - ProcessInfo.processInfo.systemUptime)) * 1_000_000))
             }
         }
-        emit(["confirmed": confirmed, "textQueued": textQueued, "cancellationQueued": cancellationQueued, "continuationQueued": continuationQueued, "expectedOutcome": expectedOutcome, "finalDeliveryConfirmed": finalExact, "postedEvents": posted,
+        emit(["confirmed": confirmed, "resultKind": confirmed ? "confirmed" : uncertain ? "uncertain" : preparationUncertain ? "preparationUncertain" : "refused",
+              "textQueued": textQueued, "cancellationQueued": cancellationQueued, "continuationQueued": continuationQueued, "expectedOutcome": expectedOutcome, "finalDeliveryConfirmed": finalExact, "postedEvents": posted,
+              "receiptExpectedEvents": expectedEvents, "receiptObservedEvents": receiptCount ?? -1,
+              "receiptPendingDelivery": receiptPending ?? true, "receiptComplete": receiptComplete,
+              "receiptAttributesAvailable": receiptCount != nil && receiptPending != nil,
+              "receiptReadFailures": receiptReadFailures, "executorMilliseconds": executorMilliseconds,
+              "postExecutorDrainMilliseconds": (ProcessInfo.processInfo.systemUptime - postExecutorStarted) * 1000,
               "observations": observations, "nilObservations": nilObservations,
-              "identityReadFailures": identityReadFailures, "observedStates": observedStates, "milliseconds": (ProcessInfo.processInfo.systemUptime - started) * 1000])
-        return expectedOutcome && (finalExact || focusAbort) ? 0 : 1
+              "identityReadFailures": identityReadFailures, "observedStates": observedStates,
+              "observedSelections": observedSelections,
+              "milliseconds": (ProcessInfo.processInfo.systemUptime - started) * 1000])
+        return expectedOutcome && receiptComplete && (finalExact || focusAbort) ? 0 : 1
     }
 
     private static func boundTimeout(_ field: AXUIElement, deadline: TimeInterval) -> Bool {

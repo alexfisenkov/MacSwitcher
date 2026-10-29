@@ -95,6 +95,22 @@ enum RuntimeDiagnostics {
 @MainActor
 enum AXCapabilityDiagnostics {
     static func runIfRequested(arguments: [String]) -> Int32? {
+        if let index = arguments.firstIndex(of: "--ax-capabilities-metadata") {
+            guard !arguments.contains("--enable-accessibility") else {
+                emit(["error": "metadataModeDisallowsAccessibilityMutation"]); return 2
+            }
+            guard index + 1 < arguments.count, !arguments[index + 1].hasPrefix("--") else {
+                emit(["error": "missingBundleIdentifier"]); return 2
+            }
+            let targets = NSWorkspace.shared.runningApplications.filter {
+                $0.bundleIdentifier == arguments[index + 1]
+            }
+            emit(["mode": "metadata", "trusted": AXIsProcessTrusted(),
+                  "secureInputActive": AutoSwitchPolicy.secureInputActive,
+                  "applicationFound": !targets.isEmpty,
+                  "applications": targets.map(inspectMetadata)])
+            return targets.isEmpty ? 2 : 0
+        }
         guard let index = arguments.firstIndex(of: "--ax-capabilities") else { return nil }
         guard index + 1 < arguments.count, !arguments[index + 1].hasPrefix("--") else {
             emit(["error": "missingBundleIdentifier"]); return 2
@@ -106,6 +122,151 @@ enum AXCapabilityDiagnostics {
         result["enableAccessibilityRequested"] = arguments.contains("--enable-accessibility")
         emit(result)
         return targets.isEmpty ? 2 : 0
+    }
+
+    /// The metadata reader deliberately has no operation for reading a text,
+    /// selection, range, title, description or other arbitrary AX attribute.
+    enum MetadataScalar: String, CaseIterable {
+        case role = "AXRole"
+        case subrole = "AXSubrole"
+        case enabled = "AXEnabled"
+        case editable = "AXEditable"
+        case readOnly = "AXReadOnly"
+    }
+
+    @MainActor
+    protocol MetadataReader {
+        func attributeNames() -> (AXError, [String])
+        func parameterizedAttributeNames() -> (AXError, [String])
+        func scalar(_ name: MetadataScalar) -> (AXError, AnyObject?)
+        func isSettable(_ name: String) -> (AXError, Bool)
+    }
+
+    private struct LiveMetadataReader: MetadataReader {
+        let element: AXUIElement
+
+        func attributeNames() -> (AXError, [String]) {
+            var raw: CFArray?
+            let error = AXUIElementCopyAttributeNames(element, &raw)
+            return (error, raw as? [String] ?? [])
+        }
+
+        func parameterizedAttributeNames() -> (AXError, [String]) {
+            var raw: CFArray?
+            let error = AXUIElementCopyParameterizedAttributeNames(element, &raw)
+            return (error, raw as? [String] ?? [])
+        }
+
+        func scalar(_ name: MetadataScalar) -> (AXError, AnyObject?) {
+            var raw: AnyObject?
+            let error = AXUIElementCopyAttributeValue(element, name.rawValue as CFString, &raw)
+            return (error, raw)
+        }
+
+        func isSettable(_ name: String) -> (AXError, Bool) {
+            var flag = DarwinBoolean(false)
+            let error = AXUIElementIsAttributeSettable(element, name as CFString, &flag)
+            return (error, flag.boolValue)
+        }
+    }
+
+    private static func inspectMetadata(_ target: NSRunningApplication) -> [String: Any] {
+        let app = AXUIElementCreateApplication(target.processIdentifier)
+        var result: [String: Any] = ["pid": target.processIdentifier,
+            "targetIsFrontmost": NSWorkspace.shared.frontmostApplication?.processIdentifier == target.processIdentifier]
+        let appTimeoutError = AXUIElementSetMessagingTimeout(app, 0.25)
+        result["applicationTimeoutError"] = appTimeoutError.rawValue
+        guard appTimeoutError == .success else {
+            result["focusAvailable"] = false; return result
+        }
+        var focused: AnyObject?
+        let error = AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &focused)
+        result["focusError"] = error.rawValue
+        if error != .success {
+            let system = AXUIElementCreateSystemWide()
+            let systemTimeoutError = AXUIElementSetMessagingTimeout(system, 0.25)
+            result["systemTimeoutError"] = systemTimeoutError.rawValue
+            guard systemTimeoutError == .success else {
+                result["focusAvailable"] = false; return result
+            }
+            var global: AnyObject?
+            let globalError = AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &global)
+            result["systemFocusError"] = globalError.rawValue
+            focused = globalError == .success ? global : nil
+            if focused != nil { result["focusOrigin"] = "systemWide" }
+        }
+        guard let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() else {
+            result["focusAvailable"] = false; return result
+        }
+        let element = focused as! AXUIElement
+        let elementTimeoutError = AXUIElementSetMessagingTimeout(element, 0.25)
+        result["elementTimeoutError"] = elementTimeoutError.rawValue
+        guard elementTimeoutError == .success else {
+            result["focusAvailable"] = false; return result
+        }
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success, pid == target.processIdentifier else {
+            result["focusAvailable"] = false; return result
+        }
+        result["focusAvailable"] = true
+        result.merge(metadata(from: LiveMetadataReader(element: element))) { _, new in new }
+        return result
+    }
+
+    /// Only closed-vocabulary identifiers and scalar Boolean states leave this
+    /// function. Attribute names are tested for membership, never serialized.
+    static func metadata(from reader: any MetadataReader) -> [String: Any] {
+        let (namesError, names) = reader.attributeNames()
+        let available = namesError == .success ? Set(names) : []
+        var result: [String: Any] = ["attributeNamesError": namesError.rawValue]
+
+        let (roleError, roleRaw) = reader.scalar(.role)
+        result["roleError"] = roleError.rawValue
+        switch roleError == .success ? roleRaw as? String : nil {
+        case kAXTextFieldRole: result["role"] = "AXTextField"
+        case kAXTextAreaRole: result["role"] = "AXTextArea"
+        case "AXWebArea": result["role"] = "AXWebArea"
+        case kAXGroupRole: result["role"] = "AXGroup"
+        default: result["role"] = "Other"
+        }
+        let (subroleError, subroleRaw) = reader.scalar(.subrole)
+        result["subroleError"] = subroleError.rawValue
+        result["secureTextSubrole"] = subroleError == .success && (subroleRaw as? String) == "AXSecureTextField"
+
+        var editability: [String: Any] = [:]
+        for scalar in [MetadataScalar.enabled, .editable, .readOnly] {
+            let (error, raw) = reader.scalar(scalar)
+            let state: String
+            switch NativeFieldBooleanSignal.attribute(status: error, raw: raw) {
+            case .value(true): state = "true"
+            case .value(false): state = "false"
+            case .unavailable: state = "unavailable"
+            case .invalid: state = "invalid"
+            }
+            editability[scalar.rawValue] = ["error": error.rawValue, "state": state]
+        }
+        result["editability"] = editability
+
+        var attributes: [String: Any] = [:]
+        for name in [kAXSelectedTextRangeAttribute, kAXSelectedTextAttribute, kAXValueAttribute,
+                     "AXSelectedTextMarkerRange"] {
+            let (error, settable) = reader.isSettable(name)
+            attributes[name] = ["present": available.contains(name), "settableError": error.rawValue,
+                                "settable": error == .success && settable]
+        }
+        result["attributes"] = attributes
+
+        let (parameterizedError, parameterizedNames) = reader.parameterizedAttributeNames()
+        let whitelist: Set<String> = [kAXStringForRangeParameterizedAttribute,
+            kAXBoundsForRangeParameterizedAttribute, "AXStringForTextMarkerRange",
+            "AXAttributedStringForTextMarkerRange", "AXTextMarkerRangeForUIElement",
+            "AXTextMarkerForIndex", "AXIndexForTextMarker", "AXTextOperation",
+            "AXStartTextMarkerForTextMarkerRange", "AXEndTextMarkerForTextMarkerRange",
+            "AXPreviousTextMarkerForTextMarker", "AXTextMarkerRangeForUnorderedTextMarkers"]
+        result["parameterizedAttributesError"] = parameterizedError.rawValue
+        result["parameterizedAttributes"] = parameterizedError == .success
+            ? Array(Set(parameterizedNames).intersection(whitelist)).sorted() : []
+        return result
     }
 
     private static func inspect(_ target: NSRunningApplication, enable: Bool) -> [String: Any] {

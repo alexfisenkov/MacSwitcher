@@ -56,7 +56,7 @@ struct NativeFieldAccess {
 enum VerifiedNativeFieldEditor {
     static let maximumDuration: TimeInterval = 0.180
     static let maximumObservations = 256
-    static let maximumPreparationDuration: TimeInterval = 0.070
+    static let maximumPreparationDuration: TimeInterval = 0.110
     private static let pollInterval: TimeInterval = 0.001
 
     static func execute(original: String, replacement: String, start: Int,
@@ -89,7 +89,8 @@ enum VerifiedNativeFieldEditor {
         let deadline = absoluteDeadline ?? started + maximumDuration
         guard deadline.isFinite, deadline > started, deadline <= started + maximumDuration else { return .refused }
         let preparationDeadline = min(started + maximumPreparationDuration,
-                                      started + (deadline - started) * 0.4)
+                                      started + max((deadline - started) * 0.4,
+                                                    (deadline - started) - 0.070))
         var lastTime = started
         var observationCount = 0
         var lastObservation: NativeFieldObservation?

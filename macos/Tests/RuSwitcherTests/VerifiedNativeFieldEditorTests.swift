@@ -10,6 +10,9 @@ final class VerifiedNativeFieldEditorTests: XCTestCase {
         var original = "ghbd"
         var replacement = "прив"
         var valid = true
+        var processIDMatches = true
+        var fieldMatches = true
+        var revisionMatches = true
         var barrier = true
         var editable = true
         var clock: TimeInterval = 0
@@ -93,7 +96,10 @@ final class VerifiedNativeFieldEditorTests: XCTestCase {
         }
 
         func access() -> NativeFieldAccess {
-            NativeFieldAccess(validateOriginalIdentity: { _ in self.onValidate?(); return self.valid },
+            NativeFieldAccess(validateOriginalIdentity: { _ in
+                self.onValidate?()
+                return self.valid && self.processIDMatches && self.fieldMatches && self.revisionMatches
+            },
                 cheapGate: { self.onCheapGate?(); return self.barrier }, isEditable: { limit in self.editableDeadlines.append(limit); return self.editable },
                 observe: { limit in
                     self.readDeadlines.append(limit)
@@ -180,9 +186,85 @@ final class VerifiedNativeFieldEditorTests: XCTestCase {
     func testPreparationRpcDeadlineReservesCleanupAndFinalAcknowledgementBudget() {
         let field = Field()
         XCTAssertEqual(field.run(), .confirmed)
-        XCTAssertEqual(field.readDeadlines, [0.180, 0.070, 0.070, 0.070, 0.180])
-        XCTAssertEqual(field.editableDeadlines, [0.180, 0.070, 0.070])
+        XCTAssertEqual(field.readDeadlines.map { Int(($0 * 1_000).rounded()) }, [180, 110, 110, 110, 180])
+        XCTAssertEqual(field.editableDeadlines.map { Int(($0 * 1_000).rounded()) }, [180, 110, 110])
         XCTAssertEqual(field.textQueuedCount, 1)
+    }
+
+    @MainActor
+    func testPreparationAcknowledgedAt85To100MillisecondsStillGetsExactFinalAcknowledgement() {
+        for preparationACK in [0.085, 0.100] {
+            let field = Field()
+            field.onObserve = {
+                if field.observeCount == 3 { field.clock = preparationACK }
+                if field.observeCount == 5 { field.clock = 0.170 }
+            }
+            XCTAssertEqual(field.run(), .confirmed)
+            XCTAssertEqual(field.text, "прив")
+            XCTAssertEqual(field.caret, 4)
+            XCTAssertEqual(field.selection, 0)
+            XCTAssertEqual(field.textQueuedCount, 1)
+            XCTAssertEqual(field.batchCount, 2)
+            XCTAssertLessThan(field.clock, 0.180)
+        }
+    }
+
+    @MainActor
+    func testShortAbsoluteDeadlineKeepsFortyMillisecondPreparationLimit() {
+        let field = Field()
+        field.onObserve = { if field.observeCount == 3 { field.clock = 0.050 } }
+        let result = VerifiedNativeFieldEditor.execute(original: "ghbd", replacement: "прив", start: 0,
+            access: field.access(), absoluteDeadline: 0.100,
+            onTextQueued: { field.textQueuedCount += 1 })
+        XCTAssertEqual(result, .refused)
+        XCTAssertEqual(field.text, "ghbd")
+        XCTAssertEqual(field.caret, 4)
+        XCTAssertEqual(field.selection, 0)
+        XCTAssertEqual(field.cancellationCount, 1)
+        XCTAssertEqual(field.textQueuedCount, 0)
+        XCTAssertFalse(field.posted.contains(.insertReplacement))
+        XCTAssertTrue(field.readDeadlines.contains { abs($0 - 0.040) < 0.000_001 })
+        XCTAssertTrue(field.readDeadlines.dropFirst().allSatisfy {
+            abs($0 - 0.040) < 0.000_001 || abs($0 - 0.100) < 0.000_001
+        })
+        XCTAssertLessThan(field.clock, 0.100)
+    }
+
+    @MainActor
+    func testExpandedPreparationStillRefusesIdentityFailuresBeforeUnicode() {
+        for failure in 0..<3 {
+            let field = Field()
+            field.onObserve = {
+                if field.observeCount == 3 {
+                    field.clock = 0.085
+                    if failure == 0 { field.processIDMatches = false }
+                    if failure == 1 { field.fieldMatches = false }
+                    if failure == 2 { field.revisionMatches = false }
+                }
+            }
+            guard case .preparationUncertain = field.run() else {
+                return XCTFail("Identity failure \(failure) must refuse text")
+            }
+            XCTAssertEqual(field.text, "ghbd")
+            XCTAssertEqual(field.batchCount, 1)
+            XCTAssertEqual(field.cancellationCount, 0)
+            XCTAssertEqual(field.textQueuedCount, 0)
+            XCTAssertFalse(field.posted.contains(.insertReplacement))
+        }
+    }
+
+    @MainActor
+    func testExpandedPreparationDoesNotExtendFinalDeadlineOrReplayUnknownUnicode() {
+        let field = Field()
+        field.onObserve = {
+            if field.observeCount == 3 { field.clock = 0.100 }
+            if field.observeCount == 5 { field.clock = 0.181 }
+        }
+        guard case .uncertain = field.run() else { return XCTFail("Late final ACK cannot confirm") }
+        XCTAssertEqual(field.text, "прив")
+        XCTAssertEqual(field.textQueuedCount, 1)
+        XCTAssertEqual(field.batchCount, 2)
+        XCTAssertEqual(field.posted.filter { $0 == .insertReplacement }.count, 1)
     }
 
     @MainActor
