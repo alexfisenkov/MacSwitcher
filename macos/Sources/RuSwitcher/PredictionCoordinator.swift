@@ -276,6 +276,9 @@ final class PredictionCoordinator {
         guard PredictionFocusAnchorPolicy.permits(originalSession: anchorSessionID,
                   currentSession: snapshot.sessionID, capturedOriginalField: true,
                   sameField: platform.focusIsCurrent(originalFocus)) else {
+            // The old field can no longer authorize this session. The boundary
+            // will discard its word before a fresh event captures another field.
+            anchorFocus = nil
             pendingCaretAnchor = nil
             RuntimeDiagnostics.record(.autoFocusMismatch); return
         }
@@ -302,6 +305,12 @@ final class PredictionCoordinator {
         let resolved = pending.resolve(sessionID: snapshot.sessionID, location: currentSelection.location,
             selectionLength: currentSelection.length, cumulativeOffset: snapshot.cumulativeUTF16Offset,
             sameField: platform.focusIsCurrent(originalFocus), snapshotIsCurrent: isCurrent(snapshot), suffixMatches: suffixMatches)
+        if pending.isCancelled {
+            anchorFocus = nil
+            pendingCaretAnchor = nil
+            RuntimeDiagnostics.record(.autoFocusMismatch)
+            return
+        }
         pendingCaretAnchor = pending
         guard resolved != nil else {
             RuntimeDiagnostics.record(.autoCaretMismatch)

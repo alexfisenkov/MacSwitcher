@@ -222,7 +222,11 @@ final class KeyboardMonitor: @unchecked Sendable {
     var nativeInputBarrierIsActive: Bool {
         nativeInputTransportAvailable && inputFence.hasActiveLease
     }
-    var nativeFenceNeedsRecovery: Bool { eventTap != nil && !inputFence.isAvailable }
+    var nativeTapNeedsRecovery: Bool {
+        NativeTapRecoveryStatus(tapPresent: eventTap != nil,
+            tapEnabled: eventTap.map { CGEvent.tapIsEnabled(tap: $0) } == true,
+            fenceAvailable: inputFence.isAvailable).needsRecovery
+    }
 
     @MainActor
     func makeDiagnosticFixtureEventProcessor() -> (@Sendable (CGEvent) -> Bool)? {

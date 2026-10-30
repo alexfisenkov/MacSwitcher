@@ -13,6 +13,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var permissionCheckTimer: Timer?
     private var iconRefreshTimer: Timer?
     private var monitoringActive = false
+    private lazy var tapRecovery = MonitoringTapRecovery(isActive: { [weak self] in
+        self?.monitoringActive == true
+    }, reconfigure: { [weak self] in
+        self?.keyboardMonitor.reconfigure() == true
+    }, schedule: { delay, action in
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { action() }
+    })
     private var caretIndicator: CaretIndicator?   // issue #10: флаг у каретки (бета, по умолчанию OFF)
     private let secureNotice = SecureInputNotice()  // issue #27: подсказка о защ. вводе без кражи фокуса
     private let correctionExceptionOffer = CorrectionExceptionOffer()
@@ -159,6 +166,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         showFeedback(title: "MacSwitcher",
             body: CorrectionFeedbackPolicy.sourceMessage(languageCode: L10n.languageCode),
             kind: .sourceFailure)
+    }
+
+    private func switchOppositeExplicitly() {
+        let intended = LayoutSwitcher.combinedShiftContext()?.targetLayoutID
+        ExplicitSourceSelectionRecovery.switchOpposite(intendedTargetID: intended,
+            switchSource: { LayoutSwitcher.switchToOpposite() },
+            observeSource: LayoutSwitcher.currentLayoutID,
+            confirm: { [weak self] target, observed in
+                _ = self?.keyboardMonitor.recordExplicitInputSourceSelection(
+                    targetID: target, observedSourceID: observed)
+            })
     }
 
     @discardableResult
@@ -498,12 +516,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 // раскладку, как defer-ветка триггера. markConverted/clearState тут лишние —
                 // буфер наполняется через handleForwardedChar, а проброшенные модификаторы
                 // сами переключат раскладку на контролируемой машине.
-                LayoutSwitcher.switchToOpposite()
+                self.switchOppositeExplicitly()
                 self.updateStatusIcon()
                 rslog("switch hotkey: local layout switched (remote client focused)")
                 return
             }
-            LayoutSwitcher.switchToOpposite()
+            self.switchOppositeExplicitly()
             self.keyboardMonitor.markConverted()
             self.textConverter.clearState()
             self.updateStatusIcon()
@@ -550,10 +568,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         iconRefreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
-                if self.monitoringActive, self.keyboardMonitor.nativeFenceNeedsRecovery {
-                    // A timed-out lease stays invalid. Replace the tap/fence
-                    // only after main returns; pending originals remain retained.
-                    self.reconfigureTap()
+                if self.monitoringActive {
+                    // A timed-out fence, missing tap or disabled tap needs a fresh host.
+                    // Pending originals remain retained during restart.
+                    self.tapRecovery.poll(needsRecovery: self.keyboardMonitor.nativeTapNeedsRecovery)
                 }
                 self.electronAccessibilityBridge.refresh()
                 self.updateStatusIcon()
@@ -1180,11 +1198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Пересоздаёт event tap и, если создание не удалось (например, session-tap отклонён),
     /// ретраит — иначе тумблер «вкл», а tap'а нет, и приложение молча не реагирует на триггер.
     private func reconfigureTap() {
-        guard !keyboardMonitor.reconfigure() else { return }
-        rslog("reconfigure failed (tap denied) — retry in 3s")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
-            if self?.keyboardMonitor.reconfigure() == false { rslog("reconfigure retry failed") }
-        }
+        tapRecovery.request()
     }
 
     @objc private func recheckPermissions() {
@@ -1265,6 +1279,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        monitoringActive = false
+        tapRecovery.stop()
+        iconRefreshTimer?.invalidate()
         predictionCoordinator.invalidate()
         electronAccessibilityBridge.stop()
         perAppLayoutManager.stop()

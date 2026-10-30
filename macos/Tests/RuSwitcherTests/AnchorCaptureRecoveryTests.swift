@@ -7,7 +7,7 @@ final class AnchorCaptureRecoveryTests: XCTestCase {
 
     @MainActor
     private final class Rig {
-        enum FirstCapture { case unavailable, noncollapsed }
+        enum FirstCapture { case available, unavailable, noncollapsed }
 
         let monitor = KeyboardMonitor()
         let probe = PredictionEvaluationProbe()
@@ -18,6 +18,7 @@ final class AnchorCaptureRecoveryTests: XCTestCase {
         var currentField: Field
         var sourceID: String
         var captureAttempts = 0
+        var focusChecksBeforeTransientFailure: Int?
         var beginLeaseAttempts = 0
         var sourceSelections: [String] = []
         private var lease: InputEventFence.Lease?
@@ -38,6 +39,7 @@ final class AnchorCaptureRecoveryTests: XCTestCase {
                 guard pid == currentField.pid else { return nil }
                 if captureAttempts == 1 {
                     switch firstCapture {
+                    case .available: break
                     case .unavailable: return nil
                     case .noncollapsed:
                         let current = currentField.focus()
@@ -49,7 +51,14 @@ final class AnchorCaptureRecoveryTests: XCTestCase {
                 return currentField.focus()
             },
             focusIsCurrent: { [unowned self] focus in
-                focus.processID == currentField.pid && CFEqual(focus.element, currentField.element)
+                if let remaining = focusChecksBeforeTransientFailure {
+                    focusChecksBeforeTransientFailure = remaining - 1
+                    if remaining == 0 {
+                        focusChecksBeforeTransientFailure = nil
+                        return false
+                    }
+                }
+                return focus.processID == currentField.pid && CFEqual(focus.element, currentField.element)
             },
             beginLease: { [unowned self] pid in
                 beginLeaseAttempts += 1
@@ -186,6 +195,64 @@ final class AnchorCaptureRecoveryTests: XCTestCase {
         rig.probe.awaitLatest(expected: .applied)
         XCTAssertEqual(rig.captureAttempts, 2)
         XCTAssertEqual(field.text, "ghbd прив")
+        XCTAssertEqual(field.queuedText, 1)
+    }
+
+    @MainActor
+    func testTransientFocusRevalidationFailureRearmsAtNextWord() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 6204, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru,
+            firstCapture: .available)
+        _ = rig.coordinator
+
+        rig.deliver("g")
+        rig.probe.awaitLatest()
+        rig.focusChecksBeforeTransientFailure = 0
+        rig.deliver("hbdtn")
+        rig.probe.awaitLatest(expected: .refused)
+        let failedSession = rig.monitor.predictionSessionID
+        XCTAssertEqual(rig.captureAttempts, 1)
+        XCTAssertEqual(field.queuedText, 0)
+
+        rig.deliver(" ")
+        rig.probe.awaitLatest(expected: .notScheduled)
+        XCTAssertNotEqual(rig.monitor.predictionSessionID, failedSession)
+        XCTAssertEqual(rig.captureAttempts, 1, "Never recapture inside the failed word")
+
+        rig.deliver("ghbdtn")
+        rig.probe.awaitLatest(expected: .applied)
+        XCTAssertEqual(rig.captureAttempts, 2)
+        XCTAssertEqual(field.text, "ghbdtn привет")
+        XCTAssertEqual(field.queuedText, 1)
+    }
+
+    @MainActor
+    func testCancelledPendingAnchorRearmsAtNextWord() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 6205, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru,
+            firstCapture: .available)
+        _ = rig.coordinator
+
+        rig.deliver("g")
+        rig.probe.awaitLatest()
+        rig.focusChecksBeforeTransientFailure = 1 // Pass policy, fail pending.resolve same-field check.
+        rig.deliver("hbdtn")
+        rig.probe.awaitLatest(expected: .refused)
+        let failedSession = rig.monitor.predictionSessionID
+        XCTAssertEqual(rig.captureAttempts, 1)
+        XCTAssertEqual(field.queuedText, 0)
+
+        rig.deliver(" ")
+        rig.probe.awaitLatest(expected: .notScheduled)
+        XCTAssertNotEqual(rig.monitor.predictionSessionID, failedSession)
+        XCTAssertEqual(rig.captureAttempts, 1)
+
+        rig.deliver("ghbdtn")
+        rig.probe.awaitLatest(expected: .applied)
+        XCTAssertEqual(rig.captureAttempts, 2)
+        XCTAssertEqual(field.text, "ghbdtn привет")
         XCTAssertEqual(field.queuedText, 1)
     }
 

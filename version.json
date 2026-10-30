@@ -1,9 +1,9 @@
 {
-  "version": "0.1.0-alpha.23",
+  "version": "0.1.0-alpha.24",
   "short_version": "0.1.0",
-  "build": 23,
+  "build": 24,
   "channel": "alpha",
   "url": "https://github.com/alexfisenkov/MacSwitcher/releases",
-  "notes": "Восстановление автокоррекции после временной недоступности поля и независимая подготовка редакторов Electron.",
+  "notes": "Усилено восстановление ввода после временных сбоев. Добавлены контекстные исправления коротких слов и новые словоформы RU/EN.",
   "native_backend_accepted": false
 }
