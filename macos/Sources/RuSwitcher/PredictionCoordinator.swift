@@ -151,6 +151,15 @@ final class PredictionCoordinator {
             pendingCaretAnchor = nil
             captureOriginalAnchor(snapshot)
         }
+        if anchorFocus == nil, snapshot.atBoundary {
+            // A failed first-event AX capture cannot be repaired later in this
+            // word: another field could have acquired focus. End the failed
+            // session only after its word boundary. The next word starts with
+            // a fresh event-time field and caret anchor.
+            monitor.resetPredictionContext()
+            if let evaluationID { reportEvaluationFinished(evaluationID, .notScheduled) }
+            return
+        }
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             if let evaluationID, self.pendingDebounceID == evaluationID { self.pendingDebounceID = nil }
@@ -267,6 +276,9 @@ final class PredictionCoordinator {
         guard PredictionFocusAnchorPolicy.permits(originalSession: anchorSessionID,
                   currentSession: snapshot.sessionID, capturedOriginalField: true,
                   sameField: platform.focusIsCurrent(originalFocus)) else {
+            // The old field can no longer authorize this session. The boundary
+            // will discard its word before a fresh event captures another field.
+            anchorFocus = nil
             pendingCaretAnchor = nil
             RuntimeDiagnostics.record(.autoFocusMismatch); return
         }
@@ -293,6 +305,12 @@ final class PredictionCoordinator {
         let resolved = pending.resolve(sessionID: snapshot.sessionID, location: currentSelection.location,
             selectionLength: currentSelection.length, cumulativeOffset: snapshot.cumulativeUTF16Offset,
             sameField: platform.focusIsCurrent(originalFocus), snapshotIsCurrent: isCurrent(snapshot), suffixMatches: suffixMatches)
+        if pending.isCancelled {
+            anchorFocus = nil
+            pendingCaretAnchor = nil
+            RuntimeDiagnostics.record(.autoFocusMismatch)
+            return
+        }
         pendingCaretAnchor = pending
         guard resolved != nil else {
             RuntimeDiagnostics.record(.autoCaretMismatch)

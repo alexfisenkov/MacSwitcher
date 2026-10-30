@@ -72,7 +72,10 @@ struct PredictionEngine: Sendable {
             corrected = try (priority ?? correction(for: current, source: source, target: target,
                 atBoundary: atBoundary || suffix.last?.isWhitespace == true,
                 alwaysConvertWords: alwaysConvertWords, characterMapping: characterMapping,
-                hasDomainContext: hasDomainContext, hasPeopleCollocation: hasPeopleCollocation))
+                hasDomainContext: hasDomainContext, hasPeopleCollocation: hasPeopleCollocation,
+                russianPriority: russianPriority,
+                protectedEnglishContext: russianPriority && RussianPriorityPolicy.protectsEnglishContext(
+                    Array(domainCues), lexicon: lexicon)))
         } catch { return nil }
         let resultingWord = corrected ?? current
 
@@ -104,6 +107,20 @@ struct PredictionEngine: Sendable {
                 return PredictionProposal(originalSuffix: suffix, replacementSuffix: result,
                                           targetLanguage: "ru", reason: .contextWord)
             }
+            // An already corrected, strong Russian next word can disambiguate a
+            // bounded previous collision without changing standalone English.
+            if russianPriority, source == "en", let corrected, corrected != current,
+               strongRussianContext(corrected),
+               let contextual = RussianPriorityPolicy.contextualReplacement(
+                   for: previous, sourceLanguage: source,
+                   precedingWords: precedingWords + earlier, mapping: characterMapping,
+                   lexicon: lexicon) {
+                let result = String(suffix[..<previousRange.lowerBound]) + contextual
+                    + String(suffix[previousRange.upperBound..<currentRange.lowerBound]) + corrected
+                    + String(suffix[currentRange.upperBound...])
+                return PredictionProposal(originalSuffix: suffix, replacementSuffix: result,
+                                          targetLanguage: "ru", reason: .contextWord)
+            }
         }
 
         guard let corrected, corrected != current else { return nil }
@@ -115,7 +132,8 @@ struct PredictionEngine: Sendable {
 
     private func correction(for word: String, source: String, target: String, atBoundary: Bool,
                             alwaysConvertWords: Set<String>, characterMapping: [Character: Character]?,
-                            hasDomainContext: Bool, hasPeopleCollocation: Bool) throws -> String? {
+                            hasDomainContext: Bool, hasPeopleCollocation: Bool,
+                            russianPriority: Bool, protectedEnglishContext: Bool) throws -> String? {
         let stripped = stripTrailingPunctuation(word)
         guard let mapped = map(word, source: source, characterMapping: characterMapping) else { return nil }
         let candidates: [(core: String, suffix: String)] = stripped.suffix.isEmpty
@@ -133,6 +151,11 @@ struct PredictionEngine: Sendable {
             lexicalToken($0.core)
                 && (!protectedHostname || (hasPeopleCollocation && $0.core.lowercased() == "люди"))
                 && (lexicon.frequency(of: $0.core, language: "ru") >= 50_000
+                    // Adjacent physical keys . and , can spell юб in Russian;
+                    // comma-separated domain fragments and hostnames stay guarded.
+                    || (russianPriority && !protectedHostname && !protectedEnglishContext
+                        && stripped.core.contains(".,")
+                        && lexicon.frequency(of: $0.core, language: "ru") >= 10_000)
                     || lexicon.isProtectedTerm($0.core, language: "ru"))
         }
         guard !protectedToken(word, allowKnownTargetCase: knownTarget || forced != nil,

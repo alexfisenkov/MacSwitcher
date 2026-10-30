@@ -115,11 +115,11 @@
     },
     "modern_source": {
       "path": "dictionaries/modern-spellings-source.tsv",
-      "sha256": "199c2d2e6b336de35edeccfe0fbe690b491f44693617b5374a085aacfafa3ba0",
-      "entries": 533,
+      "sha256": "435eb0875367d56bf94e1e8b4b8ffa5f99ea2f0ac81d447565be72b29683ab0a",
+      "entries": 636,
       "counts": {
-        "ru": 341,
-        "en": 192
+        "ru": 427,
+        "en": 209
       },
       "license": "CC0-1.0",
       "license_url": "https://creativecommons.org/publicdomain/zero/1.0/"
@@ -127,31 +127,31 @@
     "languages": {
       "ru": {
         "output": "macos/Sources/RuSwitcher/Resources/ru-spellings.sqlite",
-        "output_sha256": "085248fb6b846c53e60c7e0c0392883aab7e14053c90d76fd88e2a44a6abbe39",
-        "bytes": 85635072,
+        "output_sha256": "719c5c8768ecf35d6b757f5c21158117edcc4cee4ef5d199452bcfe99d313355",
+        "bytes": 85639168,
         "schema": 1,
         "storage": "SQLite spellings(word TEXT PRIMARY KEY NOT NULL) WITHOUT ROWID; metadata; user_version=1",
-        "entries": 3063967,
+        "entries": 3064053,
         "source_accepted_rows": 5137804,
         "source_unique_entries": 3063822,
-        "modern_new_entries": 145,
+        "modern_new_entries": 231,
         "overlap_with_frequency": 491570,
-        "new_unique_against_frequency": 2572397,
-        "union_with_frequency": 3750930
+        "new_unique_against_frequency": 2572483,
+        "union_with_frequency": 3751016
       },
       "en": {
         "output": "macos/Sources/RuSwitcher/Resources/en-spellings.sqlite",
-        "output_sha256": "5819a697a9e7ba8cae9e9238946bd63b299fe6f1538372e712743842176792a6",
+        "output_sha256": "71ec3966e1482d041fa7f99eba210418056b7e8097cc74daf307febb682fbf0b",
         "bytes": 2387968,
         "schema": 1,
         "storage": "SQLite spellings(word TEXT PRIMARY KEY NOT NULL) WITHOUT ROWID; metadata; user_version=1",
-        "entries": 171023,
+        "entries": 171040,
         "source_accepted_rows": 676543,
         "source_unique_entries": 170997,
-        "modern_new_entries": 26,
-        "overlap_with_frequency": 111025,
-        "new_unique_against_frequency": 59998,
-        "union_with_frequency": 1447380
+        "modern_new_entries": 43,
+        "overlap_with_frequency": 111030,
+        "new_unique_against_frequency": 60010,
+        "union_with_frequency": 1447392
       }
     }
   }
