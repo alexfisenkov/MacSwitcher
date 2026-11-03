@@ -47,6 +47,26 @@ enum RuntimeDiagnosticEvent: String, CaseIterable, Sendable {
     var logOnce: Bool { rawValue.hasPrefix("auto") || rawValue.hasPrefix("native") || rawValue.hasPrefix("focusRead") }
 }
 
+/// Failure stages are metadata only. Keep these separate from RuntimeDiagnosticEvent:
+/// repeated refusals in the same process must remain observable.
+enum RuntimeDiagnosticFailureReason: String, CaseIterable, Sendable {
+    case selectionSourceMismatch, selectionStateBlocked, selectionTimeout
+    case selectionInvalidExecution, selectionSnapshotMissing, selectionFieldUnavailable
+    case selectionFieldMismatch, selectionTextMismatch, selectionPolicyNoChange
+    case selectionReplacementRejected, selectionRevalidationFailed
+    case transactionCandidateUnavailable, transactionInvalidExecution
+    case transactionRevisionChanged, transactionWrongProcess, transactionSecureInput
+    case transactionFieldChanged, transactionSourceChanged
+    case wordContextUnavailable, wordInputBarrierUnavailable, wordBufferUnavailable
+    case wordMappingUnavailable, wordConversionBusy, wordMappingNoChange
+    case wordNativeStateBlocked, wordNativeCaretMismatch, wordNativeSnapshotInvalid
+    case wordNativeEditRefused
+    case verifiedWordStateBlocked, verifiedWordCaretUnavailable, verifiedWordFieldUnavailable
+    case verifiedWordFieldMismatch, verifiedWordTrailingSpaceLimit, verifiedWordNoFinalLetter
+    case verifiedWordTokenLimit, verifiedWordBoundaryInvalid, verifiedWordTokenInvalid
+    case verifiedWordNoConversion, verifiedWordRevalidationFailed
+}
+
 enum RuntimeDiagnostics {
     // Local opt-in complements the existing launch flag; no input payload
     // reaches this closed-vocabulary logger.
@@ -62,6 +82,22 @@ enum RuntimeDiagnostics {
     static func record(_ event: RuntimeDiagnosticEvent) {
         guard enabled, !event.logOnce || seen.insert(event) else { return }
         logger.notice("\(event.rawValue, privacy: .public)")
+    }
+
+    static func failureIdentifier(_ reason: RuntimeDiagnosticFailureReason, enabled: Bool) -> String? {
+        enabled ? "failure.\(reason.rawValue)" : nil
+    }
+
+    static func emitFailure(_ reason: RuntimeDiagnosticFailureReason, enabled: Bool,
+                            sink: (String) -> Void) {
+        guard let identifier = failureIdentifier(reason, enabled: enabled) else { return }
+        sink(identifier)
+    }
+
+    static func recordFailure(_ reason: RuntimeDiagnosticFailureReason) {
+        emitFailure(reason, enabled: enabled) { identifier in
+            logger.notice("\(identifier, privacy: .public)")
+        }
     }
 
     /// Opt-in outcome metadata only. All three fields come from closed enums;

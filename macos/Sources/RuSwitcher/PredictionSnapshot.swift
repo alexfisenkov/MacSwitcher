@@ -141,6 +141,7 @@ struct PredictionPendingCaretAnchor: Sendable {
     private let sessionID: UInt64
     private let candidates: [PredictionCaretAnchor]
     private var cancelled = false
+    var isCancelled: Bool { cancelled }
     private(set) var resolved: PredictionCaretAnchor?
 
     init?(sessionID: UInt64, caretUTF16Location: Int, inputUTF16Offset: Int, eventUTF16Length: Int) {

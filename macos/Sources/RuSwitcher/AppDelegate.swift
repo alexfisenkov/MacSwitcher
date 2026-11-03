@@ -9,9 +9,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private lazy var predictionCoordinator = PredictionCoordinator(monitor: keyboardMonitor, converter: textConverter)
     private let settingsController = SettingsWindowController()
     private let perAppLayoutManager = PerAppLayoutManager()
+    private let electronAccessibilityBridge = ElectronAccessibilityBridge()
     private var permissionCheckTimer: Timer?
     private var iconRefreshTimer: Timer?
     private var monitoringActive = false
+    private lazy var tapRecovery = MonitoringTapRecovery(isActive: { [weak self] in
+        self?.monitoringActive == true
+    }, reconfigure: { [weak self] in
+        self?.keyboardMonitor.reconfigure() == true
+    }, schedule: { delay, action in
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { action() }
+    })
     private var caretIndicator: CaretIndicator?   // issue #10: флаг у каретки (бета, по умолчанию OFF)
     private let secureNotice = SecureInputNotice()  // issue #27: подсказка о защ. вводе без кражи фокуса
     private let correctionExceptionOffer = CorrectionExceptionOffer()
@@ -20,10 +28,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var diagnosticRepro: DiagnosticReproController?
     private var nativeSelectionAwaitGate = NativeSelectionAwaitGate()
     private var pendingNativeSelection: Task<Void, Never>?
+    private let adaptiveQueue = DispatchQueue(label: "com.macswitcher.adaptive-rules", qos: .utility)
+    private var manualLearningProvenance = AdaptiveManualProvenance()
+    private var automaticUndoLearningProvenance = AdaptiveAutomaticUndoProvenance()
     private static let recoveryCopyItemTag = 71003
     private static let sourceRecoveryItemTag = 71004
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let introShown = UserDefaults.standard.bool(forKey: "com.macswitcher.adaptiveLearningIntroShown")
+        AdaptiveRuleStore.shared.setEnabled(AdaptiveIntroPolicy.mayReadOrRecord(
+            preferenceEnabled: SettingsManager.shared.adaptiveLearningEnabled,
+            explanationShown: introShown))
         setupStatusItem()
         setupSettingsCallbacks()
         syncLoginItem()
@@ -34,6 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         runPermissionWizard()
         showWhatsNewIfNeeded(hasRunBefore: ranBefore)
         showBetaWhatsNewIfNeeded()   // отдельная витрина для бет (текст из бета-фида)
+        showAdaptiveIntroIfNeeded()
         UpdateChecker.checkOnLaunch()
         // Скрытая иконка: reopen-событие приходит только УЖЕ работающему приложению.
         // Свежий РУЧНОЙ запуск со скрытой иконкой без этого блока «тих» (ни иконки, ни
@@ -60,6 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func setupSettingsCallbacks() {
         settingsController.onAutoSwitchChanged = { [weak self] _ in
             self?.resetCombinedShiftAfterPause()
+            self?.syncElectronAccessibilityBridge()
             // Не адресуем пункт по индексу: меню группирует пункты по назначению,
             // а recovery и раскладки появляются динамически. Пересборка — как у соседних колбэков.
             self?.rebuildMenu()
@@ -157,6 +174,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         showFeedback(title: "MacSwitcher",
             body: CorrectionFeedbackPolicy.sourceMessage(languageCode: L10n.languageCode),
             kind: .sourceFailure)
+    }
+
+    private func switchOppositeExplicitly() {
+        let intended = LayoutSwitcher.combinedShiftContext()?.targetLayoutID
+        ExplicitSourceSelectionRecovery.switchOpposite(intendedTargetID: intended,
+            switchSource: { LayoutSwitcher.switchToOpposite() },
+            observeSource: LayoutSwitcher.currentLayoutID,
+            confirm: { [weak self] target, observed in
+                _ = self?.keyboardMonitor.recordExplicitInputSourceSelection(
+                    targetID: target, observedSourceID: observed)
+            })
     }
 
     @discardableResult
@@ -459,6 +487,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         monitoringActive = true
+        syncElectronAccessibilityBridge()
         configurePredictionPreferences()
         keyboardMonitor.onCombinedShift = { [weak self] request in
             self?.handleCombinedShift(request)
@@ -470,6 +499,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.predictionCoordinator.invalidate()
         }
         predictionCoordinator.onApplied = { [weak self] original in
+            self?.manualLearningProvenance.invalidate()
+            self?.automaticUndoLearningProvenance.invalidate()
             self?.diagnosticRepro?.noteAutomaticApplication()
             self?.updateStatusIcon()
         }
@@ -479,6 +510,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         predictionCoordinator.onConfirmedAutomaticUndo = { [weak self] notice in
             self?.offerExceptionAfterConfirmedUndo(notice)
         }
+        predictionCoordinator.onAdaptiveAutomaticUndo = { [weak self] id, original, replacement, focus, generation in
+            self?.manualLearningProvenance.invalidate()
+            self?.automaticUndoLearningProvenance.confirmedUndo(id: id,
+                original: original, replacement: replacement, focus: focus)
+            self?.enqueueAdaptive(.automaticUndoConfirmed(id: id,
+                original: original, replacement: replacement), generation: generation)
+        }
+        predictionCoordinator.adaptiveRulesProvider = { AdaptiveRuleStore.shared.rules() }
+        predictionCoordinator.adaptiveGenerationProvider = { AdaptiveRuleStore.shared.currentGeneration }
         predictionCoordinator.onUnconfirmedEdit = { [weak self] in
             self?.showUnknownEditNotice()
         }
@@ -495,12 +535,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 // раскладку, как defer-ветка триггера. markConverted/clearState тут лишние —
                 // буфер наполняется через handleForwardedChar, а проброшенные модификаторы
                 // сами переключат раскладку на контролируемой машине.
-                LayoutSwitcher.switchToOpposite()
+                self.switchOppositeExplicitly()
                 self.updateStatusIcon()
                 rslog("switch hotkey: local layout switched (remote client focused)")
                 return
             }
-            LayoutSwitcher.switchToOpposite()
+            self.switchOppositeExplicitly()
             self.keyboardMonitor.markConverted()
             self.textConverter.clearState()
             self.updateStatusIcon()
@@ -547,11 +587,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         iconRefreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
-                if self.monitoringActive, self.keyboardMonitor.nativeFenceNeedsRecovery {
-                    // A timed-out lease stays invalid. Replace the tap/fence
-                    // only after main returns; pending originals remain retained.
-                    self.reconfigureTap()
+                if self.monitoringActive {
+                    // A timed-out fence, missing tap or disabled tap needs a fresh host.
+                    // Pending originals remain retained during restart.
+                    self.tapRecovery.poll(needsRecovery: self.keyboardMonitor.nativeTapNeedsRecovery)
                 }
+                self.electronAccessibilityBridge.refresh()
                 self.updateStatusIcon()
             }
         }
@@ -743,7 +784,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .some(.confirmed):
             updateStatusIcon()
             if let receipt = result.confirmedAutomaticUndo {
+                manualLearningProvenance.invalidate()
                 predictionCoordinator.completeDoubleShiftAutomaticUndo(receipt)
+            } else if case .manual = automaticUndo {
+                if let pair = textConverter.lastConfirmedManualWordPair,
+                   let focus = request.focus {
+                    if request.reconvert,
+                       let retraction = automaticUndoLearningProvenance.confirmedRedo(
+                            original: pair.original, replacement: pair.replacement,
+                            focus: focus) {
+                        manualLearningProvenance.invalidate()
+                        enqueueAdaptive(retraction)
+                    } else {
+                        if !request.reconvert { automaticUndoLearningProvenance.invalidate() }
+                        if let evidence = manualLearningProvenance.confirmed(
+                            original: pair.original, replacement: pair.replacement,
+                            focus: focus, reconvert: request.reconvert) {
+                            enqueueAdaptive(evidence)
+                        }
+                    }
+                } else {
+                    manualLearningProvenance.invalidate()
+                    automaticUndoLearningProvenance.invalidate()
+                }
+            }
+        }
+    }
+
+    private func enqueueAdaptive(_ evidence: AdaptiveEvidence, generation: UInt64? = nil) {
+        let generation = generation ?? AdaptiveRuleStore.shared.currentGeneration
+        adaptiveQueue.async {
+            _ = try? AdaptiveRuleStore.shared.record(evidence, generation: generation)
+        }
+    }
+
+    private func showAdaptiveIntroIfNeeded() {
+        let key = "com.macswitcher.adaptiveLearningIntroShown"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self, !UserDefaults.standard.bool(forKey: key) else { return }
+            let shown = self.showFeedback(title: "Локальное обучение MacSwitcher",
+                body: "После двух независимых исправлений одного слова выбор запоминается только на этом Mac. В настройках → Обучение можно отключить функцию и удалить правила. История набора не сохраняется.",
+                kind: .adaptiveIntro, actionTitle: "Настройки", onAction: { [weak self] in
+                    self?.settingsController.showWindow()
+                })
+            if shown {
+                UserDefaults.standard.set(true, forKey: key)
+                AdaptiveRuleStore.shared.setEnabled(SettingsManager.shared.adaptiveLearningEnabled)
             }
         }
     }
@@ -1098,11 +1185,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    private func syncElectronAccessibilityBridge() {
+        if ElectronAccessibilityBridge.shouldRun(monitoringActive: monitoringActive,
+                autoSwitchEnabled: SettingsManager.shared.autoSwitchEnabled) {
+            electronAccessibilityBridge.start()
+        } else {
+            electronAccessibilityBridge.stop()
+        }
+    }
+
     // MARK: - Actions
 
     @objc private func toggleAutoSwitch(_ sender: NSMenuItem) {
         SettingsManager.shared.autoSwitchEnabled.toggle()
         resetCombinedShiftAfterPause()
+        syncElectronAccessibilityBridge()
         let enabled = SettingsManager.shared.autoSwitchEnabled
         sender.state = enabled ? .on : .off
         settingsController.updateAutoSwitchState(enabled)
@@ -1166,11 +1263,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Пересоздаёт event tap и, если создание не удалось (например, session-tap отклонён),
     /// ретраит — иначе тумблер «вкл», а tap'а нет, и приложение молча не реагирует на триггер.
     private func reconfigureTap() {
-        guard !keyboardMonitor.reconfigure() else { return }
-        rslog("reconfigure failed (tap denied) — retry in 3s")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
-            if self?.keyboardMonitor.reconfigure() == false { rslog("reconfigure retry failed") }
-        }
+        tapRecovery.request()
     }
 
     @objc private func recheckPermissions() {
@@ -1251,7 +1344,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        monitoringActive = false
+        tapRecovery.stop()
+        iconRefreshTimer?.invalidate()
         predictionCoordinator.invalidate()
+        electronAccessibilityBridge.stop()
         perAppLayoutManager.stop()
         keyboardMonitor.stop()
         // Не теряем буфер обмена в 2-секундном окне отложенного восстановления

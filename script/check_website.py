@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import html.parser
+import json
 import re
 import socket
 import subprocess
@@ -16,7 +17,7 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "website"
 PAGES = (WEB / "index.html", WEB / "legal.html")
-FORBIDDEN = ("MacDictate", "Whisper", "Windows", "releases/latest", "/Users/")
+FORBIDDEN = ("MacDictate", "Whisper", "releases/latest", "/Users/")
 
 
 class PageParser(html.parser.HTMLParser):
@@ -54,32 +55,32 @@ def fail(message: str) -> None:
     raise SystemExit(1)
 
 
-def check_published_asset(url: str) -> None:
+def check_published_asset(url: str, label: str) -> None:
     request = Request(url, method="HEAD")
     try:
         with urlopen(request, timeout=20) as response:
             if response.status != 200:
-                fail(f"published alpha.19 archive returned HTTP {response.status}")
+                fail(f"published {label} returned HTTP {response.status}")
             content_length = response.headers.get("Content-Length")
             if content_length is not None:
                 try:
                     size = int(content_length)
                 except ValueError:
-                    fail("published alpha.19 archive has an invalid Content-Length")
+                    fail(f"published {label} has an invalid Content-Length")
                 if size <= 0:
-                    fail("published alpha.19 archive is empty")
+                    fail(f"published {label} is empty")
     except HTTPError as error:
-        fail(f"published alpha.19 archive returned HTTP {error.code}")
+        fail(f"published {label} returned HTTP {error.code}")
     except (TimeoutError, socket.timeout):
-        fail("timed out checking published alpha.19 archive")
+        fail(f"timed out checking published {label}")
     except (URLError, OSError):
-        fail("could not check published alpha.19 archive (network error)")
+        fail(f"could not check published {label} (network error)")
 
 
 def main() -> None:
     args = argparse.ArgumentParser()
     args.add_argument("--javascript", action="store_true", help="also parse inline JavaScript with Node")
-    args.add_argument("--published-release", action="store_true", help="require the linked alpha.19 archive to be published and nonempty")
+    args.add_argument("--published-release", action="store_true", help="require current macOS and Windows release assets to be published and nonempty")
     options = args.parse_args()
     parsed: dict[Path, PageParser] = {}
     for page in PAGES:
@@ -117,13 +118,22 @@ def main() -> None:
     if canonical_mark != website_mark:
         fail("website product mark differs from canonical assets/MacSwitcher.svg")
     index_source = (WEB / "index.html").read_text(encoding="utf-8")
-    download_url = "https://github.com/alexfisenkov/MacSwitcher/releases/download/v0.1.0-alpha.19/MacSwitcher-0.1.0-alpha.19-universal.zip"
+    mac_version = json.loads((ROOT / "version.json").read_text(encoding="utf-8"))["version"]
+    windows_version = json.loads((ROOT / "windows/version.json").read_text(encoding="utf-8"))
+    release_base = "https://github.com/alexfisenkov/MacSwitcher/releases"
+    download_url = f"{release_base}/download/v{mac_version}/MacSwitcher-{mac_version}-universal.zip"
     if index_source.count(download_url) != 2:
-        fail("expected alpha.19 universal download link in hero and setup sections")
+        fail(f"expected {mac_version} universal download link in hero and setup sections")
+    windows_url = f"{release_base}/tag/{windows_version['tag']}"
+    if windows_url not in parsed[WEB / "index.html"].links:
+        fail(f"expected current Windows {windows_version['version']} release link")
     if "releases/latest" in index_source or "MacSwitcher_Windows" in index_source:
         fail("release link must target the explicit prerelease and macOS archive")
     if options.published_release:
-        check_published_asset(download_url)
+        check_published_asset(download_url, f"macOS {mac_version} archive")
+        for suffix in ("Setup.exe", "portable.zip"):
+            asset = f"MacSwitcher-Windows-{windows_version['version']}-{suffix}"
+            check_published_asset(f"{release_base}/download/{windows_version['tag']}/{asset}", f"Windows {asset}")
     if options.javascript:
         node = __import__("shutil").which("node")
         if not node:
@@ -137,7 +147,7 @@ def main() -> None:
     if options.javascript:
         print("PASS: inline JavaScript syntax")
     if options.published_release:
-        print("PASS: linked alpha.19 archive is published")
+        print(f"PASS: linked macOS {mac_version} and Windows {windows_version['version']} assets are published")
 
 
 if __name__ == "__main__":

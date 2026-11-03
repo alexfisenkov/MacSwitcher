@@ -63,3 +63,21 @@ v3.4.0 и ранее разработанный native combined-Shift режим
 Не редактируйте представления вручную; изменения фиксируются движком AISpa.
 Правила проекта вне этого блока сохраняют силу.
 <!-- AISPA_CONTEXT_END_V1 -->
+
+## Windows-порт
+
+- Windows-компонент — `windows/`, правила — `windows/AGENTS.md`; канон — `docs/windows-port/design.md` и `contracts.md`.
+- Фактическая приёмка и долг — `docs/windows-port/acceptance.md`; выпуск Windows alpha.1 закреплён `windows-v0.1.0-alpha.1`, источник `7892dc51b8b80cb7628f272da436fce1b58ff875`, CI22 `41618728418`. Не приравнивать hosted fixture к физической клавиатуре/всем приложениям.
+- Core C# target `net462;net10.0`, GUI WinForms target `net462`; macOS Swift/version.json/updates/appcast.xml не меняются при Windows-выпуске.
+- Windows-only версия/пакеты — `windows/version.json`, tag `windows-v…`, канал `windows/updates/windows.json`; не назначать Windows-релиз global latest macOS.
+- Подпись собственного update manifest RSA не заменяет Authenticode; EXE пока unsigned. Приватный signer вне Git.
+- Из корня: `python3 windows/scripts/build-data.py --output windows/data`, `python3 windows/scripts/extract-icon.py`. Затем из каталога `windows/`, где действует SDK pin в global.json: `dotnet run --project tests/MacSwitcher.Core.Tests -c Release`, `dotnet build src/MacSwitcher.Windows -c Release`. Runtime/installer — только собственные fixture-поля в Windows workflow_dispatch.
+- Hosted Windows Server CI не доказывает physical Windows7/8.1/10/11/ARM или чужие редакторы.
+
+## Локальное обучение · решение владельца 03.11.2026
+
+- Канон новой функции — `docs/local-learning.md`. Владелец разрешил обе платформы и два независимых подтверждения одного слова; обратный выбор снимает выученное правило.
+- Владелец выбрал default ON с понятным пояснением при первом запуске; явный off сохраняется. При миграции отсутствующий новый ключ означает ON.
+- Разрешены только локальные ограниченные word-only адаптивные записи с видимой настройкой и управлением. Запрет истории текста/клавиш, сети, личных данных в Git и скрытого обучения сохраняется.
+- Выученное отделено от ручного словаря; Unknown/auto-apply/повторный undo-redo не дают новые голоса. Транспорт редактирования и тайминги Shift не меняются.
+- Выпущено: macOS alpha.25 и Windows alpha.2 из `58a529f0dcff6aa3cde5439f028d257ee023420a`; CI `41630893348` (502 Swift/35 Python/gold495) и `41630906057` (626 Core/gold495/runtime44) PASS. Штатное обновление Mac установлено, настройки/ручной словарь сохранены, обучение ON и пояснение показано. Физическое обучение пользователя отдельно не тестировалось.

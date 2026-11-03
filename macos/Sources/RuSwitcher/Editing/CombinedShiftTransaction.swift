@@ -39,20 +39,44 @@ enum CombinedShiftTransaction {
         let sourceBeforePreparation = platform.currentSourceID()
         if (execution.focus.initialSelection?.length ?? 0) > 0,
            !converter.hasUnconfirmedAXEdit(in: execution.focus) {
-            guard sourceBeforePreparation == context.targetLayoutID,
-                  let prepared = converter.prepareNativeSelection(context: context,
+            func stoppedSelection() -> Result {
+                Result(outcome: .stopped, failureNotice: .noSafeEdit,
+                    pendingSourceTargetID: platform.pendingSourceTargetID(), confirmedAutomaticUndo: nil)
+            }
+            guard sourceBeforePreparation == context.targetLayoutID else {
+                RuntimeDiagnostics.recordFailure(.selectionSourceMismatch)
+                return stoppedSelection()
+            }
+            guard let prepared = converter.prepareNativeSelection(context: context,
                       execution: execution, restorePrevious: request.reconvert,
                       observedSourceLayoutID: sourceBeforePreparation,
-                      knownWord: selectionKnownWord),
-                  execution.isValid(),
-                  monitor.inputRevision == execution.inputRevision,
-                  platform.frontProcessID() == execution.focus.processID,
-                  !platform.secureInputActive(),
-                  platform.observeWholeField(execution.focus) == prepared.before,
-                  platform.currentSourceID() == sourceBeforePreparation else {
-                RuntimeDiagnostics.record(.selectionSnapshotUnavailable)
-                return Result(outcome: .stopped, failureNotice: .noSafeEdit,
-                    pendingSourceTargetID: platform.pendingSourceTargetID(), confirmedAutomaticUndo: nil)
+                      knownWord: selectionKnownWord) else {
+                RuntimeDiagnostics.recordFailure(.transactionCandidateUnavailable)
+                return stoppedSelection()
+            }
+            guard execution.isValid() else {
+                RuntimeDiagnostics.recordFailure(.transactionInvalidExecution)
+                return stoppedSelection()
+            }
+            guard monitor.inputRevision == execution.inputRevision else {
+                RuntimeDiagnostics.recordFailure(.transactionRevisionChanged)
+                return stoppedSelection()
+            }
+            guard platform.frontProcessID() == execution.focus.processID else {
+                RuntimeDiagnostics.recordFailure(.transactionWrongProcess)
+                return stoppedSelection()
+            }
+            guard !platform.secureInputActive() else {
+                RuntimeDiagnostics.recordFailure(.transactionSecureInput)
+                return stoppedSelection()
+            }
+            guard platform.observeWholeField(execution.focus) == prepared.before else {
+                RuntimeDiagnostics.recordFailure(.transactionFieldChanged)
+                return stoppedSelection()
+            }
+            guard platform.currentSourceID() == sourceBeforePreparation else {
+                RuntimeDiagnostics.recordFailure(.transactionSourceChanged)
+                return stoppedSelection()
             }
             preparedSelection = prepared
         } else {

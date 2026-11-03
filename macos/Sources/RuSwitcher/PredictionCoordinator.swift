@@ -43,6 +43,8 @@ final class PredictionCoordinator {
     private let correctionReceipts: ConfirmedCorrectionReceipts
     private let receiptNow: () -> UInt64
     private var oneShotSuppression: OneShotCorrectionSuppression?
+    private var confirmedAdaptiveUndo: (id: UUID, original: String, replacement: String,
+                                        focus: CombinedShiftFocus)?
     private struct RecentAutomaticEdit {
         let focus: CombinedShiftFocus
         let inputRevision: UInt64
@@ -59,6 +61,9 @@ final class PredictionCoordinator {
     var onCorrection: ((ConfirmedCorrectionNotice) -> Void)?
     /// T02 may present a nonactivating explicit exception offer after gesture undo.
     var onConfirmedAutomaticUndo: ((ConfirmedCorrectionNotice) -> Void)?
+    var onAdaptiveAutomaticUndo: ((UUID, String, String, CombinedShiftFocus, UInt64) -> Void)?
+    var adaptiveRulesProvider: () -> [AdaptiveRule] = { [] }
+    var adaptiveGenerationProvider: () -> UInt64 = { 0 }
     var onApplied: ((String) -> Void)?
     var onUnconfirmedEdit: (() -> Void)?
     var onSourceFailure: ((String, LayoutSelectionCommit.Outcome?) -> Void)?
@@ -150,6 +155,15 @@ final class PredictionCoordinator {
             anchorFocus = nil
             pendingCaretAnchor = nil
             captureOriginalAnchor(snapshot)
+        }
+        if anchorFocus == nil, snapshot.atBoundary {
+            // A failed first-event AX capture cannot be repaired later in this
+            // word: another field could have acquired focus. End the failed
+            // session only after its word boundary. The next word starts with
+            // a fresh event-time field and caret anchor.
+            monitor.resetPredictionContext()
+            if let evaluationID { reportEvaluationFinished(evaluationID, .notScheduled) }
+            return
         }
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
@@ -245,11 +259,12 @@ final class PredictionCoordinator {
         guard !characterMapping.isEmpty else { outcome = .mappingUnavailable; RuntimeDiagnostics.record(.autoMappingUnavailable); return }
         let alwaysConvertWords = SettingsManager.shared.alwaysConvertWordsSet
         let russianPriority = russianPriorityProvider()
+        let adaptiveRules = adaptiveRulesProvider()
         let proposal = await Task.detached(priority: .userInitiated) {
             engine.evaluate(suffix: snapshot.suffix, sourceLanguage: language,
                 atBoundary: snapshot.atBoundary, precedingWords: snapshot.precedingWords,
                 alwaysConvertWords: alwaysConvertWords, characterMapping: characterMapping,
-                russianPriority: russianPriority)
+                russianPriority: russianPriority, adaptiveRules: adaptiveRules)
         }.value
         guard isCurrent(snapshot) else { outcome = .stale; RuntimeDiagnostics.record(.autoEvaluationStale); return }
         guard let proposal else { outcome = .noProposal; RuntimeDiagnostics.record(.autoNoProposal); return }
@@ -267,6 +282,9 @@ final class PredictionCoordinator {
         guard PredictionFocusAnchorPolicy.permits(originalSession: anchorSessionID,
                   currentSession: snapshot.sessionID, capturedOriginalField: true,
                   sameField: platform.focusIsCurrent(originalFocus)) else {
+            // The old field can no longer authorize this session. The boundary
+            // will discard its word before a fresh event captures another field.
+            anchorFocus = nil
             pendingCaretAnchor = nil
             RuntimeDiagnostics.record(.autoFocusMismatch); return
         }
@@ -293,6 +311,12 @@ final class PredictionCoordinator {
         let resolved = pending.resolve(sessionID: snapshot.sessionID, location: currentSelection.location,
             selectionLength: currentSelection.length, cumulativeOffset: snapshot.cumulativeUTF16Offset,
             sameField: platform.focusIsCurrent(originalFocus), snapshotIsCurrent: isCurrent(snapshot), suffixMatches: suffixMatches)
+        if pending.isCancelled {
+            anchorFocus = nil
+            pendingCaretAnchor = nil
+            RuntimeDiagnostics.record(.autoFocusMismatch)
+            return
+        }
         pendingCaretAnchor = pending
         guard resolved != nil else {
             RuntimeDiagnostics.record(.autoCaretMismatch)
@@ -485,12 +509,22 @@ final class PredictionCoordinator {
             original: receipt.notice.original, replacement: receipt.notice.replacement,
             expiresAt: DispatchTime.now().uptimeNanoseconds + 2_000_000_000)
         onConfirmedAutomaticUndo?(receipt.notice)
+        onAdaptiveAutomaticUndo?(receipt.notice.id, receipt.editReplacement, receipt.editOriginal,
+            receipt.focus, adaptiveGenerationProvider())
     }
 
     /// The ID is consumed before attempting a mutation. UI actions never select
     /// a remembered range or reuse current selection as a new target.
     func undoCorrection(id: UUID, completion: @escaping (CorrectionUndoResult) -> Void) {
-        completion(performUndoCorrection(id: id))
+        confirmedAdaptiveUndo = nil
+        let result = performUndoCorrection(id: id)
+        // performUndoCorrection has released its input lease before this call.
+        if case .confirmed = result, let event = confirmedAdaptiveUndo {
+            onAdaptiveAutomaticUndo?(event.id, event.original, event.replacement, event.focus,
+                adaptiveGenerationProvider())
+        }
+        confirmedAdaptiveUndo = nil
+        completion(result)
     }
 
     private func performUndoCorrection(id: UUID) -> CorrectionUndoResult {
@@ -566,6 +600,8 @@ final class PredictionCoordinator {
                 sourceLayoutID: receipt.sourceLayoutID,
                 original: receipt.notice.original, replacement: receipt.notice.replacement,
                 expiresAt: DispatchTime.now().uptimeNanoseconds + 2_000_000_000)
+            confirmedAdaptiveUndo = (receipt.notice.id, receipt.editReplacement,
+                receipt.editOriginal, receipt.focus)
             return .confirmed
         }
     }
