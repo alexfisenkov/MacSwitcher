@@ -198,6 +198,49 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
     }
 
     @MainActor
+    func testAutomaticCorrectionResumesAfterManualEnglishWord() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2090, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        _ = rig.coordinator
+        rig.sourceID = pair.ru
+        rig.deliver("Ьфс", source: pair.ru)
+        rig.settle(expected: .noProposal)
+        let focus = field.focus()
+        let before = field.observation
+        field.text = "MacSwitcher"
+        field.caret = 11
+        field.selection = 0
+        let confirmed = TextConverter.ConfirmedNativeField(focus: focus, original: "Ьфс",
+            replacement: "MacSwitcher", before: before, after: field.observation)
+        rig.monitor.adoptConfirmedManualField(confirmed, resultLayoutID: pair.en)
+        rig.sourceID = pair.en
+        rig.deliver(" ")
+        rig.deliver("ghbd")
+        rig.settle(expected: .applied)
+        XCTAssertEqual(field.text, "MacSwitcher прив")
+    }
+
+    @MainActor
+    func testLostFocusAnchorRecoversAfterWordBoundary() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2091, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        _ = rig.coordinator
+        rig.deliver("ghbd")
+        field.valid = false
+        rig.settle(expected: .refused)
+        XCTAssertEqual(field.text, "ghbd")
+
+        field.valid = true
+        rig.deliver(" ")
+        rig.settle(expected: .notScheduled)
+        rig.deliver("ghbd")
+        rig.settle(expected: .applied)
+        XCTAssertEqual(field.text, "ghbd прив")
+    }
+
+    @MainActor
     func testAdaptiveWordAppliesWithStaleReportedLayoutInBothDirections() throws {
         let pair = try layoutIDs()
         let wordPair = AdaptiveWordPair(ru: "фис", en: "abc")

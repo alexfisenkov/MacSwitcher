@@ -45,6 +45,26 @@ enum RuntimeDiagnosticEvent: String, CaseIterable, Sendable {
     case focusReadOtherError, focusReadMissingValue, focusReadUnexpectedType
 
     var logOnce: Bool { rawValue.hasPrefix("auto") || rawValue.hasPrefix("native") || rawValue.hasPrefix("focusRead") }
+
+    /// Only terminal or actionable automatic-refusal stages may recur in OSLog.
+    /// Routine snapshots, proposals, stale evaluations and successful edits stay
+    /// once per process. The explicit list keeps the logger closed vocabulary.
+    var isThrottledAutoRefusal: Bool {
+        switch self {
+        case .autoEngineUnavailable, .autoAnchorStale, .autoAnchorUnavailable,
+             .autoAnchorSelectionUnavailable, .autoMappingUnavailable,
+             .autoTargetUnavailable, .autoFocusAnchorUnavailable, .autoFocusMismatch,
+             .autoCaretUnavailable, .autoCaretMismatch, .autoEditRefused,
+             .autoTextUnconfirmed, .autoSourceFailed, .autoSourceUnconfirmed,
+             .autoAXUnsupported, .autoAXMutationUnknown,
+             .nativeFenceUnavailable, .nativeAutoBlocked, .nativeAutoUncertain,
+             .nativeAutoFocusRecheckFailed, .nativeInvalidExecution,
+             .nativeSuffixMismatch, .nativePreparationNavigationUncertain:
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 /// Failure stages are metadata only. Keep these separate from RuntimeDiagnosticEvent:
@@ -80,7 +100,7 @@ enum RuntimeDiagnostics {
     static func isEnabled(arguments: [String]) -> Bool { arguments.contains("--diagnostic-events") }
 
     static func record(_ event: RuntimeDiagnosticEvent) {
-        guard enabled, !event.logOnce || seen.insert(event) else { return }
+        guard enabled, seen.shouldEmit(event) else { return }
         logger.notice("\(event.rawValue, privacy: .public)")
     }
 
@@ -112,8 +132,28 @@ enum RuntimeDiagnostics {
     }
 
     final class SeenEvents: @unchecked Sendable {
+        private static let refusalIntervalNanoseconds: UInt64 = 5_000_000_000
         private let lock = NSLock()
         private var events = Set<RuntimeDiagnosticEvent>()
+        private var lastRefusalEmission: [RuntimeDiagnosticEvent: UInt64] = [:]
+        private let now: () -> UInt64
+
+        init(now: @escaping () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }) {
+            self.now = now
+        }
+
+        func shouldEmit(_ event: RuntimeDiagnosticEvent) -> Bool {
+            guard event.isThrottledAutoRefusal else { return !event.logOnce || insert(event) }
+            lock.lock(); defer { lock.unlock() }
+            let current = now()
+            if let previous = lastRefusalEmission[event] {
+                guard current >= previous,
+                      current - previous >= Self.refusalIntervalNanoseconds else { return false }
+            }
+            lastRefusalEmission[event] = current
+            return true
+        }
+
         func insert(_ event: RuntimeDiagnosticEvent) -> Bool {
             lock.lock(); defer { lock.unlock() }
             return events.insert(event).inserted
