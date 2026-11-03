@@ -758,28 +758,59 @@ namespace MacSwitcher.Windows.Automation
                     Phase = BrokerPhase.ValueSet, Stage = BrokerStage.Exception,
                     HResult = error.HResult };
             }
-            FieldSnapshot? after;
-            try
+            // SetValue was issued exactly once. A browser may publish its DOM/UIA state
+            // asynchronously, so only read-only observations may repeat until the original
+            // absolute deadline. Never convert a different field or unknown source to ACK.
+            FieldSnapshot? lastObservation = null;
+            BrokerStage lastStage = BrokerStage.None;
+            int lastNativeError = 0, lastHResult = 0;
+            while ((long)Win32.GetTickCount64() < deadline)
             {
-                after = SafeCapture(NativeFocusSnapshot.Capture(), foreground, hwnd, pid, tid,
-                    expectedLayout, out stage, out nativeError, out textLength,
-                    out selectionStart, out selectionEnd, out nativeClass);
+                FieldSnapshot? after;
+                try
+                {
+                    after = SafeCapture(NativeFocusSnapshot.Capture(), foreground, hwnd, pid, tid,
+                        expectedLayout, out stage, out nativeError, out textLength,
+                        out selectionStart, out selectionEnd, out nativeClass);
+                }
+                catch (Exception error)
+                {
+                    after = null;
+                    stage = BrokerStage.Exception;
+                    nativeError = 0;
+                    lastHResult = error.HResult;
+                }
+                lastStage = stage;
+                lastNativeError = nativeError;
+                if (after != null)
+                {
+                    if (!after.SameIdentity(before))
+                        return new BrokerResponse { Outcome = BrokerOutcome.Unknown,
+                            Phase = BrokerPhase.ValueFinalAck, Stage = BrokerStage.NativeMismatch };
+                    lastObservation = after;
+                    if (after.Value == replacement && after.SelectionStart == after.SelectionEnd &&
+                        after.SelectionEnd == replacement.Length &&
+                        (long)Win32.GetTickCount64() <= deadline)
+                        return new BrokerResponse { Outcome = BrokerOutcome.Success,
+                            Phase = BrokerPhase.ValueFinalAck, Field = after };
+                    if (after.Value != before.Value && after.Value != replacement)
+                        return new BrokerResponse { Outcome = BrokerOutcome.Unknown,
+                            Phase = BrokerPhase.ValueFinalAck, Stage = BrokerStage.NativeMismatch,
+                            Field = after };
+                }
+                else if (stage == BrokerStage.Password || stage == BrokerStage.ReadOnly ||
+                    stage == BrokerStage.Integrity || stage == BrokerStage.Desktop ||
+                    stage == BrokerStage.Identity || stage == BrokerStage.Layout)
+                    break;
+                var remaining = deadline - (long)Win32.GetTickCount64();
+                if (remaining <= 0) break;
+                Thread.Sleep((int)Math.Min(5, remaining));
             }
-            catch (Exception error)
-            {
-                return new BrokerResponse { Outcome = BrokerOutcome.Unknown,
-                    Phase = BrokerPhase.ValueReadback, Stage = BrokerStage.Exception,
-                    HResult = error.HResult };
-            }
-            if (after == null)
-                return new BrokerResponse { Outcome = BrokerOutcome.Unknown,
-                    Phase = BrokerPhase.ValueReadback, Stage = stage, NativeError = nativeError };
-            if (!after.SameIdentity(before) || after.Value != replacement)
-                return new BrokerResponse { Outcome = BrokerOutcome.Unknown,
-                    Phase = BrokerPhase.ValueFinalAck, Stage = BrokerStage.NativeMismatch,
-                    Field = after };
-            return new BrokerResponse { Outcome = BrokerOutcome.Success,
-                Phase = BrokerPhase.ValueFinalAck, Field = after };
+            return new BrokerResponse { Outcome = BrokerOutcome.Unknown,
+                Phase = lastObservation == null ? BrokerPhase.ValueReadback : BrokerPhase.ValueFinalAck,
+                Stage = lastObservation == null ? lastStage : BrokerStage.NativeMismatch,
+                NativeError = lastNativeError, HResult = lastHResult,
+                Field = lastObservation };
         }
 
         private static bool TryNativeIdentity(FieldSnapshot expected, out BrokerStage stage)

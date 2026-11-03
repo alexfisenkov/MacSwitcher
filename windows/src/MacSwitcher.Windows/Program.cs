@@ -29,6 +29,9 @@ namespace MacSwitcher.Windows
             if (args.Length == 2 && args[0] == "--runtime-fixture-client" &&
                 uint.TryParse(args[1], out fixturePid))
                 return RuntimeFixtureClient.Run(fixturePid);
+            if (args.Length == 2 && args[0] == "--runtime-browser-fixture-client" &&
+                uint.TryParse(args[1], out fixturePid))
+                return RuntimeFixtureClient.RunBrowser(fixturePid);
             if (args.Length != 0 && (args.Length != 1 ||
                 args[0] != "--settings" && args[0] != "--quit")) return 2;
             var quitRequested = args.Length == 1 && args[0] == "--quit";

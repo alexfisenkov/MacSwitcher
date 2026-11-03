@@ -1,8 +1,10 @@
 using System;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Threading;
+using System.Diagnostics;
 using MacSwitcher.Core;
 using MacSwitcher.Windows.Native;
 
@@ -12,16 +14,36 @@ namespace MacSwitcher.Windows.Runtime
     internal static class RuntimeFixtureClient
     {
         private const string MarkerProperty = "MacSwitcher.RuntimeFixture";
+        private const string BrowserMarkerProperty = "MacSwitcher.RuntimeBrowserFixture";
 
-        internal static int Run(uint parentPid)
+        internal static int Run(uint parentPid) { return RunInternal(parentPid, null); }
+
+        internal static int RunBrowser(uint browserPid)
+        {
+            var pageMarker = Environment.GetEnvironmentVariable("MACSWITCHER_RUNTIME_BROWSER_FIXTURE_PAGE_MARKER");
+            if (!ValidBrowserMarker(pageMarker)) return 2;
+            return RunInternal(browserPid, pageMarker);
+        }
+
+        private static bool ValidBrowserMarker(string? pageMarker)
+        {
+            if (pageMarker == null || !(pageMarker.StartsWith("msw-input-", StringComparison.Ordinal) ||
+                pageMarker.StartsWith("msw-textarea-", StringComparison.Ordinal))) return false;
+            var separator = pageMarker.LastIndexOf('-');
+            return separator >= 0 && pageMarker.Length - separator - 1 == 32 &&
+                pageMarker.Substring(separator + 1).All(c => c >= '0' && c <= '9' ||
+                    c >= 'a' && c <= 'f');
+        }
+
+        private static int RunInternal(uint targetPid, string? browserMarker)
         {
             long marker;
             var rawMarker = Environment.GetEnvironmentVariable("MACSWITCHER_RUNTIME_FIXTURE_MARKER");
             var data = Environment.GetEnvironmentVariable("MACSWITCHER_RUNTIME_FIXTURE_DATA");
-            if (parentPid == 0 || !long.TryParse(rawMarker, NumberStyles.None,
+            if (targetPid == 0 || !long.TryParse(rawMarker, NumberStyles.None,
                 CultureInfo.InvariantCulture, out marker) || marker <= 0 ||
                 string.IsNullOrEmpty(data) || !File.Exists(Path.Combine(data, "dictionary-manifest.json")) ||
-                !OwnFixtureForeground(parentPid, marker)) return 2;
+                !OwnTargetForeground(targetPid, marker, browserMarker)) return 2;
 
             var settings = new AppSettings { Enabled = true, AutomaticCorrection = false,
                 RussianPriority = true, DoubleShiftMilliseconds = 180 };
@@ -42,7 +64,7 @@ namespace MacSwitcher.Windows.Runtime
                     var command = ReadBoundedLine(input);
                     if (command == null) return 0;
                     if (command == "EXIT") { output.WriteLine("BYE"); return 0; }
-                    if (!OwnFixtureForeground(parentPid, marker))
+                    if (!OwnTargetForeground(targetPid, marker, browserMarker))
                     { output.WriteLine("REFUSED"); return 4; }
                     try
                     {
@@ -110,6 +132,10 @@ namespace MacSwitcher.Windows.Runtime
                                 settings = new AppSettings { Enabled = true, AutomaticCorrection = false,
                                     RussianPriority = true, DoubleShiftMilliseconds = 180 };
                                 runtime.ApplySettings(settings); break;
+                            case "SET_EN":
+                                if (!runtime.TrySwitchLayout("en"))
+                                { output.WriteLine("SOURCE_UNAVAILABLE"); return 9; }
+                                break;
                             case "STATE": break;
                             default: output.WriteLine("REFUSED"); return 5;
                         }
@@ -121,7 +147,9 @@ namespace MacSwitcher.Windows.Runtime
                             runtime.FixtureNativeBudgetMilliseconds + "|" +
                             runtime.FixtureNativeBrokerPhase + "|" +
                             runtime.FixtureNativeRpcMilliseconds + "|" + runtime.FixtureShiftCode + "|" +
-                            runtime.FixtureResetReason);
+                            runtime.FixtureResetReason + "|" + runtime.FixtureFullBrokerOutcome + "|" +
+                            runtime.FixtureFullBrokerPhase + "|" + runtime.FixtureFullBudgetMilliseconds + "|" +
+                            runtime.FixtureFullRpcMilliseconds);
                     }
                     catch { output.WriteLine("ERROR"); return 6; }
                 }
@@ -139,6 +167,26 @@ namespace MacSwitcher.Windows.Runtime
             var title = new StringBuilder(128);
             return Win32.GetWindowText(foreground, title, title.Capacity) > 0 &&
                 title.ToString() == "MacSwitcher synthetic fixture";
+        }
+
+        private static bool OwnTargetForeground(uint pid, long marker, string? browserMarker)
+        {
+            if (browserMarker == null) return OwnFixtureForeground(pid, marker);
+            var foreground = Win32.GetForegroundWindow();
+            if (foreground == IntPtr.Zero) return false;
+            uint actualPid;
+            Win32.GetWindowThreadProcessId(foreground, out actualPid);
+            if (actualPid != pid ||
+                Win32.GetProp(foreground, BrowserMarkerProperty).ToInt64() != marker) return false;
+            try
+            {
+                if (!Process.GetProcessById((int)pid).ProcessName.Equals("msedge",
+                    StringComparison.OrdinalIgnoreCase)) return false;
+            }
+            catch { return false; }
+            var title = new StringBuilder(256);
+            return Win32.GetWindowText(foreground, title, title.Capacity) > 0 &&
+                title.ToString().StartsWith(browserMarker + "-", StringComparison.Ordinal);
         }
 
         private static string? ReadBoundedLine(StreamReader input)

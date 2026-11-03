@@ -95,6 +95,8 @@ namespace MacSwitcher.Windows.Runtime
         private int fixtureNativeBrokerPhase = -1;
         private int fixtureNativeBudgetMilliseconds = -1;
         private int fixtureNativeRpcMilliseconds = -1;
+        private int fixtureFullBrokerOutcome = -1, fixtureFullBrokerPhase = -1;
+        private int fixtureFullBudgetMilliseconds = -1, fixtureFullRpcMilliseconds = -1;
         private CorrectionReceipt? receipt;
 
         public event Action<RuntimeStatus>? StatusChanged;
@@ -132,6 +134,10 @@ namespace MacSwitcher.Windows.Runtime
         internal int FixtureNativeBrokerPhase { get { return Volatile.Read(ref fixtureNativeBrokerPhase); } }
         internal int FixtureNativeBudgetMilliseconds { get { return Volatile.Read(ref fixtureNativeBudgetMilliseconds); } }
         internal int FixtureNativeRpcMilliseconds { get { return Volatile.Read(ref fixtureNativeRpcMilliseconds); } }
+        internal int FixtureFullBrokerOutcome { get { return Volatile.Read(ref fixtureFullBrokerOutcome); } }
+        internal int FixtureFullBrokerPhase { get { return Volatile.Read(ref fixtureFullBrokerPhase); } }
+        internal int FixtureFullBudgetMilliseconds { get { return Volatile.Read(ref fixtureFullBudgetMilliseconds); } }
+        internal int FixtureFullRpcMilliseconds { get { return Volatile.Read(ref fixtureFullRpcMilliseconds); } }
         internal bool FixtureWorkSettled
         {
             get
@@ -944,6 +950,10 @@ namespace MacSwitcher.Windows.Runtime
             string oldPhrase, string newPhrase, string source, string? targetLanguage = null,
             bool announce = true, bool allowRecovery = false)
         {
+            Interlocked.Exchange(ref fixtureFullBrokerOutcome, -1);
+            Interlocked.Exchange(ref fixtureFullBrokerPhase, -1);
+            Interlocked.Exchange(ref fixtureFullBudgetMilliseconds, -1);
+            Interlocked.Exchange(ref fixtureFullRpcMilliseconds, -1);
             if (focus == null || field == null || field.SelectionEnd != field.Value.Length || newValue.Length > 32768 ||
                 !recovery.CanRetain(field) || !allowRecovery && recovery.Contains(field) ||
                 !field.CanWrite || !focus.StillSame() || !CanMutate(generation, revision)) return false;
@@ -964,9 +974,15 @@ namespace MacSwitcher.Windows.Runtime
                 {
                     if (fence == null) { Publish("Безопасная запись сейчас недоступна.", false); return false; }
                     var remaining = (int)Math.Max(0, fence.DeadlineTicks - (long)Win32.GetTickCount64() - 10);
+                    Interlocked.Exchange(ref fixtureFullBudgetMilliseconds, remaining);
                     if (remaining < 30) return false;
                     if (!CanMutate(generation, revision)) return false;
+                    var rpcStarted = (long)Win32.GetTickCount64();
                     var write = broker.WriteValue(focus, field, newValue, remaining);
+                    Interlocked.Exchange(ref fixtureFullRpcMilliseconds,
+                        (int)Math.Min(int.MaxValue, (long)Win32.GetTickCount64() - rpcStarted));
+                    Interlocked.Exchange(ref fixtureFullBrokerOutcome, (int)write.Outcome);
+                    Interlocked.Exchange(ref fixtureFullBrokerPhase, (int)write.Phase);
                     if (!CanMutate(generation, revision))
                     {
                         if (write.Outcome != BrokerOutcome.Unsafe) recovery.Add(field, source, write.Field);

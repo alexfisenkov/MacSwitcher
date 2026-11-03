@@ -27,6 +27,9 @@ internal static class Program
     private static string edgeTextarea = "NOT_RUN";
     private static readonly EdgeProbeReceipt edgeInputReceipt = new EdgeProbeReceipt();
     private static readonly EdgeProbeReceipt edgeTextareaReceipt = new EdgeProbeReceipt();
+    private static string edgeInputRuntime = "NOT_RUN", edgeTextareaRuntime = "NOT_RUN";
+    private static readonly EdgeRuntimeReceipt edgeInputRuntimeReceipt = new EdgeRuntimeReceipt();
+    private static readonly EdgeRuntimeReceipt edgeTextareaRuntimeReceipt = new EdgeRuntimeReceipt();
     private static string hookStatus = "NOT_RUN";
     private static string integrationStatus = "NOT_RUN";
     private static string integrationProbe = "NOT_RUN";
@@ -40,6 +43,8 @@ internal static class Program
     private static int integrationNativeBrokerStage = -1, integrationNativeBudgetMilliseconds = -1;
     private static int integrationNativeBrokerPhase = -1;
     private static int integrationNativeRpcMilliseconds = -1;
+    private static int integrationFullBrokerOutcome = -1, integrationFullBrokerPhase = -1;
+    private static int integrationFullBudgetMilliseconds = -1, integrationFullRpcMilliseconds = -1;
     private static string integrationWaitStatus = "NOT_RUN";
     private static string brokerProbe = "NOT_RUN";
     private static int brokerRestartCount;
@@ -101,6 +106,29 @@ internal static class Program
                 ",\"ownWindowAtWrite\":" + (OwnWindowAtWrite ? "true" : "false") +
                 ",\"canWrite\":" + (CanWrite ? "true" : "false") +
                 ",\"initialTextMatched\":" + (InitialTextMatched ? "true" : "false") +
+                ",\"domEventAck\":" + (DomEventAck ? "true" : "false") +
+                ",\"domValueAck\":" + (DomValueAck ? "true" : "false") + "}";
+        }
+    }
+
+    private sealed class EdgeRuntimeReceipt
+    {
+        internal string Status = "NOT_RUN";
+        internal bool OwnWindow, DomEventAck, DomValueAck, Recovery;
+        internal string InitialLayout = "", FinalLayout = "";
+        internal int Applied, FullOutcome = -1, FullPhase = -1;
+        internal int FullBudgetMilliseconds = -1, FullRpcMilliseconds = -1;
+
+        internal string Json()
+        {
+            return "{\"status\":\"" + Status + "\",\"ownWindow\":" +
+                (OwnWindow ? "true" : "false") + ",\"initialLayout\":\"" + InitialLayout +
+                "\",\"finalLayout\":\"" + FinalLayout +
+                "\",\"applied\":" + Applied + ",\"fullOutcome\":" + FullOutcome +
+                ",\"fullPhase\":" + FullPhase +
+                ",\"fullBudgetMilliseconds\":" + FullBudgetMilliseconds +
+                ",\"fullRpcMilliseconds\":" + FullRpcMilliseconds +
+                ",\"recovery\":" + (Recovery ? "true" : "false") +
                 ",\"domEventAck\":" + (DomEventAck ? "true" : "false") +
                 ",\"domValueAck\":" + (DomValueAck ? "true" : "false") + "}";
         }
@@ -305,6 +333,14 @@ internal static class Program
                     return Report("FAIL", "edge_textarea_probe", checks);
                 if (edgeInput == "PASS") checks++;
                 if (edgeTextarea == "PASS") checks++;
+                edgeInputRuntime = ProbeEdgeRuntime(edge, path, false, edgeInputRuntimeReceipt);
+                if (edgeInputRuntime != "PASS" && edgeInputRuntime != "UNSUPPORTED")
+                    return Report("FAIL", "edge_input_runtime", checks);
+                edgeTextareaRuntime = ProbeEdgeRuntime(edge, path, true, edgeTextareaRuntimeReceipt);
+                if (edgeTextareaRuntime != "PASS" && edgeTextareaRuntime != "UNSUPPORTED")
+                    return Report("FAIL", "edge_textarea_runtime", checks);
+                if (edgeInputRuntime == "PASS") checks++;
+                if (edgeTextareaRuntime == "PASS") checks++;
             }
             return Report("PASS", "synthetic_uia_broker", checks);
         }
@@ -394,6 +430,10 @@ internal static class Program
             ",\"integrationNativeBrokerPhase\":" + integrationNativeBrokerPhase +
             ",\"integrationNativeRpcMilliseconds\":" + integrationNativeRpcMilliseconds +
             ",\"integrationNativeBudgetMilliseconds\":" + integrationNativeBudgetMilliseconds +
+            ",\"integrationFullBrokerOutcome\":" + integrationFullBrokerOutcome +
+            ",\"integrationFullBrokerPhase\":" + integrationFullBrokerPhase +
+            ",\"integrationFullBudgetMilliseconds\":" + integrationFullBudgetMilliseconds +
+            ",\"integrationFullRpcMilliseconds\":" + integrationFullRpcMilliseconds +
             ",\"integrationWaitStatus\":\"" + integrationWaitStatus +
             "\",\"brokerProbe\":\"" + brokerProbe +
             "\",\"brokerRestartCount\":" + brokerRestartCount +
@@ -413,7 +453,11 @@ internal static class Program
             ",\"edgeInput\":\"" + edgeInput +
             "\",\"edgeTextarea\":\"" + edgeTextarea +
             "\",\"edgeInputReceipt\":" + edgeInputReceipt.Json() +
-            ",\"edgeTextareaReceipt\":" + edgeTextareaReceipt.Json() + "}");
+            ",\"edgeTextareaReceipt\":" + edgeTextareaReceipt.Json() +
+            ",\"edgeInputRuntime\":\"" + edgeInputRuntime +
+            "\",\"edgeTextareaRuntime\":\"" + edgeTextareaRuntime +
+            "\",\"edgeInputRuntimeReceipt\":" + edgeInputRuntimeReceipt.Json() +
+            ",\"edgeTextareaRuntimeReceipt\":" + edgeTextareaRuntimeReceipt.Json() + "}");
         return status == "PASS" ? 0 : 1;
     }
 
@@ -733,6 +777,7 @@ internal static class Program
         public int ManualCode;
         public int NativeCode, NativeBrokerOutcome, NativeBrokerStage, NativeBudgetMilliseconds,
             NativeBrokerPhase, NativeRpcMilliseconds, ShiftCode, ResetReason;
+        public int FullBrokerOutcome, FullBrokerPhase, FullBudgetMilliseconds, FullRpcMilliseconds;
     }
 
     private sealed class FixtureSession : IDisposable
@@ -741,13 +786,20 @@ internal static class Program
         public bool Ready { get; }
 
         public FixtureSession(string executable, string data, int marker)
+            : this(executable, data, marker, (uint)Environment.ProcessId, null) { }
+
+        public FixtureSession(string executable, string data, int marker,
+            uint targetPid, string? browserMarker)
         {
             var start = new ProcessStartInfo(executable,
-                "--runtime-fixture-client " + Environment.ProcessId)
+                (browserMarker == null ? "--runtime-fixture-client " :
+                    "--runtime-browser-fixture-client ") + targetPid)
             { UseShellExecute = false, CreateNoWindow = true,
               RedirectStandardInput = true, RedirectStandardOutput = true };
             start.Environment["MACSWITCHER_RUNTIME_FIXTURE_MARKER"] = marker.ToString();
             start.Environment["MACSWITCHER_RUNTIME_FIXTURE_DATA"] = data;
+            if (browserMarker != null)
+                start.Environment["MACSWITCHER_RUNTIME_BROWSER_FIXTURE_PAGE_MARKER"] = browserMarker;
             process = Process.Start(start) ?? throw new InvalidOperationException();
             Ready = Pump(() => process.StandardOutput.ReadLine(), 30000) == "READY";
         }
@@ -766,14 +818,16 @@ internal static class Program
             if (line == null || !line.StartsWith("OK|", StringComparison.Ordinal))
                 throw new InvalidOperationException();
             var pieces = line.Split('|');
-            if (pieces.Length != 14) throw new InvalidOperationException();
+            if (pieces.Length != 18) throw new InvalidOperationException();
             if (command == "WAIT") integrationWaitStatus = "SETTLED";
             var reply = new FixtureReply { Applied = int.Parse(pieces[1]), Undone = int.Parse(pieces[2]),
                 Layout = pieces[3], Recovery = pieces[4] == "1", ManualCode = int.Parse(pieces[5]),
                 NativeCode = int.Parse(pieces[6]), NativeBrokerOutcome = int.Parse(pieces[7]),
                 NativeBrokerStage = int.Parse(pieces[8]), NativeBudgetMilliseconds = int.Parse(pieces[9]),
                 NativeBrokerPhase = int.Parse(pieces[10]), NativeRpcMilliseconds = int.Parse(pieces[11]),
-                ShiftCode = int.Parse(pieces[12]), ResetReason = int.Parse(pieces[13]) };
+                ShiftCode = int.Parse(pieces[12]), ResetReason = int.Parse(pieces[13]),
+                FullBrokerOutcome = int.Parse(pieces[14]), FullBrokerPhase = int.Parse(pieces[15]),
+                FullBudgetMilliseconds = int.Parse(pieces[16]), FullRpcMilliseconds = int.Parse(pieces[17]) };
             integrationManualCode = reply.ManualCode;
             integrationNativeCode = reply.NativeCode;
             integrationNativeBrokerOutcome = reply.NativeBrokerOutcome;
@@ -783,6 +837,10 @@ internal static class Program
             integrationNativeRpcMilliseconds = reply.NativeRpcMilliseconds;
             integrationShiftCode = reply.ShiftCode;
             integrationResetReason = reply.ResetReason;
+            integrationFullBrokerOutcome = reply.FullBrokerOutcome;
+            integrationFullBrokerPhase = reply.FullBrokerPhase;
+            integrationFullBudgetMilliseconds = reply.FullBudgetMilliseconds;
+            integrationFullRpcMilliseconds = reply.FullRpcMilliseconds;
             return reply;
         }
 
@@ -795,7 +853,7 @@ internal static class Program
         }
     }
 
-    private static bool OwnEdgeWindow(IntPtr window, uint pid, string token)
+    private static bool OwnEdgeWindow(IntPtr window, uint pid, string pageMarker)
     {
         if (window == IntPtr.Zero || GetForegroundWindow() != window) return false;
         uint currentPid;
@@ -809,7 +867,7 @@ internal static class Program
         catch { return false; }
         var title = new StringBuilder(256);
         GetWindowText(window, title, title.Capacity);
-        return title.ToString().StartsWith(token + "-", StringComparison.Ordinal);
+        return title.ToString().StartsWith(pageMarker + "-", StringComparison.Ordinal);
     }
 
     private static string ProbeEdge(Broker broker, string executable, bool textarea,
@@ -819,12 +877,12 @@ internal static class Program
         Directory.CreateDirectory(temporary);
         var page = Path.Combine(temporary, "fixture.html");
         var kind = textarea ? "textarea" : "input";
-        var token = "msw-" + kind + "-" + Guid.NewGuid().ToString("N");
+        var pageMarker = "msw-" + kind + "-" + Guid.NewGuid().ToString("N");
         File.WriteAllText(page, "<!doctype html><meta charset=\"utf-8\"><title>" +
-            token + "-noevent-other</title><" + kind + " id=\"target\"" +
+            pageMarker + "-noevent-other</title><" + kind + " id=\"target\"" +
             (textarea ? ">ghbdtn</textarea>" : " value=\"ghbdtn\">") +
             "<script>const x=document.getElementById('target');let seen=false;" +
-            "function update(){document.title='" + token +
+            "function update(){document.title='" + pageMarker +
             "-'+(seen?'event':'noevent')+'-'+(x.value==='привет'?'value':'other')}" +
             "x.addEventListener('input',()=>{seen=true;update()});" +
             "window.onload=()=>{x.focus();update()};setInterval(update,40)</script>", Encoding.UTF8);
@@ -848,7 +906,7 @@ internal static class Program
                 var window = GetForegroundWindow();
                 uint pid;
                 GetWindowThreadProcessId(window, out pid);
-                if (OwnEdgeWindow(window, pid, token))
+                if (OwnEdgeWindow(window, pid, pageMarker))
                 {
                     edgeWindow = window; edgePid = pid; break;
                 }
@@ -858,7 +916,7 @@ internal static class Program
             Result? captured = null;
             for (int attempt = 0; attempt < 10; attempt++)
             {
-                receipt.OwnWindowAtCapture = OwnEdgeWindow(edgeWindow, edgePid, token);
+                receipt.OwnWindowAtCapture = OwnEdgeWindow(edgeWindow, edgePid, pageMarker);
                 if (!receipt.OwnWindowAtCapture) return Finish("FOCUS_DRIFT");
                 captured = RequireBroker(() => broker.Call(1, null, null), attempt == 0 ? 5000 : 3000);
                 receipt.CaptureOutcome = captured.Outcome;
@@ -871,7 +929,7 @@ internal static class Program
             }
             if (captured?.Outcome != 1 || captured.Field == null || !captured.Field.CanWrite ||
                 !receipt.InitialTextMatched) return Finish("UNSUPPORTED");
-            receipt.OwnWindowAtWrite = OwnEdgeWindow(edgeWindow, edgePid, token);
+            receipt.OwnWindowAtWrite = OwnEdgeWindow(edgeWindow, edgePid, pageMarker);
             if (!receipt.OwnWindowAtWrite) return Finish("FOCUS_DRIFT");
             writeAttempted = true;
             var changed = RequireBroker(() => broker.Call(2, captured.Field, "привет"));
@@ -886,9 +944,9 @@ internal static class Program
                 var title = new StringBuilder(256);
                 GetWindowText(edgeWindow, title, title.Capacity);
                 var observed = title.ToString();
-                if (!observed.StartsWith(token + "-", StringComparison.Ordinal))
+                if (!observed.StartsWith(pageMarker + "-", StringComparison.Ordinal))
                     return Finish("FOCUS_DRIFT");
-                var suffix = observed.Substring(token.Length + 1);
+                var suffix = observed.Substring(pageMarker.Length + 1);
                 receipt.DomEventAck = suffix.StartsWith("event-", StringComparison.Ordinal);
                 receipt.DomValueAck = suffix.Contains("-value", StringComparison.Ordinal);
                 if (receipt.DomEventAck && receipt.DomValueAck) break;
@@ -904,6 +962,118 @@ internal static class Program
         catch { return Finish(writeAttempted ? "WRITE_EXCEPTION" : "NOT_RUN"); }
         finally
         {
+            try { if (edge != null && !edge.HasExited) edge.Kill(true); } catch { }
+            edge?.Dispose();
+            try { Directory.Delete(temporary, true); } catch { }
+        }
+    }
+
+    private static string ProbeEdgeRuntime(string edgeExecutable, string appExecutable,
+        bool textarea, EdgeRuntimeReceipt receipt)
+    {
+        var temporary = Path.Combine(Path.GetTempPath(), "MacSwitcher-EdgeRuntime-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temporary);
+        var page = Path.Combine(temporary, "fixture.html");
+        var kind = textarea ? "textarea" : "input";
+        var pageMarker = "msw-" + kind + "-" + Guid.NewGuid().ToString("N");
+        File.WriteAllText(page, "<!doctype html><meta charset=\"utf-8\"><title>" +
+            pageMarker + "-noevent-other</title><" + kind + " id=\"target\"" +
+            (textarea ? ">ghbdtn</textarea>" : " value=\"ghbdtn\">") +
+            "<script>const x=document.getElementById('target');let seen=false;" +
+            "function update(){document.title='" + pageMarker +
+            "-'+(seen?'event':'noevent')+'-'+(x.value==='привет'?'value':'other')}" +
+            "x.addEventListener('input',()=>{seen=true;update()});" +
+            "window.onload=()=>{x.focus();x.setSelectionRange(x.value.length,x.value.length);update()};" +
+            "setInterval(update,40)</script>", Encoding.UTF8);
+        var profile = Path.Combine(temporary, "profile");
+        var data = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(appExecutable))!, "data");
+        Process? edge = null;
+        IntPtr markedWindow = IntPtr.Zero;
+        string Finish(string status) { receipt.Status = status; return status; }
+        try
+        {
+            if (!File.Exists(Path.Combine(data, "dictionary-manifest.json")))
+                return Finish("APP_DATA_MISSING");
+            edge = Process.Start(new ProcessStartInfo(edgeExecutable,
+                "--no-first-run --no-default-browser-check --disable-background-networking " +
+                "--user-data-dir=\"" + profile + "\" --app=\"" + new Uri(page).AbsoluteUri + "\"")
+            { UseShellExecute = false, CreateNoWindow = false });
+            if (edge == null) return Finish("EDGE_START_FAILED");
+            IntPtr edgeWindow = IntPtr.Zero;
+            uint edgePid = 0;
+            var until = Environment.TickCount64 + 6000;
+            while (Environment.TickCount64 < until)
+            {
+                Application.DoEvents();
+                var window = GetForegroundWindow();
+                uint pid;
+                GetWindowThreadProcessId(window, out pid);
+                if (OwnEdgeWindow(window, pid, pageMarker))
+                { edgeWindow = window; edgePid = pid; break; }
+                WaitForUiMessage(until);
+            }
+            if (edgeWindow == IntPtr.Zero) return Finish("EDGE_FOCUS_UNAVAILABLE");
+            var marker = System.Security.Cryptography.RandomNumberGenerator.GetInt32(1, int.MaxValue);
+            if (SetProp(edgeWindow, "MacSwitcher.RuntimeBrowserFixture", new IntPtr(marker)) == IntPtr.Zero)
+                return Finish("MARKER_UNAVAILABLE");
+            markedWindow = edgeWindow;
+            receipt.OwnWindow = OwnEdgeWindow(edgeWindow, edgePid, pageMarker);
+            if (!receipt.OwnWindow) return Finish("FOCUS_DRIFT");
+            using var session = new FixtureSession(appExecutable, data, marker, edgePid, pageMarker);
+            if (!session.Ready) return Finish("CLIENT_UNAVAILABLE");
+            try
+            {
+                var source = session.Command("SET_EN");
+                receipt.InitialLayout = source.Layout;
+                if (source.Layout != "en") return Finish("UNSUPPORTED");
+                session.Command("CACHE");
+            }
+            catch { return Finish("UNSUPPORTED"); } // No text mutation has been attempted.
+            if (!OwnEdgeWindow(edgeWindow, edgePid, pageMarker)) return Finish("FOCUS_DRIFT");
+            var first = session.Command("TAP_L");
+            if (first.Layout != "ru") return Finish("SOURCE_REFUSED");
+            session.Command("TAP_R");
+            var result = session.Command("WAIT");
+            receipt.FinalLayout = result.Layout;
+            receipt.Applied = result.Applied;
+            receipt.Recovery = result.Recovery;
+            receipt.FullOutcome = result.FullBrokerOutcome;
+            receipt.FullPhase = result.FullBrokerPhase;
+            receipt.FullBudgetMilliseconds = result.FullBudgetMilliseconds;
+            receipt.FullRpcMilliseconds = result.FullRpcMilliseconds;
+            until = Environment.TickCount64 + 1500;
+            while (Environment.TickCount64 < until)
+            {
+                Application.DoEvents();
+                var title = new StringBuilder(256);
+                GetWindowText(edgeWindow, title, title.Capacity);
+                var observed = title.ToString();
+                if (!observed.StartsWith(pageMarker + "-", StringComparison.Ordinal))
+                    return Finish("FOCUS_DRIFT");
+                var suffix = observed.Substring(pageMarker.Length + 1);
+                receipt.DomEventAck = suffix.StartsWith("event-", StringComparison.Ordinal);
+                receipt.DomValueAck = suffix.Contains("-value", StringComparison.Ordinal);
+                if (receipt.DomEventAck && receipt.DomValueAck) break;
+                WaitForUiMessage(until);
+            }
+            if (result.Recovery || result.FullBrokerOutcome == 2)
+                return Finish("RUNTIME_UNKNOWN");
+            if (result.Applied < 1 || result.FullBrokerOutcome != 1)
+                return Finish("RUNTIME_REFUSED");
+            if (result.FullBudgetMilliseconds < 1 || result.FullBudgetMilliseconds > 120 ||
+                result.FullRpcMilliseconds < 0 ||
+                result.FullRpcMilliseconds > result.FullBudgetMilliseconds)
+                return Finish("RUNTIME_BUDGET_FAIL");
+            if (result.Layout != "ru") return Finish("SOURCE_MISMATCH");
+            if (!receipt.DomEventAck || !receipt.DomValueAck)
+                return Finish("RUNTIME_SEMANTIC_GAP");
+            return Finish("PASS");
+        }
+        catch { return Finish("RUNTIME_EXCEPTION"); }
+        finally
+        {
+            if (markedWindow != IntPtr.Zero)
+            { try { RemoveProp(markedWindow, "MacSwitcher.RuntimeBrowserFixture"); } catch { } }
             try { if (edge != null && !edge.HasExited) edge.Kill(true); } catch { }
             edge?.Dispose();
             try { Directory.Delete(temporary, true); } catch { }
