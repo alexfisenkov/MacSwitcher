@@ -8,4 +8,6 @@ Core — src/MacSwitcher.Core (net462;net10.0); Win32/UIA — src/MacSwitcher.Wi
 
 asInvoker/uiAccess=false, никаких скрытых admin/services/security bypass. Не писать в пользовательские документы в CI; все runtime-проверки только в собственном synthetic fixture процессе. Не менять macOS исходники/version.json/appcast и установленное приложение.
 
+Новая cross-platform задача 03.11.2026 разрешает word-only локальное обучение по двум независимым подтверждениям (`../docs/local-learning.md`), в отдельном adaptive-rules.json с настройкой/просмотром/удалением. Это исключение только для предпочтений слов; полный набранный текст, клавиши, контекст и данные приложений не сохранять. Windows writer не меняет macOS; оба выпуска координирует parent.
+
 Проверки будут зафиксированы в windows/scripts и GitHub Windows workflow_dispatch. Runtime/installer evidence отделять от physical Win7/8.1/10/11/ARM и third-party fields. Новый код/fixtures — только в windows/. Generated data/builds игнорируются.

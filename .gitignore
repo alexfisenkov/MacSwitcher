@@ -31,3 +31,6 @@ windows/artifacts/
 windows/.tooling/
 windows/publish/
 *.pem
+# Per-machine learned words are private runtime data, never source fixtures.
+**/adaptive-rules.json
+**/adaptive-rules.json.*

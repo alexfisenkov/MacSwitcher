@@ -73,3 +73,10 @@ v3.4.0 и ранее разработанный native combined-Shift режим
 - Подпись собственного update manifest RSA не заменяет Authenticode; EXE пока unsigned. Приватный signer вне Git.
 - Из корня: `python3 windows/scripts/build-data.py --output windows/data`, `python3 windows/scripts/extract-icon.py`. Затем из каталога `windows/`, где действует SDK pin в global.json: `dotnet run --project tests/MacSwitcher.Core.Tests -c Release`, `dotnet build src/MacSwitcher.Windows -c Release`. Runtime/installer — только собственные fixture-поля в Windows workflow_dispatch.
 - Hosted Windows Server CI не доказывает physical Windows7/8.1/10/11/ARM или чужие редакторы.
+
+## Локальное обучение · решение владельца 03.11.2026
+
+- Канон новой функции — `docs/local-learning.md`. Владелец разрешил обе платформы и два независимых подтверждения одного слова; обратный выбор снимает выученное правило.
+- Владелец выбрал default ON с понятным пояснением при первом запуске; явный off сохраняется. При миграции отсутствующий новый ключ означает ON.
+- Разрешены только локальные ограниченные word-only адаптивные записи с видимой настройкой и управлением. Запрет истории текста/клавиш, сети, личных данных в Git и скрытого обучения сохраняется.
+- Выученное отделено от ручного словаря; Unknown/auto-apply/повторный undo-redo не дают новые голоса. Транспорт редактирования и тайминги Shift не меняются.
