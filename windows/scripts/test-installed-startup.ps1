@@ -2,6 +2,38 @@ param([Parameter(Mandatory=$true)][string]$ExePath)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
+Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+
+public static class MacSwitcherCommandLine
+{
+    [DllImport("shell32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr CommandLineToArgvW(string commandLine, out int argumentCount);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr LocalFree(IntPtr memory);
+
+    public static string[] Split(string commandLine)
+    {
+        int count;
+        IntPtr argv = CommandLineToArgvW(commandLine, out count);
+        if (argv == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+        try
+        {
+            string[] result = new string[count];
+            for (int i = 0; i < count; i++)
+            {
+                IntPtr value = Marshal.ReadIntPtr(argv, i * IntPtr.Size);
+                result[i] = Marshal.PtrToStringUni(value) ?? String.Empty;
+            }
+            return result;
+        }
+        finally { LocalFree(argv); }
+    }
+}
+'@
 
 $exe = (Resolve-Path $ExePath).Path
 $resultPath = Join-Path $PSScriptRoot '..\artifacts\installed-startup.json'
@@ -12,6 +44,13 @@ $reopenProcessId = $null
 $reopenedWindows = 0
 $checkedLabels = @()
 $quitExitCode = $null
+$reopenWindowCount = 0
+$sameProductProcessCount = 0
+$primaryProcessCount = 0
+$nonBrokerProcessCount = 0
+$automationBrokerCount = 0
+$ownedBrokerCount = 0
+$unownedBrokerCount = 0
 
 function Get-OwnedWindow([int]$ProcessId, [string]$Name) {
   $root = [System.Windows.Automation.AutomationElement]::RootElement
@@ -60,6 +99,11 @@ function Send-NormalQuit([string]$Path) {
   return $request.ExitCode
 }
 
+function Test-AutomationBrokerProcess($ProcessInfo) {
+  $arguments = [MacSwitcherCommandLine]::Split([string]$ProcessInfo.CommandLine)
+  return $arguments -contains '--automation-broker'
+}
+
 try {
   $stage = 'first-launch'
   $primary = Start-Process -FilePath $exe -ArgumentList '--settings' -PassThru
@@ -73,25 +117,45 @@ try {
   $checkedLabels = @($checkboxes | ForEach-Object { $_.Current.Name })
   $expected = @(
     'Включить обработку Shift',
-    'Исправлять слово при двойном Shift',
+    'Исправлять раскладку автоматически',
     'При неоднозначном слове предпочитать русский',
     'Сохранять правильные слова в выделении'
   )
   foreach ($label in $expected) { if ($checkedLabels -notcontains $label) { throw 'Expected settings control was not visible.' } }
   Close-OwnedWindow $settings
 
-  $stage = 'reopen-settings'
+  $stage = 'reopen-request'
   $reopen = Start-Process -FilePath $exe -ArgumentList '--settings' -PassThru -Wait
   $reopenProcessId = $reopen.Id
   if ($reopen.ExitCode -ne 0) { throw 'Duplicate settings request failed.' }
+  $stage = 'reopen-window'
   $settingsAgain = Wait-OwnedWindow $primary.Id 'Настройки MacSwitcher'
   $reopenedWindows++
+  $reopenWindowCount = $reopenedWindows
   Close-OwnedWindow $settingsAgain
   Start-Sleep -Milliseconds 300
+
+  $stage = 'process-inventory'
   $canonicalExe = [IO.Path]::GetFullPath($exe)
   $sameProductProcesses = @(Get-CimInstance Win32_Process -Filter "Name='MacSwitcher.Windows.exe'" |
     Where-Object { $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath) -ieq $canonicalExe })
-  if ($sameProductProcesses.Count -ne 1 -or $sameProductProcesses[0].ProcessId -ne $primary.Id) { throw 'Reopening settings created an unexpected app process.' }
+  $sameProductProcessCount = $sameProductProcesses.Count
+  $stage = 'primary-count'
+  $primaryProcessCount = @($sameProductProcesses | Where-Object { $_.ProcessId -eq $primary.Id }).Count
+  if ($primaryProcessCount -ne 1) { throw 'The installed primary process was not present in the process inventory.' }
+
+  $stage = 'broker-parent'
+  foreach ($processInfo in $sameProductProcesses) {
+    if ($processInfo.ProcessId -eq $primary.Id) { continue }
+    if (Test-AutomationBrokerProcess $processInfo) {
+      $automationBrokerCount++
+      if ($processInfo.ParentProcessId -eq $primary.Id) { $ownedBrokerCount++ }
+      else { $unownedBrokerCount++ }
+    } else { $nonBrokerProcessCount++ }
+  }
+  if ($nonBrokerProcessCount -ne 0 -or $unownedBrokerCount -ne 0 -or $ownedBrokerCount -gt 1) {
+    throw 'Reopening settings created an unexpected app process or unowned automation broker.'
+  }
 
   $stage = 'normal-exit'
   $quitExitCode = Send-NormalQuit $exe
@@ -104,7 +168,13 @@ try {
     stages = @('first-launch', 'settings-controls', 'reopen-settings', 'single-primary-process', 'normal-exit')
     primaryPid = $primary.Id
     reopenRequestPid = $reopenProcessId
-    primaryProcessCountAfterReopen = $sameProductProcesses.Count
+    reopenWindowCount = $reopenWindowCount
+    sameProductProcessCount = $sameProductProcessCount
+    primaryProcessCountAfterReopen = $primaryProcessCount
+    nonBrokerProcessCount = $nonBrokerProcessCount
+    automationBrokerCount = $automationBrokerCount
+    ownedAutomationBrokerCount = $ownedBrokerCount
+    unownedAutomationBrokerCount = $unownedBrokerCount
     quitRequestExitCode = $quitExitCode
     controls = $expected
   }
@@ -124,6 +194,13 @@ catch {
     stage = $stage
     primaryPid = if ($primary) { $primary.Id } else { $null }
     reopenRequestPid = $reopenProcessId
+    reopenWindowCount = $reopenWindowCount
+    sameProductProcessCount = $sameProductProcessCount
+    primaryProcessCount = $primaryProcessCount
+    nonBrokerProcessCount = $nonBrokerProcessCount
+    automationBrokerCount = $automationBrokerCount
+    ownedAutomationBrokerCount = $ownedBrokerCount
+    unownedAutomationBrokerCount = $unownedBrokerCount
     quitRequestExitCode = $quitExitCode
   }
   $receipt | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 $resultPath

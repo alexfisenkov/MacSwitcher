@@ -107,7 +107,11 @@ namespace MacSwitcher.Windows.Runtime
                         output.WriteLine("OK|" + Volatile.Read(ref applied) + "|" +
                             Volatile.Read(ref undone) + "|" + runtime.CurrentLayoutLanguage + "|" +
                             (runtime.HasRecoveryOriginals ? "1" : "0") + "|" +
-                            runtime.FixtureManualCode);
+                            runtime.FixtureManualCode + "|" + runtime.FixtureNativeCode + "|" +
+                            runtime.FixtureNativeBrokerOutcome + "|" + runtime.FixtureNativeBrokerStage + "|" +
+                            runtime.FixtureNativeBudgetMilliseconds + "|" +
+                            runtime.FixtureNativeBrokerPhase + "|" +
+                            runtime.FixtureNativeRpcMilliseconds);
                     }
                     catch { output.WriteLine("ERROR"); return 6; }
                 }

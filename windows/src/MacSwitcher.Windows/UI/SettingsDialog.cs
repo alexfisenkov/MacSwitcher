@@ -12,7 +12,7 @@ internal sealed class SettingsDialog : Form
 {
     private readonly ConfigurationStore store;
     private readonly CheckBox enabled = new CheckBox { Text = "Включить обработку Shift", AutoSize = true };
-    private readonly CheckBox automatic = new CheckBox { Text = "Исправлять слово при двойном Shift", AutoSize = true };
+    private readonly CheckBox automatic = new CheckBox { Text = "Исправлять раскладку автоматически", AutoSize = true };
     private readonly CheckBox russianPriority = new CheckBox { Text = "При неоднозначном слове предпочитать русский", AutoSize = true };
     private readonly CheckBox smartSelection = new CheckBox { Text = "Сохранять правильные слова в выделении", AutoSize = true };
     private readonly CheckBox startup = new CheckBox { Text = "Запускать вместе с Windows (только для этого пользователя)", AutoSize = true };

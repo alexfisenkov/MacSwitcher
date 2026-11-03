@@ -121,6 +121,7 @@ namespace MacSwitcher.Windows
             var response = new BrokerResponse
             {
                 Outcome = BrokerOutcome.Success, Stage = BrokerStage.SelectionRange,
+                Phase = BrokerPhase.NativeFinalAck,
                 NativeError = 5, DiagnosticTextLength = 7,
                 DiagnosticSelectionStart = 2, DiagnosticSelectionEnd = 4,
                 DiagnosticNativeClassKind = 1,

@@ -27,9 +27,14 @@ internal static class Program
     private static int integrationApplied, integrationUndone, integrationTextLength = -1;
     private static bool integrationExpectedText;
     private static int integrationManualCode;
+    private static int integrationNativeCode, integrationNativeBrokerOutcome = -1;
+    private static int integrationNativeBrokerStage = -1, integrationNativeBudgetMilliseconds = -1;
+    private static int integrationNativeBrokerPhase = -1;
+    private static int integrationNativeRpcMilliseconds = -1;
     private static string integrationWaitStatus = "NOT_RUN";
     private static string brokerProbe = "NOT_RUN";
     private static int brokerOutcome = -1, brokerStage = -1;
+    private static int brokerPhase = -1;
     private static int brokerNativeCode;
     private static bool fixtureForeground, fixtureFocus;
     private static int brokerTextLength = -1, brokerSelectionStart = -1, brokerSelectionEnd = -1;
@@ -59,6 +64,7 @@ internal static class Program
     {
         public byte Outcome;
         public byte Stage;
+        public byte Phase;
         public int NativeError;
         public int DiagnosticTextLength, DiagnosticStart, DiagnosticEnd;
         public int DiagnosticNativeClassKind;
@@ -88,7 +94,8 @@ internal static class Program
             {
                 using var input = new BinaryReader(protocol.StandardOutput.BaseStream, Encoding.UTF8);
                 var frame = Broker.ReadResponse(input);
-                if (frame.Outcome != 1 || frame.Stage != 15 || frame.NativeError != 5 ||
+                if (frame.Outcome != 1 || frame.Stage != 15 || frame.Phase != 9 ||
+                    frame.NativeError != 5 ||
                     frame.DiagnosticTextLength != 7 || frame.DiagnosticStart != 2 ||
                     frame.DiagnosticEnd != 4 || frame.DiagnosticNativeClassKind != 1 ||
                     frame.Field?.Text != "fixture" || frame.Field.Start != 2 || frame.Field.End != 4 ||
@@ -152,6 +159,7 @@ internal static class Program
                 if (captured == null) return Report("FAIL", "plain_capture_rpc", checks);
                 brokerOutcome = captured.Outcome;
                 brokerStage = captured.Stage;
+                brokerPhase = captured.Phase;
                 brokerNativeCode = captured.NativeError;
                 brokerTextLength = captured.DiagnosticTextLength;
                 brokerSelectionStart = captured.DiagnosticStart;
@@ -288,10 +296,17 @@ internal static class Program
             ",\"integrationTextLength\":" + integrationTextLength +
             ",\"integrationExpectedText\":" + (integrationExpectedText ? "true" : "false") +
             ",\"integrationManualCode\":" + integrationManualCode +
+            ",\"integrationNativeCode\":" + integrationNativeCode +
+            ",\"integrationNativeBrokerOutcome\":" + integrationNativeBrokerOutcome +
+            ",\"integrationNativeBrokerStage\":" + integrationNativeBrokerStage +
+            ",\"integrationNativeBrokerPhase\":" + integrationNativeBrokerPhase +
+            ",\"integrationNativeRpcMilliseconds\":" + integrationNativeRpcMilliseconds +
+            ",\"integrationNativeBudgetMilliseconds\":" + integrationNativeBudgetMilliseconds +
             ",\"integrationWaitStatus\":\"" + integrationWaitStatus +
             "\",\"brokerProbe\":\"" + brokerProbe +
             "\",\"brokerOutcome\":" + brokerOutcome +
             ",\"brokerStage\":" + brokerStage +
+            ",\"brokerPhase\":" + brokerPhase +
             ",\"brokerNativeCode\":" + brokerNativeCode +
             ",\"fixtureForeground\":" + (fixtureForeground ? "true" : "false") +
             ",\"fixtureFocus\":" + (fixtureFocus ? "true" : "false") +
@@ -454,6 +469,8 @@ internal static class Program
         public string Layout = "";
         public bool Recovery;
         public int ManualCode;
+        public int NativeCode, NativeBrokerOutcome, NativeBrokerStage, NativeBudgetMilliseconds,
+            NativeBrokerPhase, NativeRpcMilliseconds;
     }
 
     private sealed class FixtureSession : IDisposable
@@ -487,11 +504,20 @@ internal static class Program
             if (line == null || !line.StartsWith("OK|", StringComparison.Ordinal))
                 throw new InvalidOperationException();
             var pieces = line.Split('|');
-            if (pieces.Length != 6) throw new InvalidOperationException();
+            if (pieces.Length != 12) throw new InvalidOperationException();
             if (command == "WAIT") integrationWaitStatus = "SETTLED";
             var reply = new FixtureReply { Applied = int.Parse(pieces[1]), Undone = int.Parse(pieces[2]),
-                Layout = pieces[3], Recovery = pieces[4] == "1", ManualCode = int.Parse(pieces[5]) };
+                Layout = pieces[3], Recovery = pieces[4] == "1", ManualCode = int.Parse(pieces[5]),
+                NativeCode = int.Parse(pieces[6]), NativeBrokerOutcome = int.Parse(pieces[7]),
+                NativeBrokerStage = int.Parse(pieces[8]), NativeBudgetMilliseconds = int.Parse(pieces[9]),
+                NativeBrokerPhase = int.Parse(pieces[10]), NativeRpcMilliseconds = int.Parse(pieces[11]) };
             integrationManualCode = reply.ManualCode;
+            integrationNativeCode = reply.NativeCode;
+            integrationNativeBrokerOutcome = reply.NativeBrokerOutcome;
+            integrationNativeBrokerStage = reply.NativeBrokerStage;
+            integrationNativeBudgetMilliseconds = reply.NativeBudgetMilliseconds;
+            integrationNativeBrokerPhase = reply.NativeBrokerPhase;
+            integrationNativeRpcMilliseconds = reply.NativeRpcMilliseconds;
             return reply;
         }
 
@@ -619,6 +645,7 @@ internal static class Program
             var bytes = input.ReadBytes(size); if (bytes.Length != size) throw new EndOfStreamException();
             using var response = new BinaryReader(new MemoryStream(bytes, false), Encoding.UTF8);
             var result = new Result { Outcome = response.ReadByte(), Stage = response.ReadByte(),
+                Phase = response.ReadByte(),
                 NativeError = response.ReadInt32(),
                 DiagnosticTextLength = response.ReadInt32(),
                 DiagnosticStart = response.ReadInt32(),

@@ -20,7 +20,15 @@ namespace MacSwitcher.Windows.Automation
         Element = 5, Identity = 6, Password = 7, ReadOnly = 8,
         Pattern = 9, Value = 10, Selection = 11, RuntimeId = 12,
         Postcheck = 13, Exception = 14, SelectionRange = 15,
-        SelectionPattern = 16
+        SelectionPattern = 16, NativeDeadline = 17,
+        NativeModifier = 18, NativeMessage = 19, NativeMismatch = 20
+    }
+    internal enum BrokerPhase : byte
+    {
+        None = 0, NativePrecondition = 1, NativeFirstCapture = 2,
+        NativeState = 3, NativeSetSelection = 4, NativeSelectionAck = 5,
+        NativeBeforeMutation = 6, NativeReplaceDelivery = 7,
+        NativeReadback = 8, NativeFinalAck = 9
     }
 
     internal sealed class FieldSnapshot
@@ -51,6 +59,7 @@ namespace MacSwitcher.Windows.Automation
     {
         internal BrokerOutcome Outcome;
         internal BrokerStage Stage;
+        internal BrokerPhase Phase;
         internal int NativeError;
         internal int DiagnosticTextLength = -1;
         internal int DiagnosticSelectionStart = -1;
@@ -124,6 +133,7 @@ namespace MacSwitcher.Windows.Automation
             {
                 payload.Write((byte)result.Outcome);
                 payload.Write((byte)result.Stage);
+                payload.Write((byte)result.Phase);
                 payload.Write(result.NativeError);
                 payload.Write(result.DiagnosticTextLength);
                 payload.Write(result.DiagnosticSelectionStart);
@@ -307,6 +317,7 @@ namespace MacSwitcher.Windows.Automation
                         using var responseFrame = BrokerWire.ReadFrame(callReader);
                         var response = new BrokerResponse { Outcome = (BrokerOutcome)responseFrame.ReadByte() };
                         response.Stage = (BrokerStage)responseFrame.ReadByte();
+                        response.Phase = (BrokerPhase)responseFrame.ReadByte();
                         response.NativeError = responseFrame.ReadInt32();
                         response.DiagnosticTextLength = responseFrame.ReadInt32();
                         response.DiagnosticSelectionStart = responseFrame.ReadInt32();
@@ -315,7 +326,9 @@ namespace MacSwitcher.Windows.Automation
                         response.Field = BrokerWire.ReadField(responseFrame);
                         if (responseFrame.BaseStream.Position != responseFrame.BaseStream.Length)
                             throw new InvalidDataException("Unexpected response bytes.");
-                        if (response.Outcome > BrokerOutcome.Unknown || response.Stage > BrokerStage.SelectionPattern)
+                        if (response.Outcome > BrokerOutcome.Unknown ||
+                            response.Stage > BrokerStage.NativeMismatch ||
+                            response.Phase > BrokerPhase.NativeFinalAck)
                             throw new InvalidDataException("Invalid broker response.");
                         return response;
                     });
@@ -652,45 +665,89 @@ namespace MacSwitcher.Windows.Automation
                 rangeStart < 0 || rangeEnd < rangeStart || rangeEnd > expected.Value.Length ||
                 !BrokerWire.IsWellFormedUtf16(replacement) ||
                 !BrokerWire.IsScalarBoundary(expected.Value, rangeStart) ||
-                !BrokerWire.IsScalarBoundary(expected.Value, rangeEnd) ||
-                deadline <= (long)Win32.GetTickCount64() || !NativeSafety.ModifiersUp())
-                return new BrokerResponse { Outcome = BrokerOutcome.Unsafe };
+                !BrokerWire.IsScalarBoundary(expected.Value, rangeEnd))
+                return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativePrecondition, BrokerStage.NativeMismatch);
+            if (deadline <= (long)Win32.GetTickCount64())
+                return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativePrecondition, BrokerStage.NativeDeadline);
+            if (!NativeSafety.ModifiersUp())
+                return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativePrecondition, BrokerStage.NativeModifier);
             var finalText = expected.Value.Substring(0, rangeStart) + replacement +
                 expected.Value.Substring(rangeEnd);
-            if (finalText.Length > 32768) return new BrokerResponse { Outcome = BrokerOutcome.Unsafe };
-            var before = SafeCapture(focus, foreground, hwnd, pid, tid, expectedLayout);
-            if (before == null || !before.NativeRangeWriter || !before.SameState(expected))
-                return new BrokerResponse { Outcome = BrokerOutcome.Unsafe };
+            if (finalText.Length > 32768)
+                return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativePrecondition, BrokerStage.NativeMismatch);
+            BrokerStage captureStage;
+            int captureError, ignoredLength, ignoredStart, ignoredEnd, ignoredClass;
+            var before = SafeCapture(focus, foreground, hwnd, pid, tid, expectedLayout,
+                out captureStage, out captureError, out ignoredLength, out ignoredStart, out ignoredEnd,
+                out ignoredClass);
+            if (before == null)
+                return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativeFirstCapture,
+                    captureStage, captureError);
+            if (!before.NativeRangeWriter || !before.SameState(expected))
+                return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativeState, BrokerStage.NativeMismatch);
             if (before.SelectionStart != rangeStart || before.SelectionEnd != rangeEnd)
             {
                 var selectBudget = (uint)Math.Min(20, Math.Max(0, deadline - (long)Win32.GetTickCount64()));
-                if (selectBudget < 1) return new BrokerResponse { Outcome = BrokerOutcome.Unsafe };
+                if (selectBudget < 1)
+                    return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativeSetSelection, BrokerStage.NativeDeadline);
                 IntPtr ignored;
                 if (Win32.SendMessageTimeout(hwnd, Win32.EM_SETSEL, new IntPtr(rangeStart),
                     new IntPtr(rangeEnd), Win32.SMTO_ABORTIFHUNG | Win32.SMTO_ERRORONEXIT,
                     selectBudget, out ignored) == IntPtr.Zero)
-                    return new BrokerResponse { Outcome = BrokerOutcome.Unsafe };
-                var selected = SafeCapture(NativeFocusSnapshot.Capture(), foreground, hwnd, pid, tid, expectedLayout);
-                if (selected == null || !selected.SameIdentity(before) || selected.Value != before.Value ||
+                    return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativeSetSelection,
+                        BrokerStage.NativeMessage, Marshal.GetLastWin32Error());
+                var selected = SafeCapture(NativeFocusSnapshot.Capture(), foreground, hwnd, pid, tid,
+                    expectedLayout, out captureStage, out captureError, out ignoredLength,
+                    out ignoredStart, out ignoredEnd, out ignoredClass);
+                if (selected == null)
+                    return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativeSelectionAck,
+                        captureStage, captureError);
+                if (!selected.SameIdentity(before) || selected.Value != before.Value ||
                     selected.SelectionStart != rangeStart || selected.SelectionEnd != rangeEnd)
-                    return new BrokerResponse { Outcome = BrokerOutcome.Unsafe };
+                    return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativeSelectionAck,
+                        BrokerStage.NativeMismatch);
             }
-            if (deadline <= (long)Win32.GetTickCount64() || !focus.StillSame() ||
-                Win32.GetKeyboardLayout(tid) != expectedLayout || !NativeSafety.ModifiersUp() ||
-                !NativeSafety.IsNormalDesktop() || !NativeSafety.IsEqualOrLowerIntegrity(pid))
-                return new BrokerResponse { Outcome = BrokerOutcome.Unsafe };
+            if (deadline <= (long)Win32.GetTickCount64())
+                return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativeBeforeMutation,
+                    BrokerStage.NativeDeadline);
+            if (!focus.StillSame())
+                return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativeBeforeMutation, BrokerStage.Focus);
+            if (Win32.GetKeyboardLayout(tid) != expectedLayout)
+                return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativeBeforeMutation, BrokerStage.Layout);
+            if (!NativeSafety.ModifiersUp())
+                return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativeBeforeMutation,
+                    BrokerStage.NativeModifier);
+            if (!NativeSafety.IsNormalDesktop())
+                return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativeBeforeMutation, BrokerStage.Desktop);
+            if (!NativeSafety.IsEqualOrLowerIntegrity(pid))
+                return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativeBeforeMutation, BrokerStage.Integrity);
             IntPtr replaceResult;
             var writeBudget = (uint)Math.Max(1, deadline - (long)Win32.GetTickCount64());
             if (Win32.SendMessageTimeoutText(hwnd, Win32.EM_REPLACESEL, new IntPtr(1), replacement,
                 Win32.SMTO_ABORTIFHUNG | Win32.SMTO_ERRORONEXIT, writeBudget,
                 out replaceResult) == IntPtr.Zero)
-                return new BrokerResponse { Outcome = BrokerOutcome.Unknown };
-            var after = SafeCapture(NativeFocusSnapshot.Capture(), foreground, hwnd, pid, tid, expectedLayout);
-            return after != null && after.SameIdentity(before) && after.Value == finalText &&
-                after.SelectionStart == after.SelectionEnd &&
-                after.SelectionEnd == rangeStart + replacement.Length
-                ? new BrokerResponse { Outcome = BrokerOutcome.Success, Field = after }
-                : new BrokerResponse { Outcome = BrokerOutcome.Unknown, Field = after };
+                return NativeResult(BrokerOutcome.Unknown, BrokerPhase.NativeReplaceDelivery,
+                    BrokerStage.NativeMessage, Marshal.GetLastWin32Error());
+            var after = SafeCapture(NativeFocusSnapshot.Capture(), foreground, hwnd, pid, tid,
+                expectedLayout, out captureStage, out captureError, out ignoredLength,
+                out ignoredStart, out ignoredEnd, out ignoredClass);
+            if (after == null)
+                return NativeResult(BrokerOutcome.Unknown, BrokerPhase.NativeReadback,
+                    captureStage, captureError);
+            if (!after.SameIdentity(before) || after.Value != finalText ||
+                after.SelectionStart != after.SelectionEnd ||
+                after.SelectionEnd != rangeStart + replacement.Length)
+                return NativeResult(BrokerOutcome.Unknown, BrokerPhase.NativeFinalAck,
+                    BrokerStage.NativeMismatch, 0, after);
+            return NativeResult(BrokerOutcome.Success, BrokerPhase.NativeFinalAck,
+                BrokerStage.None, 0, after);
+        }
+
+        private static BrokerResponse NativeResult(BrokerOutcome outcome, BrokerPhase phase,
+            BrokerStage stage, int nativeError = 0, FieldSnapshot? field = null)
+        {
+            return new BrokerResponse { Outcome = outcome, Phase = phase,
+                Stage = stage, NativeError = nativeError, Field = field };
         }
     }
 }

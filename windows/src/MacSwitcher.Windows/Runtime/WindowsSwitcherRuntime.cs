@@ -75,6 +75,12 @@ namespace MacSwitcher.Windows.Runtime
         private PhysicalInput? latestObservation;
         private int manualWorkInFlight;
         private int fixtureManualCode;
+        private int fixtureNativeCode;
+        private int fixtureNativeBrokerOutcome = -1;
+        private int fixtureNativeBrokerStage = -1;
+        private int fixtureNativeBrokerPhase = -1;
+        private int fixtureNativeBudgetMilliseconds = -1;
+        private int fixtureNativeRpcMilliseconds = -1;
         private CorrectionReceipt? receipt;
 
         public event Action<RuntimeStatus>? StatusChanged;
@@ -99,6 +105,12 @@ namespace MacSwitcher.Windows.Runtime
         public bool HasRecoveryOriginals { get { return recovery.Count > 0; } }
         internal bool FixtureHookReady { get { return hook.Ready; } }
         internal int FixtureManualCode { get { return Volatile.Read(ref fixtureManualCode); } }
+        internal int FixtureNativeCode { get { return Volatile.Read(ref fixtureNativeCode); } }
+        internal int FixtureNativeBrokerOutcome { get { return Volatile.Read(ref fixtureNativeBrokerOutcome); } }
+        internal int FixtureNativeBrokerStage { get { return Volatile.Read(ref fixtureNativeBrokerStage); } }
+        internal int FixtureNativeBrokerPhase { get { return Volatile.Read(ref fixtureNativeBrokerPhase); } }
+        internal int FixtureNativeBudgetMilliseconds { get { return Volatile.Read(ref fixtureNativeBudgetMilliseconds); } }
+        internal int FixtureNativeRpcMilliseconds { get { return Volatile.Read(ref fixtureNativeRpcMilliseconds); } }
         internal bool FixtureWorkSettled
         {
             get
@@ -860,27 +872,50 @@ namespace MacSwitcher.Windows.Runtime
             string replacement, long revision, long generation, string oldPhrase,
             string source, string targetLanguage, bool announce = true, bool allowRecovery = false)
         {
+            Interlocked.Exchange(ref fixtureNativeCode, 1);
+            Interlocked.Exchange(ref fixtureNativeBrokerOutcome, -1);
+            Interlocked.Exchange(ref fixtureNativeBrokerStage, -1);
+            Interlocked.Exchange(ref fixtureNativeBrokerPhase, -1);
+            Interlocked.Exchange(ref fixtureNativeBudgetMilliseconds, -1);
+            Interlocked.Exchange(ref fixtureNativeRpcMilliseconds, -1);
             if (focus == null || !field.NativeRangeWriter || start < 0 || end < start ||
                 end > field.Value.Length || replacement.Length > 4096 ||
                 !recovery.CanRetain(field) || !allowRecovery && recovery.Contains(field) ||
-                !focus.StillSame() || !CanMutate(generation, revision)) return false;
+                !focus.StillSame() || !CanMutate(generation, revision))
+            { Interlocked.Exchange(ref fixtureNativeCode, 2); return false; }
             var expected = field.Value.Substring(0, start) + replacement + field.Value.Substring(end);
-            if (expected.Length > 32768) return false;
+            if (expected.Length > 32768)
+            { Interlocked.Exchange(ref fixtureNativeCode, 2); return false; }
             lock (editGate)
             {
-                if (!CanMutate(generation, revision) || !focus.StillSame()) return false;
+                if (!CanMutate(generation, revision) || !focus.StillSame())
+                { Interlocked.Exchange(ref fixtureNativeCode, 3); return false; }
                 var preflight = broker.Capture(focus, 250); // Broker startup stays outside the input fence.
+                Interlocked.Exchange(ref fixtureNativeBrokerOutcome, (int)preflight.Outcome);
+                Interlocked.Exchange(ref fixtureNativeBrokerStage, (int)preflight.Stage);
+                Interlocked.Exchange(ref fixtureNativeBrokerPhase, (int)preflight.Phase);
                 if (preflight.Outcome != BrokerOutcome.Success || preflight.Field == null ||
                     !preflight.Field.NativeRangeWriter || !preflight.Field.SameState(field) ||
-                    !CanMutate(generation, revision)) return false;
+                    !CanMutate(generation, revision))
+                { Interlocked.Exchange(ref fixtureNativeCode, 4); return false; }
                 using (var fence = hook.BeginFence(revision))
                 {
-                    if (fence == null) return false;
+                    if (fence == null)
+                    { Interlocked.Exchange(ref fixtureNativeCode, 5); return false; }
                     var remaining = (int)Math.Max(0, fence.DeadlineTicks - (long)Win32.GetTickCount64() - 10);
-                    if (remaining < 30 || !CanMutate(generation, revision)) return false;
+                    Interlocked.Exchange(ref fixtureNativeBudgetMilliseconds, remaining);
+                    if (remaining < 30 || !CanMutate(generation, revision))
+                    { Interlocked.Exchange(ref fixtureNativeCode, 6); return false; }
+                    var rpcStarted = (long)Win32.GetTickCount64();
                     var write = broker.ReplaceNativeRange(focus, field, start, end, replacement, remaining);
+                    Interlocked.Exchange(ref fixtureNativeRpcMilliseconds,
+                        (int)Math.Min(int.MaxValue, (long)Win32.GetTickCount64() - rpcStarted));
+                    Interlocked.Exchange(ref fixtureNativeBrokerOutcome, (int)write.Outcome);
+                    Interlocked.Exchange(ref fixtureNativeBrokerStage, (int)write.Stage);
+                    Interlocked.Exchange(ref fixtureNativeBrokerPhase, (int)write.Phase);
                     if (!CanMutate(generation, revision) || fence.Compromised)
                     {
+                        Interlocked.Exchange(ref fixtureNativeCode, 7);
                         if (write.Outcome != BrokerOutcome.Unsafe || fence.Compromised)
                             recovery.Add(field, source, write.Field);
                         return false;
@@ -894,6 +929,7 @@ namespace MacSwitcher.Windows.Runtime
                             (int)Math.Min(20, Math.Max(0, fence.DeadlineTicks - (long)Win32.GetTickCount64())));
                         if (fence.Compromised)
                         {
+                            Interlocked.Exchange(ref fixtureNativeCode, 8);
                             recovery.Add(field, source, write.Field);
                             return false;
                         }
@@ -911,8 +947,11 @@ namespace MacSwitcher.Windows.Runtime
                         }
                         if (announce) try { CorrectionApplied?.Invoke(new CorrectionNotice(oldPhrase, replacement, source)); } catch { }
                         if (!sourceConfirmed) Publish("Текст исправлен; смена раскладки не подтверждена.", false);
+                        Interlocked.Exchange(ref fixtureNativeCode, 20);
                         return true;
                     }
+                    Interlocked.Exchange(ref fixtureNativeCode, write.Outcome == BrokerOutcome.Unsafe ? 9 :
+                        write.Outcome == BrokerOutcome.Unknown ? 10 : 11);
                     if (write.Outcome != BrokerOutcome.Unsafe)
                     {
                         recovery.Add(field, source, write.Field);
