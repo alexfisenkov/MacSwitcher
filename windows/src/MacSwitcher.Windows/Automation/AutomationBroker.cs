@@ -52,6 +52,10 @@ namespace MacSwitcher.Windows.Automation
         internal BrokerOutcome Outcome;
         internal BrokerStage Stage;
         internal int NativeError;
+        internal int DiagnosticTextLength = -1;
+        internal int DiagnosticSelectionStart = -1;
+        internal int DiagnosticSelectionEnd = -1;
+        internal int DiagnosticNativeClassKind = -1; // 0 other, 1 Edit, 2 RichEdit.
         internal FieldSnapshot? Field;
     }
 
@@ -289,6 +293,10 @@ namespace MacSwitcher.Windows.Automation
                         var response = new BrokerResponse { Outcome = (BrokerOutcome)responseFrame.ReadByte() };
                         response.Stage = (BrokerStage)responseFrame.ReadByte();
                         response.NativeError = responseFrame.ReadInt32();
+                        response.DiagnosticTextLength = responseFrame.ReadInt32();
+                        response.DiagnosticSelectionStart = responseFrame.ReadInt32();
+                        response.DiagnosticSelectionEnd = responseFrame.ReadInt32();
+                        response.DiagnosticNativeClassKind = responseFrame.ReadInt32();
                         response.Field = BrokerWire.ReadField(responseFrame);
                         if (responseFrame.BaseStream.Position != responseFrame.BaseStream.Length)
                             throw new InvalidDataException("Unexpected response bytes.");
@@ -324,6 +332,31 @@ namespace MacSwitcher.Windows.Automation
 
     internal static class AutomationBrokerServer
     {
+        private static bool TryReadNativeEditText(IntPtr hwnd, uint timeout,
+            out string text, out int nativeError)
+        {
+            text = "";
+            nativeError = 0;
+            IntPtr lengthResult;
+            if (Win32.SendMessageTimeout(hwnd, Win32.WM_GETTEXTLENGTH, IntPtr.Zero, IntPtr.Zero,
+                Win32.SMTO_ABORTIFHUNG | Win32.SMTO_ERRORONEXIT, timeout,
+                out lengthResult) == IntPtr.Zero)
+            { nativeError = Marshal.GetLastWin32Error(); return false; }
+            var length = lengthResult.ToInt64();
+            if (length < 0 || length > 32768) return false;
+            var buffer = new StringBuilder((int)length + 1);
+            IntPtr copiedResult;
+            if (Win32.SendMessageTimeoutTextBuffer(hwnd, Win32.WM_GETTEXT,
+                new IntPtr(buffer.Capacity), buffer,
+                Win32.SMTO_ABORTIFHUNG | Win32.SMTO_ERRORONEXIT, timeout,
+                out copiedResult) == IntPtr.Zero)
+            { nativeError = Marshal.GetLastWin32Error(); return false; }
+            var copied = copiedResult.ToInt64();
+            if (copied < 0 || copied > length || copied != buffer.Length) return false;
+            text = buffer.ToString();
+            return BrokerWire.IsWellFormedUtf16(text);
+        }
+
         internal static int Run()
         {
             var thread = new Thread(Serve) { IsBackground = false, Name = "MacSwitcher UIA MTA" };
@@ -364,10 +397,16 @@ namespace MacSwitcher.Windows.Automation
                         {
                             BrokerStage stage;
                             int nativeError;
+                            int textLength, selectionStart, selectionEnd, nativeClassKind;
                             var field = SafeCapture(focus, foreground, focusHwnd, pid, tid,
-                                expectedLayout, out stage, out nativeError, 150);
+                                expectedLayout, out stage, out nativeError, out textLength,
+                                out selectionStart, out selectionEnd, out nativeClassKind, 150);
                             result = new BrokerResponse { Outcome = field == null ? BrokerOutcome.Unsafe : BrokerOutcome.Success,
-                                Stage = stage, NativeError = nativeError, Field = field };
+                                Stage = stage, NativeError = nativeError, Field = field,
+                                DiagnosticTextLength = textLength,
+                                DiagnosticSelectionStart = selectionStart,
+                                DiagnosticSelectionEnd = selectionEnd,
+                                DiagnosticNativeClassKind = nativeClassKind };
                         }
                         else if (operation == 2)
                             result = SafeWrite(focus, foreground, focusHwnd, pid, tid,
@@ -393,6 +432,10 @@ namespace MacSwitcher.Windows.Automation
                             payload.Write((byte)result.Outcome);
                             payload.Write((byte)result.Stage);
                             payload.Write(result.NativeError);
+                            payload.Write(result.DiagnosticTextLength);
+                            payload.Write(result.DiagnosticSelectionStart);
+                            payload.Write(result.DiagnosticSelectionEnd);
+                            payload.Write(result.DiagnosticNativeClassKind);
                             BrokerWire.WriteField(payload, result.Field);
                         });
                     }
@@ -403,6 +446,10 @@ namespace MacSwitcher.Windows.Automation
                             payload.Write((byte)BrokerOutcome.Unknown);
                             payload.Write((byte)BrokerStage.Exception);
                             payload.Write(0);
+                            payload.Write(-1);
+                            payload.Write(-1);
+                            payload.Write(-1);
+                            payload.Write(-1);
                             BrokerWire.WriteField(payload, null);
                         });
                     }
@@ -417,15 +464,22 @@ namespace MacSwitcher.Windows.Automation
         {
             BrokerStage ignored;
             int ignoredError;
-            return SafeCapture(focus, foreground, hwnd, pid, tid, expectedLayout, out ignored, out ignoredError);
+            int ignoredTextLength, ignoredStart, ignoredEnd, ignoredClass;
+            return SafeCapture(focus, foreground, hwnd, pid, tid, expectedLayout,
+                out ignored, out ignoredError, out ignoredTextLength, out ignoredStart,
+                out ignoredEnd, out ignoredClass);
         }
 
         private static FieldSnapshot? SafeCapture(NativeFocusSnapshot? focus, IntPtr foreground,
             IntPtr hwnd, uint pid, uint tid, IntPtr expectedLayout,
-            out BrokerStage stage, out int nativeError, uint selectionTimeout = 20)
+            out BrokerStage stage, out int nativeError, out int diagnosticTextLength,
+            out int diagnosticStart, out int diagnosticEnd, out int diagnosticNativeClassKind,
+            uint selectionTimeout = 20)
         {
             stage = BrokerStage.None;
             nativeError = 0;
+            diagnosticTextLength = diagnosticStart = diagnosticEnd = -1;
+            diagnosticNativeClassKind = -1;
             if (focus == null || focus.Foreground != foreground || focus.Focus != hwnd ||
                 focus.ProcessId != pid || focus.ThreadId != tid)
             { stage = BrokerStage.Focus; if (focus == null) nativeError = Marshal.GetLastWin32Error(); return null; }
@@ -448,6 +502,7 @@ namespace MacSwitcher.Windows.Automation
                 nativeClass.StartsWith("WindowsForms10.EDIT", StringComparison.OrdinalIgnoreCase);
             bool nativeRichEdit = nativeClass.StartsWith("RichEdit", StringComparison.OrdinalIgnoreCase) ||
                 nativeClass.StartsWith("WindowsForms10.RichEdit", StringComparison.OrdinalIgnoreCase);
+            diagnosticNativeClassKind = nativePlainEdit ? 1 : nativeRichEdit ? 2 : 0;
             bool nativeRange = (nativePlainEdit || nativeRichEdit) &&
                 element.Current.NativeWindowHandle == hwnd.ToInt64() && Win32.IsWindowUnicode(hwnd) &&
                 Win32.IsWindowEnabled(hwnd);
@@ -481,9 +536,21 @@ namespace MacSwitcher.Windows.Automation
             }
             if (valuePattern == null && textPattern == null)
             { stage = BrokerStage.Pattern; return null; }
-            var text = valuePattern != null ? valuePattern.Current.Value : textPattern!.DocumentRange.GetText(-1);
+            var providerText = valuePattern != null && !(nativePlainEdit && !rich)
+                ? valuePattern.Current.Value : null;
+            string? text;
+            if (nativePlainEdit && !rich)
+            {
+                if (!Win32.IsWindowUnicode(hwnd)) { stage = BrokerStage.Identity; return null; }
+                string nativeText;
+                if (!TryReadNativeEditText(hwnd, selectionTimeout, out nativeText, out nativeError))
+                { stage = BrokerStage.Value; return null; }
+                text = nativeText;
+            }
+            else text = providerText ?? textPattern!.DocumentRange.GetText(-1);
             if (text == null || text.Length > 32768 || !BrokerWire.IsWellFormedUtf16(text))
             { stage = BrokerStage.Value; return null; }
+            diagnosticTextLength = text.Length;
             int start, end;
             if (nativePlainEdit && !rich)
             {
@@ -497,6 +564,11 @@ namespace MacSwitcher.Windows.Automation
                 var bits = unchecked((uint)selection.ToInt64());
                 start = (int)(bits & 0xFFFF);
                 end = (int)((bits >> 16) & 0xFFFF);
+                diagnosticStart = start; diagnosticEnd = end;
+                string stableText;
+                if (!TryReadNativeEditText(hwnd, selectionTimeout, out stableText, out nativeError) ||
+                    stableText != text)
+                { stage = BrokerStage.Postcheck; return null; }
             }
             else
             {
@@ -514,6 +586,7 @@ namespace MacSwitcher.Windows.Automation
                 { stage = BrokerStage.SelectionPattern; return null; }
                 start = preceding.Length;
                 end = start + selected.Length;
+                diagnosticStart = start; diagnosticEnd = end;
                 if (nativeRichEdit)
                 {
                     IntPtr nativeSelection;

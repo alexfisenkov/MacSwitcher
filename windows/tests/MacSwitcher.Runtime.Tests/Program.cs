@@ -54,6 +54,7 @@ internal static class Program
         public byte Outcome;
         public byte Stage;
         public int NativeError;
+        public int DiagnosticTextLength, DiagnosticStart, DiagnosticEnd;
         public Field? Field;
     }
 
@@ -127,6 +128,9 @@ internal static class Program
                 brokerOutcome = captured.Outcome;
                 brokerStage = captured.Stage;
                 brokerNativeCode = captured.NativeError;
+                brokerTextLength = captured.DiagnosticTextLength;
+                brokerSelectionStart = captured.DiagnosticStart;
+                brokerSelectionEnd = captured.DiagnosticEnd;
                 if (captured.Field != null)
                 {
                     brokerTextLength = captured.Field.Text.Length;
@@ -547,6 +551,9 @@ internal static class Program
             using var response = new BinaryReader(new MemoryStream(bytes, false), Encoding.UTF8);
             var result = new Result { Outcome = response.ReadByte(), Stage = response.ReadByte(),
                 NativeError = response.ReadInt32(),
+                DiagnosticTextLength = response.ReadInt32(),
+                DiagnosticStart = response.ReadInt32(),
+                DiagnosticEnd = response.ReadInt32(),
                 Field = ReadField(response) };
             if (response.BaseStream.Position != response.BaseStream.Length) throw new InvalidDataException();
             return result;

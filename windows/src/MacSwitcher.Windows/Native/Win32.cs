@@ -16,6 +16,8 @@ namespace MacSwitcher.Windows.Native
         internal const int WM_INPUTLANGCHANGEREQUEST = 0x0050;
         internal const int WM_INPUTLANGCHANGE = 0x0051;
         internal const int WM_QUIT = 0x0012;
+        internal const uint WM_GETTEXT = 0x000D;
+        internal const uint WM_GETTEXTLENGTH = 0x000E;
         internal const int WM_MOUSEMOVE = 0x0200;
         internal const uint EM_GETSEL = 0x00B0;
         internal const uint EM_SETSEL = 0x00B1;
@@ -96,10 +98,15 @@ namespace MacSwitcher.Windows.Native
         [DllImport("user32.dll")] internal static extern IntPtr GetKeyboardLayout(uint threadId);
         [DllImport("user32.dll")] internal static extern int GetKeyboardLayoutList(int count, [Out] IntPtr[]? layouts);
         [DllImport("user32.dll", SetLastError = true)] internal static extern bool PostMessage(IntPtr hwnd, uint message, UIntPtr wParam, IntPtr lParam);
-        [DllImport("user32.dll", SetLastError = true)] internal static extern IntPtr SendMessageTimeout(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam, uint flags, uint timeout, out IntPtr result);
+        [DllImport("user32.dll", EntryPoint = "SendMessageTimeoutW", CharSet = CharSet.Unicode, SetLastError = true)]
+        internal static extern IntPtr SendMessageTimeout(IntPtr hwnd, uint message, IntPtr wParam,
+            IntPtr lParam, uint flags, uint timeout, out IntPtr result);
         [DllImport("user32.dll", EntryPoint = "SendMessageTimeoutW", CharSet = CharSet.Unicode, SetLastError = true)]
         internal static extern IntPtr SendMessageTimeoutText(IntPtr hwnd, uint message, IntPtr wParam,
             [MarshalAs(UnmanagedType.LPWStr)] string text, uint flags, uint timeout, out IntPtr result);
+        [DllImport("user32.dll", EntryPoint = "SendMessageTimeoutW", CharSet = CharSet.Unicode, SetLastError = true)]
+        internal static extern IntPtr SendMessageTimeoutTextBuffer(IntPtr hwnd, uint message, IntPtr wParam,
+            [Out] StringBuilder buffer, uint flags, uint timeout, out IntPtr result);
         [DllImport("user32.dll", EntryPoint = "GetWindowLongW", SetLastError = true)] internal static extern int GetWindowStyle(IntPtr hwnd, int index);
         [DllImport("user32.dll")] internal static extern bool IsWindowUnicode(IntPtr hwnd);
         [DllImport("user32.dll")] internal static extern bool IsWindowEnabled(IntPtr hwnd);
