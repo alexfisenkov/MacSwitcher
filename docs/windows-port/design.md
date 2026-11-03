@@ -35,3 +35,9 @@ Windows workflow uses pinned official action commit SHAs, SDK10.0.403 via window
 Упаковка требует чистого source checkout; generated data/bin/obj/publish/artifacts игнорируются. Бинарник проверяется в Windows CI отдельно от доказательства хеша Git-дерева. SDK global.json запрещает неявный roll-forward.
 
 Hash-pinned dictionaries/resources are marked -text in .gitattributes so Windows autocrlf cannot alter TSV/notice/manifest bytes before validation.
+
+## Границы короткой native-транзакции
+
+В Windows CI полный повтор UIA-захвата внутри физического допуска превысил его бюджет: RPC занял 93 мс при допуске 90 мс. Бюджет не увеличивается. Для native Edit/RichEdit broker использует один собственный полный preflight не старше 500 мс, сверяет его с ожидаемым состоянием и потребляет однократно. Внутри допуска проверяет тот же HWND/PID/TID, раскладку, класс, доступность, password/read-only styles, полный native-текст и выделение; RuntimeId UIA проверяется до и после изменения. Исходный текст и позиции обычного Edit читаются через Unicode Win32 API одного HWND. Повторные дорогие чтения содержимого через UIA остаются снаружи допуска.
+
+После попытки EM_SETSEL отказ уже не считается доказанным отсутствием изменений состояния поля. Восстановление исходного выделения разрешено только до того же deadline, в том же поле и при точном совпадении текста, с ACK. Если подтверждения нет или сообщение могло исполниться поздно — Unknown, сохранение исходника и запрет повторной записи; позднего восстановления после ввода пользователя нет.

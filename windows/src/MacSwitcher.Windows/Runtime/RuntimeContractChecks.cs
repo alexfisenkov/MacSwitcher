@@ -20,6 +20,9 @@ namespace MacSwitcher.Windows.Runtime
             if (WindowsSwitcherRuntime.ResultLanguage("ghbdtn", "привет", "en") != "ru") return 3;
             if (WindowsSwitcherRuntime.ResultLanguage("abcабв", "фывагп", "en") != "ru") return 4;
             if (WindowsSwitcherRuntime.ResultLanguage("abcабв", "фывxyz", "en") != "en") return 5;
+            if (WindowsSwitcherRuntime.ActualWordLanguage("ghbdtn", "ru") != "en" ||
+                WindowsSwitcherRuntime.ActualWordLanguage("привет", "en") != "ru" ||
+                LayoutMap.ConvertBidirectional("ghbdtn") != "привет") return 18;
             if (!WindowsSwitcherRuntime.PermitMutation(true, true, false, 4, 4, 10, 10) ||
                 WindowsSwitcherRuntime.PermitMutation(true, true, false, 5, 4, 10, 10) ||
                 WindowsSwitcherRuntime.PermitMutation(false, true, false, 4, 4, 10, 10) ||
@@ -55,6 +58,11 @@ namespace MacSwitcher.Windows.Runtime
                 Foreground = new IntPtr(14), Focus = new IntPtr(15),
                 RuntimeId = new[] { 1, 2 }, Value = "observed" };
             if (!new RecoveryOriginalInfo(entry).MatchesLastObserved(field)) return 9;
+            if (BrokerWire.PreparationOutcome(false, false, false) != BrokerOutcome.Unsafe ||
+                BrokerWire.PreparationOutcome(true, true, false) != BrokerOutcome.Unsafe ||
+                BrokerWire.PreparationOutcome(true, false, false) != BrokerOutcome.Unknown ||
+                BrokerWire.PreparationOutcome(true, true, true) != BrokerOutcome.Unknown)
+                return 17;
             field.Value = "newer work";
             if (new RecoveryOriginalInfo(entry).MatchesLastObserved(field)) return 10;
             entry.HasObservation = false; field.Value = "observed";

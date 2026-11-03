@@ -96,6 +96,13 @@ namespace MacSwitcher.Windows.Automation
                   char.IsHighSurrogate(value[offset - 1]) && char.IsLowSurrogate(value[offset]));
         }
 
+        internal static BrokerOutcome PreparationOutcome(bool selectionAttempted,
+            bool originalSelectionConfirmed, bool lateDeliveryPossible)
+        {
+            return lateDeliveryPossible || selectionAttempted && !originalSelectionConfirmed
+                ? BrokerOutcome.Unknown : BrokerOutcome.Unsafe;
+        }
+
         internal static byte[] EncodeFrame(Action<BinaryWriter> write)
         {
             using (var memory = new MemoryStream())
@@ -360,6 +367,11 @@ namespace MacSwitcher.Windows.Automation
 
     internal static class AutomationBrokerServer
     {
+        // Broker-owned evidence from the immediately preceding full UIA/native capture.
+        // The native transaction consumes it once and never trusts a caller snapshot alone.
+        private static FieldSnapshot? recentNativePreflight;
+        private static long recentNativePreflightTick;
+
         private static bool TryReadNativeEditText(IntPtr hwnd, uint timeout,
             out string text, out int nativeError)
         {
@@ -383,6 +395,40 @@ namespace MacSwitcher.Windows.Automation
             if (copied < 0 || copied > length || copied != buffer.Length) return false;
             text = buffer.ToString();
             return BrokerWire.IsWellFormedUtf16(text);
+        }
+
+        private static uint NativeMessageBudget(long deadline)
+        {
+            var remaining = deadline - (long)Win32.GetTickCount64();
+            return remaining <= 0 ? 0 : (uint)Math.Min(20, remaining);
+        }
+
+        private static bool TryReadNativeEditTextUntil(IntPtr hwnd, long deadline,
+            out string text, out int nativeError)
+        {
+            text = ""; nativeError = 0;
+            var budget = NativeMessageBudget(deadline);
+            if (budget == 0) return false;
+            IntPtr lengthResult;
+            if (Win32.SendMessageTimeout(hwnd, Win32.WM_GETTEXTLENGTH, IntPtr.Zero, IntPtr.Zero,
+                Win32.SMTO_ABORTIFHUNG | Win32.SMTO_ERRORONEXIT, budget,
+                out lengthResult) == IntPtr.Zero)
+            { nativeError = Marshal.GetLastWin32Error(); return false; }
+            var length = lengthResult.ToInt64();
+            if (length < 0 || length > 32768) return false;
+            budget = NativeMessageBudget(deadline);
+            if (budget == 0) return false;
+            var buffer = new StringBuilder((int)length + 1);
+            IntPtr copiedResult;
+            if (Win32.SendMessageTimeoutTextBuffer(hwnd, Win32.WM_GETTEXT,
+                new IntPtr(buffer.Capacity), buffer,
+                Win32.SMTO_ABORTIFHUNG | Win32.SMTO_ERRORONEXIT, budget,
+                out copiedResult) == IntPtr.Zero)
+            { nativeError = Marshal.GetLastWin32Error(); return false; }
+            var copied = copiedResult.ToInt64();
+            if (copied < 0 || copied > length || copied != buffer.Length) return false;
+            text = buffer.ToString();
+            return BrokerWire.IsWellFormedUtf16(text) && NativeMessageBudget(deadline) != 0;
         }
 
         internal static int Run()
@@ -435,6 +481,8 @@ namespace MacSwitcher.Windows.Automation
                                 DiagnosticSelectionStart = selectionStart,
                                 DiagnosticSelectionEnd = selectionEnd,
                                 DiagnosticNativeClassKind = nativeClassKind };
+                            recentNativePreflight = field?.NativeRangeWriter == true ? field : null;
+                            recentNativePreflightTick = field == null ? 0 : (long)Win32.GetTickCount64();
                         }
                         else if (operation == 2)
                             result = SafeWrite(focus, foreground, focusHwnd, pid, tid,
@@ -656,11 +704,142 @@ namespace MacSwitcher.Windows.Automation
                 : new BrokerResponse { Outcome = BrokerOutcome.Unknown, Field = after };
         }
 
+        private static bool TryNativeIdentity(FieldSnapshot expected, out BrokerStage stage)
+        {
+            stage = BrokerStage.None;
+            var element = AutomationElement.FocusedElement;
+            if (element == null) { stage = BrokerStage.Element; return false; }
+            if (element.Current.IsPassword) { stage = BrokerStage.Password; return false; }
+            if (!element.Current.IsEnabled) { stage = BrokerStage.ReadOnly; return false; }
+            if (element.Current.ProcessId != expected.ProcessId ||
+                element.Current.NativeWindowHandle != expected.Focus.ToInt64() ||
+                !expected.RuntimeId.SequenceEqual(element.GetRuntimeId()))
+            { stage = BrokerStage.RuntimeId; return false; }
+            object pattern;
+            if (element.TryGetCurrentPattern(ValuePattern.Pattern, out pattern))
+            {
+                if (((ValuePattern)pattern).Current.IsReadOnly)
+                { stage = BrokerStage.ReadOnly; return false; }
+            }
+            else if (element.TryGetCurrentPattern(TextPattern.Pattern, out pattern))
+            {
+                var state = ((TextPattern)pattern).DocumentRange.GetAttributeValue(TextPattern.IsReadOnlyAttribute);
+                if (!(state is bool) || (bool)state)
+                { stage = BrokerStage.ReadOnly; return false; }
+            }
+            else { stage = BrokerStage.Pattern; return false; }
+            return true;
+        }
+
+        private static bool NativeWritableNow(IntPtr hwnd, out BrokerStage stage, out int nativeError)
+        {
+            stage = BrokerStage.None; nativeError = 0;
+            var classBuffer = new StringBuilder(256);
+            if (Win32.GetClassName(hwnd, classBuffer, classBuffer.Capacity) == 0)
+            { stage = BrokerStage.Identity; nativeError = Marshal.GetLastWin32Error(); return false; }
+            var name = classBuffer.ToString();
+            bool nativeEdit = name.Equals("Edit", StringComparison.OrdinalIgnoreCase) ||
+                name.StartsWith("WindowsForms10.EDIT", StringComparison.OrdinalIgnoreCase) ||
+                name.StartsWith("RichEdit", StringComparison.OrdinalIgnoreCase) ||
+                name.StartsWith("WindowsForms10.RichEdit", StringComparison.OrdinalIgnoreCase);
+            if (!nativeEdit || !Win32.IsWindowUnicode(hwnd) || !Win32.IsWindowEnabled(hwnd))
+            { stage = BrokerStage.Identity; return false; }
+            var style = Win32.GetWindowStyle(hwnd, Win32.GWL_STYLE);
+            if ((style & Win32.ES_PASSWORD) != 0) { stage = BrokerStage.Password; return false; }
+            if ((style & (Win32.ES_READONLY | Win32.WS_DISABLED)) != 0)
+            { stage = BrokerStage.ReadOnly; return false; }
+            return true;
+        }
+
+        private static bool TryNativeFocusedState(FieldSnapshot expected, IntPtr expectedLayout,
+            long deadline, bool checkUiIdentity, out string text, out int start, out int end,
+            out BrokerStage stage, out int nativeError)
+        {
+            text = ""; start = end = -1; stage = BrokerStage.None; nativeError = 0;
+            var focus = NativeFocusSnapshot.Capture();
+            if (focus == null || focus.Foreground != expected.Foreground || focus.Focus != expected.Focus ||
+                focus.ProcessId != expected.ProcessId || focus.ThreadId != expected.ThreadId)
+            { stage = BrokerStage.Focus; return false; }
+            if (Win32.GetKeyboardLayout(expected.ThreadId) != expectedLayout)
+            { stage = BrokerStage.Layout; return false; }
+            if (!NativeSafety.IsNormalDesktop()) { stage = BrokerStage.Desktop; return false; }
+            if (!NativeSafety.IsEqualOrLowerIntegrity(expected.ProcessId))
+            { stage = BrokerStage.Integrity; return false; }
+            if (!NativeSafety.ModifiersUp()) { stage = BrokerStage.NativeModifier; return false; }
+            if (!NativeWritableNow(expected.Focus, out stage, out nativeError)) return false;
+            if (NativeMessageBudget(deadline) == 0)
+            { stage = BrokerStage.NativeDeadline; return false; }
+            if (checkUiIdentity && !TryNativeIdentity(expected, out stage)) return false;
+            if (NativeMessageBudget(deadline) == 0)
+            { stage = BrokerStage.NativeDeadline; return false; }
+            string firstText;
+            if (!TryReadNativeEditTextUntil(expected.Focus, deadline, out firstText, out nativeError))
+            { stage = NativeMessageBudget(deadline) == 0 ? BrokerStage.NativeDeadline : BrokerStage.Value; return false; }
+            var messageBudget = NativeMessageBudget(deadline);
+            if (messageBudget == 0) { stage = BrokerStage.NativeDeadline; return false; }
+            IntPtr selection;
+            if (Win32.SendMessageTimeout(expected.Focus, Win32.EM_GETSEL, IntPtr.Zero, IntPtr.Zero,
+                Win32.SMTO_ABORTIFHUNG | Win32.SMTO_ERRORONEXIT, messageBudget,
+                out selection) == IntPtr.Zero)
+            {
+                stage = NativeMessageBudget(deadline) == 0 ? BrokerStage.NativeDeadline : BrokerStage.Selection;
+                nativeError = Marshal.GetLastWin32Error(); return false;
+            }
+            var bits = unchecked((uint)selection.ToInt64());
+            start = (int)(bits & 0xFFFF);
+            end = (int)((bits >> 16) & 0xFFFF);
+            string stableText;
+            if (!TryReadNativeEditTextUntil(expected.Focus, deadline, out stableText, out nativeError) ||
+                stableText != firstText)
+            {
+                stage = NativeMessageBudget(deadline) == 0 ? BrokerStage.NativeDeadline : BrokerStage.Postcheck;
+                return false;
+            }
+            if (start > end || end > firstText.Length ||
+                !BrokerWire.IsScalarBoundary(firstText, start) ||
+                !BrokerWire.IsScalarBoundary(firstText, end))
+            { stage = BrokerStage.SelectionRange; return false; }
+            if (NativeMessageBudget(deadline) == 0)
+            { stage = BrokerStage.NativeDeadline; return false; }
+            text = firstText;
+            return true;
+        }
+
+        private static bool TryRestoreNativeSelection(FieldSnapshot expected, IntPtr expectedLayout,
+            long deadline, int originalStart, int originalEnd)
+        {
+            if (deadline - (long)Win32.GetTickCount64() < 20) return false;
+            BrokerStage stage;
+            int nativeError, currentStart, currentEnd;
+            string currentText;
+            if (!TryNativeFocusedState(expected, expectedLayout, deadline, true,
+                out currentText, out currentStart, out currentEnd, out stage, out nativeError) ||
+                currentText != expected.Value) return false;
+            if (currentStart == originalStart && currentEnd == originalEnd) return true;
+            var remaining = deadline - (long)Win32.GetTickCount64();
+            if (remaining < 20) return false;
+            IntPtr ignored;
+            remaining = deadline - (long)Win32.GetTickCount64();
+            if (remaining <= 10) return false;
+            if (Win32.SendMessageTimeout(expected.Focus, Win32.EM_SETSEL,
+                new IntPtr(originalStart), new IntPtr(originalEnd),
+                Win32.SMTO_ABORTIFHUNG | Win32.SMTO_ERRORONEXIT,
+                (uint)Math.Min(10, remaining - 10), out ignored) == IntPtr.Zero) return false;
+            string restoredText;
+            int restoredStart, restoredEnd;
+            return TryNativeFocusedState(expected, expectedLayout, deadline, true,
+                out restoredText, out restoredStart, out restoredEnd, out stage, out nativeError) &&
+                restoredText == expected.Value && restoredStart == originalStart &&
+                restoredEnd == originalEnd;
+        }
+
         private static BrokerResponse SafeReplaceNativeRange(NativeFocusSnapshot? focus, IntPtr foreground,
             IntPtr hwnd, uint pid, uint tid, IntPtr expectedLayout, long deadline,
             FieldSnapshot? expected, int rangeStart, int rangeEnd, string? replacement)
         {
-            if (focus == null || expected == null || !expected.NativeRangeWriter || replacement == null ||
+            if (focus == null || expected == null || !expected.NativeRangeWriter ||
+                expected.Foreground != foreground || expected.Focus != hwnd ||
+                expected.ProcessId != pid || expected.ThreadId != tid || replacement == null ||
                 replacement.IndexOf('\0') >= 0 || replacement.Length > 4096 ||
                 rangeStart < 0 || rangeEnd < rangeStart || rangeEnd > expected.Value.Length ||
                 !BrokerWire.IsWellFormedUtf16(replacement) ||
@@ -675,68 +854,117 @@ namespace MacSwitcher.Windows.Automation
                 expected.Value.Substring(rangeEnd);
             if (finalText.Length > 32768)
                 return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativePrecondition, BrokerStage.NativeMismatch);
+            var recent = recentNativePreflight;
+            var recentTick = recentNativePreflightTick;
+            recentNativePreflight = null; recentNativePreflightTick = 0;
+            var age = (long)Win32.GetTickCount64() - recentTick;
+            if (recent == null || age < 0 || age > 500 || !recent.SameState(expected) ||
+                !recent.NativeRangeWriter)
+                return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativeState, BrokerStage.NativeMismatch);
             BrokerStage captureStage;
-            int captureError, ignoredLength, ignoredStart, ignoredEnd, ignoredClass;
-            var before = SafeCapture(focus, foreground, hwnd, pid, tid, expectedLayout,
-                out captureStage, out captureError, out ignoredLength, out ignoredStart, out ignoredEnd,
-                out ignoredClass);
-            if (before == null)
+            int captureError, beforeStart, beforeEnd;
+            string beforeText;
+            if (!TryNativeFocusedState(expected, expectedLayout, deadline, true,
+                out beforeText, out beforeStart, out beforeEnd, out captureStage, out captureError))
                 return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativeFirstCapture,
                     captureStage, captureError);
-            if (!before.NativeRangeWriter || !before.SameState(expected))
+            if (beforeText != expected.Value || beforeStart != expected.SelectionStart ||
+                beforeEnd != expected.SelectionEnd)
                 return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativeState, BrokerStage.NativeMismatch);
-            if (before.SelectionStart != rangeStart || before.SelectionEnd != rangeEnd)
+            bool selectedByUs = false;
+            BrokerResponse RefuseAfterSelection(BrokerPhase phase, BrokerStage stage, int nativeError = 0)
             {
-                var selectBudget = (uint)Math.Min(20, Math.Max(0, deadline - (long)Win32.GetTickCount64()));
-                if (selectBudget < 1)
+                if (!selectedByUs) return NativeResult(BrokerOutcome.Unsafe, phase, stage, nativeError);
+                bool restored = TryRestoreNativeSelection(expected, expectedLayout, deadline,
+                    beforeStart, beforeEnd);
+                return NativeResult(BrokerWire.PreparationOutcome(true, restored, false),
+                    phase, stage, nativeError);
+            }
+            if (beforeStart != rangeStart || beforeEnd != rangeEnd)
+            {
+                var selectionRemaining = deadline - (long)Win32.GetTickCount64();
+                if (selectionRemaining < 40)
                     return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativeSetSelection, BrokerStage.NativeDeadline);
+                var selectBudget = (uint)Math.Min(20, selectionRemaining - 20);
                 IntPtr ignored;
                 if (Win32.SendMessageTimeout(hwnd, Win32.EM_SETSEL, new IntPtr(rangeStart),
                     new IntPtr(rangeEnd), Win32.SMTO_ABORTIFHUNG | Win32.SMTO_ERRORONEXIT,
                     selectBudget, out ignored) == IntPtr.Zero)
-                    return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativeSetSelection,
-                        BrokerStage.NativeMessage, Marshal.GetLastWin32Error());
-                var selected = SafeCapture(NativeFocusSnapshot.Capture(), foreground, hwnd, pid, tid,
-                    expectedLayout, out captureStage, out captureError, out ignoredLength,
-                    out ignoredStart, out ignoredEnd, out ignoredClass);
-                if (selected == null)
-                    return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativeSelectionAck,
+                {
+                    var code = Marshal.GetLastWin32Error();
+                    TryRestoreNativeSelection(expected, expectedLayout, deadline, beforeStart, beforeEnd);
+                    // A timed-out message can still execute later, so this remains unknown.
+                    return NativeResult(BrokerWire.PreparationOutcome(true, false, true),
+                        BrokerPhase.NativeSetSelection,
+                        BrokerStage.NativeMessage, code);
+                }
+                selectedByUs = true;
+                string selectedText;
+                int selectedStart, selectedEnd;
+                if (!TryNativeFocusedState(expected, expectedLayout, deadline, false,
+                    out selectedText, out selectedStart, out selectedEnd,
+                    out captureStage, out captureError))
+                    return RefuseAfterSelection(BrokerPhase.NativeSelectionAck,
                         captureStage, captureError);
-                if (!selected.SameIdentity(before) || selected.Value != before.Value ||
-                    selected.SelectionStart != rangeStart || selected.SelectionEnd != rangeEnd)
-                    return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativeSelectionAck,
+                if (selectedText != beforeText || selectedStart != rangeStart ||
+                    selectedEnd != rangeEnd)
+                    return RefuseAfterSelection(BrokerPhase.NativeSelectionAck,
                         BrokerStage.NativeMismatch);
             }
-            if (deadline <= (long)Win32.GetTickCount64())
-                return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativeBeforeMutation,
+            if (deadline - (long)Win32.GetTickCount64() < 40)
+                return RefuseAfterSelection(BrokerPhase.NativeBeforeMutation,
                     BrokerStage.NativeDeadline);
             if (!focus.StillSame())
-                return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativeBeforeMutation, BrokerStage.Focus);
+                return RefuseAfterSelection(BrokerPhase.NativeBeforeMutation, BrokerStage.Focus);
             if (Win32.GetKeyboardLayout(tid) != expectedLayout)
-                return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativeBeforeMutation, BrokerStage.Layout);
+                return RefuseAfterSelection(BrokerPhase.NativeBeforeMutation, BrokerStage.Layout);
             if (!NativeSafety.ModifiersUp())
-                return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativeBeforeMutation,
+                return RefuseAfterSelection(BrokerPhase.NativeBeforeMutation,
                     BrokerStage.NativeModifier);
             if (!NativeSafety.IsNormalDesktop())
-                return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativeBeforeMutation, BrokerStage.Desktop);
+                return RefuseAfterSelection(BrokerPhase.NativeBeforeMutation, BrokerStage.Desktop);
             if (!NativeSafety.IsEqualOrLowerIntegrity(pid))
-                return NativeResult(BrokerOutcome.Unsafe, BrokerPhase.NativeBeforeMutation, BrokerStage.Integrity);
+                return RefuseAfterSelection(BrokerPhase.NativeBeforeMutation, BrokerStage.Integrity);
+            string commitText;
+            int commitStart, commitEnd;
+            if (!TryNativeFocusedState(expected, expectedLayout, deadline, false,
+                out commitText, out commitStart, out commitEnd,
+                out captureStage, out captureError))
+                return RefuseAfterSelection(BrokerPhase.NativeBeforeMutation,
+                    captureStage, captureError);
+            if (commitText != beforeText || commitStart != rangeStart || commitEnd != rangeEnd)
+                return RefuseAfterSelection(BrokerPhase.NativeBeforeMutation,
+                    BrokerStage.NativeMismatch);
+            BrokerStage writableStage;
+            int writableError;
+            if (!NativeWritableNow(hwnd, out writableStage, out writableError))
+                return RefuseAfterSelection(BrokerPhase.NativeBeforeMutation, writableStage, writableError);
+            if (!focus.StillSame() || Win32.GetKeyboardLayout(tid) != expectedLayout)
+                return RefuseAfterSelection(BrokerPhase.NativeBeforeMutation, BrokerStage.Focus);
             IntPtr replaceResult;
-            var writeBudget = (uint)Math.Max(1, deadline - (long)Win32.GetTickCount64());
+            var writeRemaining = deadline - (long)Win32.GetTickCount64();
+            if (writeRemaining <= 0)
+                return RefuseAfterSelection(BrokerPhase.NativeBeforeMutation,
+                    BrokerStage.NativeDeadline);
+            var writeBudget = (uint)writeRemaining;
             if (Win32.SendMessageTimeoutText(hwnd, Win32.EM_REPLACESEL, new IntPtr(1), replacement,
                 Win32.SMTO_ABORTIFHUNG | Win32.SMTO_ERRORONEXIT, writeBudget,
                 out replaceResult) == IntPtr.Zero)
                 return NativeResult(BrokerOutcome.Unknown, BrokerPhase.NativeReplaceDelivery,
                     BrokerStage.NativeMessage, Marshal.GetLastWin32Error());
-            var after = SafeCapture(NativeFocusSnapshot.Capture(), foreground, hwnd, pid, tid,
-                expectedLayout, out captureStage, out captureError, out ignoredLength,
-                out ignoredStart, out ignoredEnd, out ignoredClass);
-            if (after == null)
+            string afterText;
+            int afterStart, afterEnd;
+            if (!TryNativeFocusedState(expected, expectedLayout, deadline, true,
+                out afterText, out afterStart, out afterEnd, out captureStage, out captureError))
                 return NativeResult(BrokerOutcome.Unknown, BrokerPhase.NativeReadback,
                     captureStage, captureError);
-            if (!after.SameIdentity(before) || after.Value != finalText ||
-                after.SelectionStart != after.SelectionEnd ||
-                after.SelectionEnd != rangeStart + replacement.Length)
+            var after = new FieldSnapshot { Foreground = expected.Foreground, Focus = expected.Focus,
+                ProcessId = expected.ProcessId, ThreadId = expected.ThreadId,
+                RuntimeId = (int[])expected.RuntimeId.Clone(), Value = afterText,
+                SelectionStart = afterStart, SelectionEnd = afterEnd,
+                CanWrite = expected.CanWrite, NativeRangeWriter = true };
+            if (afterText != finalText || afterStart != afterEnd ||
+                afterEnd != rangeStart + replacement.Length)
                 return NativeResult(BrokerOutcome.Unknown, BrokerPhase.NativeFinalAck,
                     BrokerStage.NativeMismatch, 0, after);
             return NativeResult(BrokerOutcome.Success, BrokerPhase.NativeFinalAck,

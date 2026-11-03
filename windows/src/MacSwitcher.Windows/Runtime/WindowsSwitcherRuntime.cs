@@ -742,17 +742,25 @@ namespace MacSwitcher.Windows.Runtime
             { Interlocked.Exchange(ref fixtureManualCode, 7); return; }
             var token = LastToken(field.Value);
             if (token == null) { Interlocked.Exchange(ref fixtureManualCode, 7); return; }
-            var replacement = LayoutMap.Convert(token, source);
+            var wordSource = ActualWordLanguage(token, source);
+            var replacement = LayoutMap.ConvertBidirectional(token);
             if (replacement == token) { Interlocked.Exchange(ref fixtureManualCode, 7); return; }
             var targetValue = field.Value.Substring(0, field.Value.Length - token.Length) + replacement;
             var wordLanguage = ResultLanguage(token, replacement, target);
             if (field.NativeRangeWriter)
                 Interlocked.Exchange(ref fixtureManualCode,
                     TryNativeRangeEdit(focus, field, field.Value.Length - token.Length, field.Value.Length,
-                        replacement, revision, generation, token, source, wordLanguage) ? 20 : 21);
+                    replacement, revision, generation, token, wordSource, wordLanguage) ? 20 : 21);
             else Interlocked.Exchange(ref fixtureManualCode,
                 TryFullValueEdit(focus, field, targetValue, revision, generation, token, replacement,
-                    source, wordLanguage) ? 22 : 23);
+                    wordSource, wordLanguage) ? 22 : 23);
+        }
+
+        internal static string ActualWordLanguage(string token, string fallback)
+        {
+            bool latin = token.Any(c => c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z');
+            bool cyrillic = token.Any(c => c >= '\u0400' && c <= '\u04ff');
+            return latin && !cyrillic ? "en" : cyrillic && !latin ? "ru" : fallback;
         }
 
         internal static string ResultLanguage(string original, string changed, string fallback)

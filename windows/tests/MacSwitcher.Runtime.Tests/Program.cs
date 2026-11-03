@@ -18,6 +18,11 @@ internal static class Program
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr RemoveProp(IntPtr hwnd, string name);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr LoadKeyboardLayout(string id, uint flags);
     [DllImport("user32.dll")] private static extern int GetKeyboardLayoutList(int count, [Out] IntPtr[]? layouts);
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint MsgWaitForMultipleObjectsEx(uint count, IntPtr handles,
+        uint milliseconds, uint wakeMask, uint flags);
+    private const uint QS_ALLINPUT = 0x04FF;
+    private const uint MWMO_INPUTAVAILABLE = 0x0004;
     private static string edgeInput = "NOT_RUN";
     private static string edgeTextarea = "NOT_RUN";
     private static string hookStatus = "NOT_RUN";
@@ -71,6 +76,20 @@ internal static class Program
         public Field? Field;
     }
 
+    private sealed class SelectionDriftTextBox : TextBox
+    {
+        internal bool DriftNextSelection;
+
+        protected override void WndProc(ref Message message)
+        {
+            base.WndProc(ref message);
+            if (message.Msg != 0x00B1 || !DriftNextSelection) return; // EM_SETSEL
+            DriftNextSelection = false; // Clear before SelectionStart sends a nested EM_SETSEL.
+            SelectionStart = 0;
+            SelectionLength = 0;
+        }
+    }
+
     [STAThread]
     private static int Main()
     {
@@ -111,12 +130,13 @@ internal static class Program
                 return Report("FAIL", "runtime_pure_state", 0);
         }
         Application.EnableVisualStyles();
-        using var form = new Form { Width = 400, Height = 230, Text = "MacSwitcher synthetic fixture" };
+        using var form = new Form { Width = 400, Height = 280, Text = "MacSwitcher synthetic fixture" };
         using var plain = new TextBox { Left = 10, Top = 10, Width = 320, Text = "ghbdtn" };
         using var password = new TextBox { Left = 10, Top = 45, Width = 320, Text = "synthetic-secret", UseSystemPasswordChar = true };
         using var readOnly = new TextBox { Left = 10, Top = 80, Width = 320, Text = "readonly", ReadOnly = true };
         using var rich = new RichTextBox { Left = 10, Top = 115, Width = 320, Height = 55, Text = "rich" };
-        form.Controls.AddRange([plain, password, readOnly, rich]);
+        using var drift = new SelectionDriftTextBox { Left = 10, Top = 180, Width = 320, Text = "ghbdtn" };
+        form.Controls.AddRange([plain, password, readOnly, rich, drift]);
         form.Show();
         form.Activate();
         plain.Focus();
@@ -196,6 +216,20 @@ internal static class Program
                     return Report("FAIL", "native_range_write", checks);
                 checks++;
             }
+            if (!Focus(form, drift)) return Report("FAIL", "selection_rollback_focus", checks);
+            drift.SelectionStart = drift.TextLength; drift.SelectionLength = 0;
+            var driftBefore = RequireBroker(() => broker.Call(1, null, null));
+            if (driftBefore.Outcome != 1 || driftBefore.Field?.NativeRangeWriter != true ||
+                driftBefore.Field.Start != drift.TextLength || driftBefore.Field.End != drift.TextLength)
+                return Report("FAIL", "selection_rollback_capture", checks);
+            drift.DriftNextSelection = true;
+            var refused = RequireBroker(() => broker.Call(3, driftBefore.Field, "привет", 0, drift.TextLength));
+            Application.DoEvents();
+            if (refused.Outcome != 0 || drift.DriftNextSelection ||
+                drift.Text != "ghbdtn" || drift.SelectionStart != drift.TextLength ||
+                drift.SelectionLength != 0)
+                return Report("FAIL", "selection_rollback_ack", checks);
+            checks++;
             if (!Focus(form, password) || RequireBroker(() => broker.Call(1, null, null)).Outcome == 1)
                 return Report("FAIL", "password_rejection", checks);
             checks++;
@@ -244,7 +278,7 @@ internal static class Program
         var task = Task.Run(action);
         var until = Environment.TickCount64 + timeoutMilliseconds;
         while (!task.IsCompleted && Environment.TickCount64 < until)
-        { Application.DoEvents(); Thread.Sleep(1); }
+        { Application.DoEvents(); if (!task.IsCompleted) WaitForUiMessage(until); }
         return task.IsCompletedSuccessfully ? task.Result : null;
     }
 
@@ -253,7 +287,7 @@ internal static class Program
         var task = Task.Run(action);
         var until = Environment.TickCount64 + timeoutMilliseconds;
         while (!task.IsCompleted && Environment.TickCount64 < until)
-        { Application.DoEvents(); Thread.Sleep(1); }
+        { Application.DoEvents(); if (!task.IsCompleted) WaitForUiMessage(until); }
         if (!task.IsCompleted)
         {
             stage = "RPC_TIMEOUT";
@@ -270,6 +304,16 @@ internal static class Program
         }
         stage = "RESPONSE";
         return task.Result;
+    }
+
+    private static void WaitForUiMessage(long until)
+    {
+        var remaining = until - Environment.TickCount64;
+        if (remaining <= 0) return;
+        // Wake immediately for the target WinForms window's queued native/UIA message.
+        // A 5-ms cap also notices completion of the worker task without busy spinning.
+        MsgWaitForMultipleObjectsEx(0, IntPtr.Zero, (uint)Math.Min(5, remaining),
+            QS_ALLINPUT, MWMO_INPUTAVAILABLE);
     }
 
     private static Result RequireBroker(Func<Result> action, int timeoutMilliseconds = 3000)
@@ -393,17 +437,40 @@ internal static class Program
             if (plain.Text != "привет" || result.Applied < 2) return "FAIL";
             checks++;
 
+            integrationProbe = "word_source_mismatch";
+            LoadKeyboardLayout("00000419", 1);
+            plain.Text = "ghbdtn"; plain.SelectionStart = plain.TextLength;
+            session.Command("CACHE");
+            if (session.Command("TAP_L").Layout != "en") return "FAIL";
+            session.Command("TAP_R");
+            result = session.Command("WAIT");
+            if (plain.Text != "привет" || result.Layout != "ru" || result.Applied < 3)
+                return "FAIL";
+            checks++;
+            integrationProbe = "word_source_mismatch_undo";
+            session.Command("TAP_R"); session.Command("TAP_L");
+            result = session.Command("WAIT");
+            if (plain.Text != "ghbdtn" || result.Layout != "en" || result.Undone < 2)
+                return "FAIL";
+            checks++;
+            integrationProbe = "word_source_mismatch_redo";
+            session.Command("TAP_L"); session.Command("TAP_R");
+            result = session.Command("WAIT");
+            if (plain.Text != "привет" || result.Layout != "ru" || result.Applied < 4)
+                return "FAIL";
+            checks++;
+
             integrationProbe = "selection";
             LoadKeyboardLayout("00000409", 1);
             plain.Text = "ghbdtn world"; plain.Select(0, 6);
             session.Command("CACHE"); session.Command("TAP_L"); session.Command("TAP_R");
             result = session.Command("WAIT");
-            if (plain.Text != "привет world" || result.Applied < 3) return "FAIL";
+            if (plain.Text != "привет world" || result.Applied < 5) return "FAIL";
             checks++;
             integrationProbe = "selection_undo";
             session.Command("TAP_R"); session.Command("TAP_L");
             result = session.Command("WAIT");
-            if (plain.Text != "ghbdtn world" || result.Undone < 2) return "FAIL";
+            if (plain.Text != "ghbdtn world" || result.Undone < 3) return "FAIL";
             checks++;
 
             integrationProbe = "new_word";
@@ -411,7 +478,7 @@ internal static class Program
             plain.Text = "ghbdtn next"; plain.SelectionStart = plain.TextLength;
             session.Command("CACHE"); session.Command("TAP_L"); session.Command("TAP_R");
             result = session.Command("WAIT");
-            if (plain.Text != "ghbdtn туче" || result.Applied < 4) return "FAIL";
+            if (plain.Text != "ghbdtn туче" || result.Applied < 6) return "FAIL";
             checks++;
 
             integrationProbe = "auto_early";
@@ -424,7 +491,7 @@ internal static class Program
                 session.Command("KEY_U");
             }
             result = session.Command("WAIT");
-            if (plain.Text != "прив" || result.Applied < 5) return "FAIL";
+            if (plain.Text != "прив" || result.Applied < 7) return "FAIL";
             checks++;
 
             integrationProbe = "auto_fast_burst";
@@ -438,7 +505,7 @@ internal static class Program
                 session.Command(space ? "SPACE_U" : "KEY_U");
             }
             result = session.Command("WAIT");
-            if (plain.Text != "как " || result.Applied < 6) return "FAIL";
+            if (plain.Text != "как " || result.Applied < 8) return "FAIL";
             checks++;
 
             integrationProbe = "focus_drift";
