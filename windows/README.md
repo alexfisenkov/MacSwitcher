@@ -18,10 +18,11 @@ Install .NET SDK 10.0.403 and Python 3.11 or later. From the repository root:
 ```powershell
 python windows/scripts/build-data.py --output windows/data
 python windows/scripts/extract-icon.py
-dotnet build windows/src/MacSwitcher.Windows/MacSwitcher.Windows.csproj -c Release
+cd windows
+dotnet build src/MacSwitcher.Windows/MacSwitcher.Windows.csproj -c Release
 ```
 
-The dictionary builder checks the pinned source hashes in `dictionaries/manifest.json`. Generated dictionaries are local build inputs and are not committed.
+Run `dotnet` commands from `windows/` so `global.json` selects the pinned SDK. The dictionary builder checks the pinned source hashes in `dictionaries/manifest.json`. Generated dictionaries are local build inputs and are not committed.
 
 ## Packages
 

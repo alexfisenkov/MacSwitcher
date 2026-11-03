@@ -2,7 +2,7 @@
 
 ## Build
 
-SDK10.0.403. Core project target `net462;net10.0`, app `net462` AnyCPU, tests `net10.0`; Microsoft.NETFramework.ReferenceAssemblies.net462 1.0.3 build-only. No other NuGet dependencies expected. C# plain BCL API available net462; no nativeSQLite dependency.
+SDK10.0.403; `dotnet` запускается из `windows/`, чтобы применялся local global.json. Core project target `net462;net10.0`, app `net462` AnyCPU, tests `net10.0`; Microsoft.NETFramework.ReferenceAssemblies.net462 1.0.3 build-only. No other NuGet dependencies expected. C# plain BCL API available net462; no nativeSQLite dependency.
 
 ## Core names
 
@@ -36,5 +36,9 @@ Windows-specific version `windows/version.json` initial0.1.0-alpha.1/build1, tag
 Глобальный SendInput удалён: NativeRangeWriter работает по проверенному HWND Edit/RichEdit; generic UIA full-value только для доказанного plain Edit/конца поля. Unsafe/Unknown не запускают fallback. Перед restore сверяется lastObservedValue, а при его отсутствии доступен только Copy/Export.
 
 Ручной двойной Shift преобразует последнее слово по фактическим буквам через `ConvertBidirectional`, даже если текущая раскладка уже отличается от раскладки его набора. Языки исходника и результата в receipt определяются по тексту; отмена восстанавливает исходный язык слова. Автокоррекционная политика от этого правила не меняется. Короткая native-транзакция и восстановление выделения описаны в [design.md](design.md#границы-короткой-native-транзакции).
+
+Ручной origin обновляется свежим полным снимком после первого переключения языка, на dispatch worker вне low-level callback/fence. Нативные FG/HWND/PID/TID должны совпасть, disruptive revision и gesture epoch — остаться прежними. Не Shift ввод, мышь, injected/overflow или смена поля отменяют подготовку. Второй Shift требует свежего полного SameState. Это снимает зависимость нового слова и нового выделения от периодического кэша. Для auto допускается новый пустой якорь только после подтверждённого EMPTY/caret0 без ожидающей работы; неизвестный непустой текст не усваивается.
+
+Пределы чтения: поле до 32768 кодовых единиц UTF-16; ручное выделение и replacement до 4096; отдельное последнее слово до 192. Превышение не расширяет буферы и не запускает другой транспорт.
 
 Feed: https://raw.githubusercontent.com/alexfisenkov/MacSwitcher/main/windows/updates/windows.json. RSA-SHA256 envelope algorithm/payload/signature; payload schema1/version/build/tag/sourceRevision/assets, exact allowed own GitHub download URLs. Source package manifest schema1 содержит sourceRevision40hex и sourceSha25664hex (canonical source-digest.py), package hashes/sizes. Signer требует этот manifest и сверяет source digest и файлы.

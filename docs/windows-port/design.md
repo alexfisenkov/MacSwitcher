@@ -18,6 +18,8 @@
 
 Итоговый workflow_dispatch Windows CI: core gold/gesture/safety tests, net462 app build, own synthetic WinForms edit/selection/undo/fast input/focus/password/failure probes on Windows runner, installer install/reinstall/uninstall preserving userdata, integrity/package checks and artifacts. Повторный прогон допустим после конкретного исправления обнаруженного отказа; история неудачных прогонов сохраняется. Physical Windows7/8.1/10/11/ARM and actual third-party apps NOT_RUN, hosted Windows Server is not that proof. No user Mac windows/key input tests.
 
+Fixture регистрирует настоящие keyboard/mouse hooks, но изолирует их посторонние события от управляемого синтетического потока. Фиксированные команды проходят через production обработчик; отдельно проверяются отмена жеста сочетанием клавиш и последующее восстановление. Это интеграция runtime/UIA/native writer, а не доказательство физической доставки HID-событий.
+
 ## Владение
 
 Parent owns root .gitignore, windows/AGENTS.md, docs/windows-port/, workflow/release coordination. Core worker owns windows/src/MacSwitcher.Core, windows/tests/MacSwitcher.Core.Tests and common core contracts. Runtime worker owns windows/src/MacSwitcher.Windows/{Native,Automation,Runtime}, Program.cs and windows/tests/MacSwitcher.Runtime.Tests. UI/package worker owns windows/src/MacSwitcher.Windows/{UI,Storage}, app csproj/manifest, windows/scripts/resources/installer, windows/README. No overlapping writers; interfaces agree before edits.

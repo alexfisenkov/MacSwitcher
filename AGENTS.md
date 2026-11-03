@@ -70,5 +70,5 @@ v3.4.0 и ранее разработанный native combined-Shift режим
 - Core C# target `net462;net10.0`, GUI WinForms target `net462`; macOS Swift/version.json/updates/appcast.xml не меняются при Windows-выпуске.
 - Windows-only версия/пакеты — `windows/version.json`, tag `windows-v…`, канал `windows/updates/windows.json`; не назначать Windows-релиз global latest macOS.
 - Подпись собственного update manifest RSA не заменяет Authenticode; EXE пока unsigned. Приватный signer вне Git.
-- Проверки: `python3 windows/scripts/build-data.py --output windows/data`, `python3 windows/scripts/extract-icon.py`, `dotnet run --project windows/tests/MacSwitcher.Core.Tests -c Release`, `dotnet build windows/src/MacSwitcher.Windows -c Release`. Runtime/installer — только собственные fixture-поля в Windows workflow_dispatch.
+- Из корня: `python3 windows/scripts/build-data.py --output windows/data`, `python3 windows/scripts/extract-icon.py`. Затем из каталога `windows/`, где действует SDK pin в global.json: `dotnet run --project tests/MacSwitcher.Core.Tests -c Release`, `dotnet build src/MacSwitcher.Windows -c Release`. Runtime/installer — только собственные fixture-поля в Windows workflow_dispatch.
 - Hosted Windows Server CI не доказывает physical Windows7/8.1/10/11/ARM или чужие редакторы.

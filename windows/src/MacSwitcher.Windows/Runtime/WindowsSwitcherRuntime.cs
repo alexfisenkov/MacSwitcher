@@ -63,6 +63,7 @@ namespace MacSwitcher.Windows.Runtime
         private long lastExternalAtTicks;
         private long cachedAtTicks, cachedAtRevision, sessionRevision;
         private long operationGeneration;
+        private long gestureEpoch;
         private string? lastSource;
         private string? pendingSource;
         private IntPtr reportedUnsupportedLayout;
@@ -138,6 +139,7 @@ namespace MacSwitcher.Windows.Runtime
         }
         internal void EmitFixtureKey(PhysicalInputKind kind, int virtualKey, uint scanCode, long timestamp)
         { hook.EmitFixtureKey(kind, virtualKey, scanCode, timestamp); }
+        internal void EmitFixtureMouse(long timestamp) { hook.EmitFixtureMouse(timestamp); }
         public string CurrentLayoutLanguage
         {
             get
@@ -197,6 +199,7 @@ namespace MacSwitcher.Windows.Runtime
                 {
                     settings = next;
                     operationGeneration++;
+                    gestureEpoch++;
                     gesture = new ShiftGesture(next.DoubleShiftMilliseconds);
                     sessionField = gestureField = null;
                     unknownWord = true;
@@ -371,6 +374,8 @@ namespace MacSwitcher.Windows.Runtime
                         }
                         reportedUnsupportedLayout = IntPtr.Zero;
                         if (gestureField == null) gestureField = CachedFor(input.Focus, input.Revision);
+                        if (gestureField == null && receipt != null && MatchesFocus(receipt.Field, input.Focus))
+                            gestureField = receipt.Field; // Confirmed edit; fresh full-state check still precedes undo.
                         gesture.Press(side, input.Timestamp, new LayoutDirection(source, source == "ru" ? "en" : "ru"));
                         Interlocked.Exchange(ref fixtureShiftCode, 9);
                     }
@@ -386,7 +391,7 @@ namespace MacSwitcher.Windows.Runtime
                 }
                 else
                 {
-                    gesture.Interrupt(); gestureField = null;
+                    gesture.Interrupt(); gestureField = null; gestureEpoch++;
                     if (!IsTextKey(input.VirtualKey) || leftShiftDown || rightShiftDown ||
                         !NativeSafety.CommandModifiersUp())
                     { ResetSession(9); return; }
@@ -413,6 +418,9 @@ namespace MacSwitcher.Windows.Runtime
                 var focus = input.Focus;
                 if (saved.Kind == ShiftActionKind.SwitchLayout)
                 {
+                    var disruptiveBeforeSwitch = hook.DisruptiveRevision;
+                    long gestureEpochBeforeSwitch;
+                    lock (stateGate) gestureEpochBeforeSwitch = gestureEpoch;
                     bool switched = KeyboardLayoutSource.RequestAndConfirm(focus, saved.Direction.TargetId);
                     Interlocked.Exchange(ref fixtureShiftCode, switched ? 20 : 21);
                     lock (stateGate)
@@ -424,6 +432,41 @@ namespace MacSwitcher.Windows.Runtime
                         unknownWord = value == null || value.Length > 0 && !char.IsWhiteSpace(value[value.Length - 1]);
                     }
                     if (!switched) Publish("Смена раскладки не подтверждена.", false);
+                    // The layout is committed before this read. It runs on the dispatch worker,
+                    // never in the low-level hook, and binds a fresh manual origin to the same
+                    // native field. Shift-only callbacks may queue while the read is in flight;
+                    // any other physical input or a focus change cancels the origin.
+                    NativeFocusSnapshot? afterSwitch = null;
+                    if (switched && focus != null)
+                    {
+                        var focusDeadline = (long)Win32.GetTickCount64() + 40;
+                        do
+                        {
+                            afterSwitch = NativeFocusSnapshot.Capture();
+                            if (afterSwitch != null) break;
+                            Thread.Sleep(2);
+                        } while ((long)Win32.GetTickCount64() < focusDeadline);
+                    }
+                    BrokerResponse? fresh = null;
+                    if (afterSwitch != null && focus != null &&
+                        afterSwitch.Foreground == focus.Foreground && afterSwitch.Focus == focus.Focus &&
+                        afterSwitch.ProcessId == focus.ProcessId && afterSwitch.ThreadId == focus.ThreadId &&
+                        hook.DisruptiveRevision == disruptiveBeforeSwitch)
+                        fresh = ReadField(afterSwitch, 120);
+                    lock (stateGate)
+                    {
+                        if (gestureEpoch == gestureEpochBeforeSwitch &&
+                            hook.DisruptiveRevision == disruptiveBeforeSwitch && started && settings.Enabled &&
+                            afterSwitch?.StillSame() == true && fresh?.Outcome == BrokerOutcome.Success &&
+                            MatchesFocus(fresh.Field, afterSwitch))
+                        {
+                            gestureField = fresh.Field;
+                            cachedField = fresh.Field;
+                            cachedAtTicks = (long)Win32.GetTickCount64();
+                            cachedAtRevision = hook.Revision;
+                        }
+                        else gestureField = null;
+                    }
                 }
                 else if (saved.Kind == ShiftActionKind.Convert)
                 {
@@ -463,6 +506,7 @@ namespace MacSwitcher.Windows.Runtime
         {
             Interlocked.Exchange(ref fixtureResetReason, reason);
             operationGeneration++;
+            gestureEpoch++;
             gesture.Interrupt();
             cachedField = sessionField = gestureField = null;
             unknownWord = true;
@@ -546,8 +590,19 @@ namespace MacSwitcher.Windows.Runtime
                         cachedField = response.Field;
                         cachedAtTicks = (long)Win32.GetTickCount64();
                         cachedAtRevision = beforeRevision;
-                        if (sessionField == null && (response.Field.Value.Length == 0 ||
-                            char.IsWhiteSpace(response.Field.Value[response.Field.Value.Length - 1])))
+                        if (response.Field.Value.Length == 0 &&
+                            response.Field.SelectionStart == 0 && response.Field.SelectionEnd == 0 &&
+                            pendingTextKeys == 0 && manualWorkInFlight == 0 &&
+                            !observing && latestObservation == null)
+                        {
+                            // A confirmed clear of this exact field starts a fresh word session.
+                            // Never adopt a nonempty value that appeared without observed input.
+                            sessionField = null;
+                            lastSource = null;
+                            unknownWord = false;
+                        }
+                        else if (sessionField == null && response.Field.Value.Length > 0 &&
+                            char.IsWhiteSpace(response.Field.Value[response.Field.Value.Length - 1]))
                             unknownWord = false;
                     }
                     else { cachedField = null; unknownWord = true; }
@@ -602,7 +657,8 @@ namespace MacSwitcher.Windows.Runtime
                     if (boundaryRead.Outcome == BrokerOutcome.Success && boundaryRead.Field != null &&
                         boundaryRead.Field.Value.Length > 0 &&
                         char.IsWhiteSpace(boundaryRead.Field.Value[boundaryRead.Field.Value.Length - 1]))
-                        lock (stateGate) { unknownWord = false; sessionField = boundaryRead.Field; }
+                        lock (stateGate)
+                        { unknownWord = false; sessionField = boundaryRead.Field; pendingTextKeys = 0; }
                 }
                 return;
             }
@@ -625,7 +681,7 @@ namespace MacSwitcher.Windows.Runtime
                 !field.Value.StartsWith(origin.Value, StringComparison.Ordinal) ||
                 field.Value.Length - origin.Value.Length > Math.Max(2, 2 * pendingKeys))
             {
-                lock (stateGate) { sessionField = null; unknownWord = true; }
+                lock (stateGate) { sessionField = null; unknownWord = true; pendingTextKeys = 0; }
                 return;
             }
             bool boundary = field.Value.Length > 0 && char.IsWhiteSpace(field.Value[field.Value.Length - 1]);
@@ -849,7 +905,14 @@ namespace MacSwitcher.Windows.Runtime
                     currentPhrase, targetPhrase, undo ? prior.ResultLanguage : prior.SourceLanguage,
                     targetLanguage, false);
             if (!changed) return false;
-            lock (stateGate) { prior.Undone = undo; receipt = prior; }
+            lock (stateGate)
+            {
+                var confirmedField = receipt?.Field;
+                if (confirmedField != null && prior.Field.SameIdentity(confirmedField))
+                    prior.Field = confirmedField;
+                prior.Undone = undo;
+                receipt = prior;
+            }
             if (undo) { try { CorrectionUndone?.Invoke(new CorrectionNotice(prior.ReplacementPhrase, prior.OriginalPhrase, prior.SourceLanguage)); } catch { } }
             else { try { CorrectionApplied?.Invoke(new CorrectionNotice(prior.OriginalPhrase, prior.ReplacementPhrase, prior.SourceLanguage)); } catch { } }
             return true;

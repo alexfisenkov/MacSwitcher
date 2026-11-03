@@ -70,12 +70,14 @@ namespace MacSwitcher.Windows.Native
         private uint hookThreadId;
         private int count, running, overflow;
         private long revision;
+        private long disruptiveRevision;
         private InputFence? activeFence;
         private readonly object fenceGate = new object();
         private readonly int maxFenceMilliseconds;
 
         internal event Action<PhysicalInput>? PhysicalEvent;
         internal long Revision { get { return Interlocked.Read(ref revision); } }
+        internal long DisruptiveRevision { get { return Interlocked.Read(ref disruptiveRevision); } }
         internal bool Ready { get { return keyboardHook != IntPtr.Zero && mouseHook != IntPtr.Zero && Volatile.Read(ref running) != 0; } }
         internal int KeyboardRegistrationError { get { return Volatile.Read(ref keyboardRegistrationError); } }
         internal int MouseRegistrationError { get { return Volatile.Read(ref mouseRegistrationError); } }
@@ -157,6 +159,7 @@ namespace MacSwitcher.Windows.Native
                 if ((data.flags & Win32.LLKHF_INJECTED) != 0)
                 {
                     WaitFenceIfNeeded();
+                    Interlocked.Increment(ref disruptiveRevision);
                     Enqueue(new PhysicalInput { Kind = PhysicalInputKind.Overflow,
                         Revision = Interlocked.Increment(ref revision) });
                     return Win32.CallNextHookEx(keyboardHook, code, wParam, lParam);
@@ -167,11 +170,14 @@ namespace MacSwitcher.Windows.Native
                 var arrival = Win32.GetTickCount64();
                 var timestamp = ExtendEventTime(data.time, arrival);
                 WaitFenceIfNeeded();
+                if (data.vkCode != Win32.VK_SHIFT && data.vkCode != Win32.VK_LSHIFT &&
+                    data.vkCode != Win32.VK_RSHIFT)
+                    Interlocked.Increment(ref disruptiveRevision);
                 var rev = Interlocked.Increment(ref revision);
                 Enqueue(new PhysicalInput { Kind = kind, VirtualKey = (int)data.vkCode, ScanCode = data.scanCode,
                     Timestamp = timestamp, Revision = rev, Focus = NativeFocusSnapshot.Capture() });
             }
-            catch { Interlocked.Exchange(ref overflow, 1); }
+            catch { Interlocked.Increment(ref disruptiveRevision); Interlocked.Exchange(ref overflow, 1); }
             return Win32.CallNextHookEx(keyboardHook, code, wParam, lParam);
         }
 
@@ -188,17 +194,19 @@ namespace MacSwitcher.Windows.Native
                 if ((data.flags & Win32.LLMHF_INJECTED) != 0)
                 {
                     WaitFenceIfNeeded();
+                    Interlocked.Increment(ref disruptiveRevision);
                     Enqueue(new PhysicalInput { Kind = PhysicalInputKind.Overflow,
                         Revision = Interlocked.Increment(ref revision) });
                     return Win32.CallNextHookEx(mouseHook, code, wParam, lParam);
                 }
                 var timestamp = (long)Win32.GetTickCount64();
                 WaitFenceIfNeeded();
+                Interlocked.Increment(ref disruptiveRevision);
                 var rev = Interlocked.Increment(ref revision);
                 Enqueue(new PhysicalInput { Kind = PhysicalInputKind.Mouse, Revision = rev, Timestamp = timestamp,
                     Focus = NativeFocusSnapshot.Capture() });
             }
-            catch { Interlocked.Exchange(ref overflow, 1); }
+            catch { Interlocked.Increment(ref disruptiveRevision); Interlocked.Exchange(ref overflow, 1); }
             return Win32.CallNextHookEx(mouseHook, code, wParam, lParam);
         }
 
@@ -214,6 +222,7 @@ namespace MacSwitcher.Windows.Native
             if (Interlocked.Increment(ref count) > 512)
             {
                 Interlocked.Decrement(ref count);
+                Interlocked.Increment(ref disruptiveRevision);
                 Interlocked.Exchange(ref overflow, 1);
             }
             else queue.Enqueue(item);
@@ -227,9 +236,23 @@ namespace MacSwitcher.Windows.Native
             if (!Ready || kind != PhysicalInputKind.KeyDown && kind != PhysicalInputKind.KeyUp)
                 throw new InvalidOperationException("Fixture hook unavailable.");
             WaitFenceIfNeeded();
+            if (virtualKey != Win32.VK_SHIFT && virtualKey != Win32.VK_LSHIFT &&
+                virtualKey != Win32.VK_RSHIFT)
+                Interlocked.Increment(ref disruptiveRevision);
             var item = new PhysicalInput { Kind = kind, VirtualKey = virtualKey,
                 ScanCode = scanCode, Timestamp = timestamp,
                 Revision = Interlocked.Increment(ref revision), Focus = NativeFocusSnapshot.Capture() };
+            PhysicalEvent?.Invoke(item);
+        }
+
+        internal void EmitFixtureMouse(long timestamp)
+        {
+            if (!Ready) throw new InvalidOperationException("Fixture hook unavailable.");
+            WaitFenceIfNeeded();
+            Interlocked.Increment(ref disruptiveRevision);
+            var item = new PhysicalInput { Kind = PhysicalInputKind.Mouse,
+                Timestamp = timestamp, Revision = Interlocked.Increment(ref revision),
+                Focus = NativeFocusSnapshot.Capture() };
             PhysicalEvent?.Invoke(item);
         }
 

@@ -87,6 +87,9 @@ namespace MacSwitcher.Windows.Runtime
                                 runtime.EmitFixtureKey(PhysicalInputKind.KeyUp, Win32.VK_CONTROL, 29, syntheticTick + 20);
                                 runtime.EmitFixtureKey(PhysicalInputKind.KeyUp, Win32.VK_LSHIFT, 42, syntheticTick + 30);
                                 syntheticTick += 80; break;
+                            case "MOUSE_INTERRUPT":
+                                runtime.EmitFixtureMouse(syntheticTick);
+                                syntheticTick += 20; break;
                             case "KEY_D":
                                 runtime.EmitFixtureKey(PhysicalInputKind.KeyDown, 0x47, 34, syntheticTick);
                                 syntheticTick += 10; break;

@@ -484,12 +484,37 @@ internal static class Program
                 return "FAIL";
             checks++;
 
+            integrationProbe = "rapid_word_without_cache";
+            LoadKeyboardLayout("00000409", 1);
+            plain.Text = ""; plain.SelectionStart = 0;
+            session.Command("AUTO_OFF"); session.Command("CACHE");
+            foreach (var letter in "ghbdtn")
+            {
+                session.Command("KEY_D"); plain.AppendText(letter.ToString());
+                session.Command("KEY_U");
+            }
+            session.Command("TAP_L"); session.Command("TAP_R");
+            result = session.Command("WAIT");
+            if (plain.Text != "привет" || result.Layout != "ru" || result.Applied < 5)
+                return "FAIL";
+            checks++;
+
+            integrationProbe = "rapid_selection_without_cache";
+            LoadKeyboardLayout("00000409", 1);
+            plain.Text = "ghbdtn world"; plain.Select(0, 6);
+            session.Command("MOUSE_INTERRUPT");
+            session.Command("TAP_L"); session.Command("TAP_R");
+            result = session.Command("WAIT");
+            if (plain.Text != "привет world" || result.Layout != "ru" || result.Applied < 6)
+                return "FAIL";
+            checks++;
+
             integrationProbe = "selection";
             LoadKeyboardLayout("00000409", 1);
             plain.Text = "ghbdtn world"; plain.Select(0, 6);
             session.Command("CACHE"); session.Command("TAP_L"); session.Command("TAP_R");
             result = session.Command("WAIT");
-            if (plain.Text != "привет world" || result.Applied < 5) return "FAIL";
+            if (plain.Text != "привет world" || result.Applied < 7) return "FAIL";
             checks++;
             integrationProbe = "selection_undo";
             session.Command("TAP_R"); session.Command("TAP_L");
@@ -502,7 +527,7 @@ internal static class Program
             plain.Text = "ghbdtn next"; plain.SelectionStart = plain.TextLength;
             session.Command("CACHE"); session.Command("TAP_L"); session.Command("TAP_R");
             result = session.Command("WAIT");
-            if (plain.Text != "ghbdtn туче" || result.Applied < 6) return "FAIL";
+            if (plain.Text != "ghbdtn туче" || result.Applied < 8) return "FAIL";
             checks++;
 
             integrationProbe = "auto_early";
@@ -515,7 +540,19 @@ internal static class Program
                 session.Command("KEY_U");
             }
             result = session.Command("WAIT");
-            if (plain.Text != "прив" || result.Applied < 7) return "FAIL";
+            if (plain.Text != "прив" || result.Applied < 9) return "FAIL";
+            checks++;
+
+            integrationProbe = "auto_after_verified_clear";
+            plain.Text = ""; plain.SelectionStart = 0;
+            session.Command("CACHE");
+            foreach (var letter in "ghbd")
+            {
+                session.Command("KEY_D"); plain.AppendText(letter.ToString());
+                session.Command("KEY_U");
+            }
+            result = session.Command("WAIT");
+            if (plain.Text != "прив" || result.Applied < 10) return "FAIL";
             checks++;
 
             integrationProbe = "auto_fast_burst";
@@ -529,7 +566,7 @@ internal static class Program
                 session.Command(space ? "SPACE_U" : "KEY_U");
             }
             result = session.Command("WAIT");
-            if (plain.Text != "как " || result.Applied < 8) return "FAIL";
+            if (plain.Text != "как " || result.Applied < 11) return "FAIL";
             checks++;
 
             integrationProbe = "focus_drift";
