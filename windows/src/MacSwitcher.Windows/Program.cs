@@ -23,6 +23,8 @@ namespace MacSwitcher.Windows
                 return RuntimeContractChecks.Run();
             if (args.Length == 1 && args[0] == "--hook-registration-test")
                 return RunHookRegistrationTest();
+            if (args.Length == 1 && args[0] == "--broker-protocol-fixture")
+                return RunBrokerProtocolFixture();
             uint fixturePid;
             if (args.Length == 2 && args[0] == "--runtime-fixture-client" &&
                 uint.TryParse(args[1], out fixturePid))
@@ -112,6 +114,27 @@ namespace MacSwitcher.Windows
                 }
                 return ready ? 0 : 1;
             }
+        }
+
+        private static int RunBrokerProtocolFixture()
+        {
+            var response = new BrokerResponse
+            {
+                Outcome = BrokerOutcome.Success, Stage = BrokerStage.SelectionRange,
+                NativeError = 5, DiagnosticTextLength = 7,
+                DiagnosticSelectionStart = 2, DiagnosticSelectionEnd = 4,
+                DiagnosticNativeClassKind = 1,
+                Field = new FieldSnapshot
+                {
+                    Foreground = new IntPtr(11), Focus = new IntPtr(12),
+                    ProcessId = 13, ThreadId = 14, RuntimeId = new[] { 15, 16 },
+                    Value = "fixture", SelectionStart = 2, SelectionEnd = 4,
+                    CanWrite = true, NativeRangeWriter = true
+                }
+            };
+            using (var output = new BinaryWriter(Console.OpenStandardOutput(), Encoding.UTF8))
+                BrokerWire.WriteFrame(output, BrokerWire.EncodeResponse(response));
+            return 0;
         }
     }
 }

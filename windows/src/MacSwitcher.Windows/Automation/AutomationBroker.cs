@@ -118,6 +118,21 @@ namespace MacSwitcher.Windows.Automation
             return new BinaryReader(new MemoryStream(bytes, false), Encoding.UTF8);
         }
 
+        internal static byte[] EncodeResponse(BrokerResponse result)
+        {
+            return EncodeFrame(payload =>
+            {
+                payload.Write((byte)result.Outcome);
+                payload.Write((byte)result.Stage);
+                payload.Write(result.NativeError);
+                payload.Write(result.DiagnosticTextLength);
+                payload.Write(result.DiagnosticSelectionStart);
+                payload.Write(result.DiagnosticSelectionEnd);
+                payload.Write(result.DiagnosticNativeClassKind);
+                WriteField(payload, result.Field);
+            });
+        }
+
         internal static void WriteText(BinaryWriter output, string? value)
         {
             if (!IsWellFormedUtf16(value ?? "")) throw new EncoderFallbackException("Invalid UTF-16.");
@@ -425,33 +440,11 @@ namespace MacSwitcher.Windows.Automation
                     }
                     finally { request.Dispose(); }
                     byte[] response;
-                    try
-                    {
-                        response = BrokerWire.EncodeFrame(payload =>
-                        {
-                            payload.Write((byte)result.Outcome);
-                            payload.Write((byte)result.Stage);
-                            payload.Write(result.NativeError);
-                            payload.Write(result.DiagnosticTextLength);
-                            payload.Write(result.DiagnosticSelectionStart);
-                            payload.Write(result.DiagnosticSelectionEnd);
-                            payload.Write(result.DiagnosticNativeClassKind);
-                            BrokerWire.WriteField(payload, result.Field);
-                        });
-                    }
+                    try { response = BrokerWire.EncodeResponse(result); }
                     catch
                     {
-                        response = BrokerWire.EncodeFrame(payload =>
-                        {
-                            payload.Write((byte)BrokerOutcome.Unknown);
-                            payload.Write((byte)BrokerStage.Exception);
-                            payload.Write(0);
-                            payload.Write(-1);
-                            payload.Write(-1);
-                            payload.Write(-1);
-                            payload.Write(-1);
-                            BrokerWire.WriteField(payload, null);
-                        });
+                        response = BrokerWire.EncodeResponse(new BrokerResponse
+                        { Outcome = BrokerOutcome.Unknown, Stage = BrokerStage.Exception });
                     }
                     try { BrokerWire.WriteFrame(output, response); }
                     catch { return; }

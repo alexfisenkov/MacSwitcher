@@ -53,6 +53,7 @@ Remove-Item $publish -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $publish,$artifacts | Out-Null
 $version = Get-Content $versionFile -Raw | ConvertFrom-Json
 if ([int]$version.build -lt 1) { throw 'Windows build number must be positive.' }
+if ([string]$version.version -cnotmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { throw 'Windows version must be a plain semantic version before passing it to Inno Setup.' }
 $fileVersion = "0.1.$($version.build).0"
 $infoVersion = "$($version.version)+build.$($version.build)"
 dotnet publish $csproj -c $Configuration -o $publish /p:Platform=AnyCPU "/p:FileVersion=$fileVersion" "/p:InformationalVersion=$infoVersion"
@@ -90,7 +91,7 @@ if ($compilerSignature.Status -ne 'Valid' -or $compilerSignature.SignerCertifica
 }
 $compilerVersion = Get-InnoCompilerVersion $InnoCompiler
 if ($compilerVersion -ne '6.7.4') { throw "Packaging requires verified Inno Setup 6.7.4, found $compilerVersion" }
-$versionDefine = '/DAppVersion="' + $version.version + '"'
+$versionDefine = '/DAppVersion=' + $version.version
 & $InnoCompiler $versionDefine (Join-Path $root 'windows\installer\MacSwitcher.iss')
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed: $LASTEXITCODE" }
 

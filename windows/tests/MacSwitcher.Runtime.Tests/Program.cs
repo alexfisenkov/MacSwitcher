@@ -28,6 +28,7 @@ internal static class Program
     private static int brokerNativeCode;
     private static bool fixtureForeground, fixtureFocus;
     private static int brokerTextLength = -1, brokerSelectionStart = -1, brokerSelectionEnd = -1;
+    private static int brokerNativeClassKind = -1;
     private static bool brokerSameFixturePid, brokerFocusMatchesPlain;
     private static int hookKeyboardCode, hookMouseCode;
 
@@ -55,6 +56,7 @@ internal static class Program
         public byte Stage;
         public int NativeError;
         public int DiagnosticTextLength, DiagnosticStart, DiagnosticEnd;
+        public int DiagnosticNativeClassKind;
         public Field? Field;
     }
 
@@ -72,6 +74,24 @@ internal static class Program
         installIntent.Grant();
         if (!installIntent.TryConsume() || installIntent.TryConsume())
             return Report("FAIL", "update_intent_not_one_use", 0);
+        using (var protocol = Process.Start(new ProcessStartInfo(path, "--broker-protocol-fixture")
+        { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true }))
+        {
+            if (protocol == null || !protocol.WaitForExit(5000) || protocol.ExitCode != 0)
+                return Report("FAIL", "broker_protocol_process", 0);
+            try
+            {
+                using var input = new BinaryReader(protocol.StandardOutput.BaseStream, Encoding.UTF8);
+                var frame = Broker.ReadResponse(input);
+                if (frame.Outcome != 1 || frame.Stage != 15 || frame.NativeError != 5 ||
+                    frame.DiagnosticTextLength != 7 || frame.DiagnosticStart != 2 ||
+                    frame.DiagnosticEnd != 4 || frame.DiagnosticNativeClassKind != 1 ||
+                    frame.Field?.Text != "fixture" || frame.Field.Start != 2 || frame.Field.End != 4 ||
+                    !frame.Field.NativeRangeWriter)
+                    return Report("FAIL", "broker_protocol_schema", 0);
+            }
+            catch { return Report("FAIL", "broker_protocol_parse", 0); }
+        }
         using (var contracts = Process.Start(new ProcessStartInfo(path, "--runtime-contract-tests")
         { UseShellExecute = false, CreateNoWindow = true }))
         {
@@ -131,6 +151,7 @@ internal static class Program
                 brokerTextLength = captured.DiagnosticTextLength;
                 brokerSelectionStart = captured.DiagnosticStart;
                 brokerSelectionEnd = captured.DiagnosticEnd;
+                brokerNativeClassKind = captured.DiagnosticNativeClassKind;
                 if (captured.Field != null)
                 {
                     brokerTextLength = captured.Field.Text.Length;
@@ -265,6 +286,7 @@ internal static class Program
             ",\"brokerTextLength\":" + brokerTextLength +
             ",\"brokerSelectionStart\":" + brokerSelectionStart +
             ",\"brokerSelectionEnd\":" + brokerSelectionEnd +
+            ",\"brokerNativeClassKind\":" + brokerNativeClassKind +
             ",\"brokerSameFixturePid\":" + (brokerSameFixturePid ? "true" : "false") +
             ",\"brokerFocusMatchesPlain\":" + (brokerFocusMatchesPlain ? "true" : "false") +
             ",\"edgeInput\":\"" + edgeInput +
@@ -546,14 +568,20 @@ internal static class Program
                 packet = memory.ToArray();
             }
             writer.Write(packet.Length); writer.Write(packet); writer.Flush();
-            var size = reader.ReadInt32(); if (size < 1 || size > 1048576) throw new InvalidDataException();
-            var bytes = reader.ReadBytes(size); if (bytes.Length != size) throw new EndOfStreamException();
+            return ReadResponse(reader);
+        }
+
+        public static Result ReadResponse(BinaryReader input)
+        {
+            var size = input.ReadInt32(); if (size < 1 || size > 1048576) throw new InvalidDataException();
+            var bytes = input.ReadBytes(size); if (bytes.Length != size) throw new EndOfStreamException();
             using var response = new BinaryReader(new MemoryStream(bytes, false), Encoding.UTF8);
             var result = new Result { Outcome = response.ReadByte(), Stage = response.ReadByte(),
                 NativeError = response.ReadInt32(),
                 DiagnosticTextLength = response.ReadInt32(),
                 DiagnosticStart = response.ReadInt32(),
                 DiagnosticEnd = response.ReadInt32(),
+                DiagnosticNativeClassKind = response.ReadInt32(),
                 Field = ReadField(response) };
             if (response.BaseStream.Position != response.BaseStream.Length) throw new InvalidDataException();
             return result;
