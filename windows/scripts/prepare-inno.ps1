@@ -1,5 +1,15 @@
 $ErrorActionPreference = 'Stop'
 $expected = '6.7.4'
+
+function Get-InnoCompilerVersion([string]$Path) {
+  $output = @(& $Path --version 2>&1)
+  $result = $LASTEXITCODE
+  if ($result -ne 0) { throw "ISCC --version failed with exit code $result" }
+  $reported = ($output -join "`n").Trim().Trim([char]0xFEFF)
+  if ($reported -notmatch '^6\.7\.4$') { throw "ISCC reported an unexpected compiler version: $reported" }
+  return $reported
+}
+
 $candidates = @(
   (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'),
   (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe')
@@ -7,8 +17,9 @@ $candidates = @(
 
 $compiler = $null
 foreach ($candidate in $candidates) {
-  $version = [Diagnostics.FileVersionInfo]::GetVersionInfo($candidate).FileVersion
-  if ($version -match '^6\.7\.4(\.0)?$') { $compiler = $candidate; break }
+  try {
+    if ((Get-InnoCompilerVersion $candidate) -eq $expected) { $compiler = $candidate; break }
+  } catch { }
 }
 
 $receiptDir = Join-Path $PSScriptRoot '..\artifacts'
@@ -26,8 +37,7 @@ if (-not $compiler) {
 }
 
 if (-not (Test-Path $compiler)) { throw 'Inno Setup 6.7.4 ISCC.exe was not found after setup.' }
-$actual = [Diagnostics.FileVersionInfo]::GetVersionInfo($compiler).FileVersion
-if ($actual -notmatch '^6\.7\.4(\.0)?$') { throw "Expected Inno Setup $expected, found $actual" }
+$actual = Get-InnoCompilerVersion $compiler
 $signature = Get-AuthenticodeSignature $compiler
 if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Pyrsys B\.V\.') {
   throw "Inno Setup compiler signature verification failed: $($signature.Status)"

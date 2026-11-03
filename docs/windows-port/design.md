@@ -16,7 +16,7 @@
 
 ## Приёмка
 
-Один final workflow_dispatch Windows CI: core gold/gesture/safety tests, net48 app build, own synthetic WinForms edit/selection/undo/fast input/focus/password/failure probes on Windows runner, installer install/reinstall/uninstall preserving userdata, integrity/package checks and artifacts. Physical Windows7/8.1/10/11/ARM and actual third-party apps NOT_RUN, hosted Windows Server is not that proof. No user Mac windows/key input tests.
+Итоговый workflow_dispatch Windows CI: core gold/gesture/safety tests, net462 app build, own synthetic WinForms edit/selection/undo/fast input/focus/password/failure probes on Windows runner, installer install/reinstall/uninstall preserving userdata, integrity/package checks and artifacts. Повторный прогон допустим после конкретного исправления обнаруженного отказа; история неудачных прогонов сохраняется. Physical Windows7/8.1/10/11/ARM and actual third-party apps NOT_RUN, hosted Windows Server is not that proof. No user Mac windows/key input tests.
 
 ## Владение
 

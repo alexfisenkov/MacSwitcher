@@ -9,6 +9,16 @@ $data = Join-Path $root 'windows\data'
 $artifacts = Join-Path $root 'windows\artifacts'
 $csproj = Join-Path $root 'windows\src\MacSwitcher.Windows\MacSwitcher.Windows.csproj'
 $versionFile = Join-Path $root 'windows\version.json'
+
+function Get-InnoCompilerVersion([string]$Path) {
+  $output = @(& $Path --version 2>&1)
+  $result = $LASTEXITCODE
+  if ($result -ne 0) { throw "ISCC --version failed with exit code $result" }
+  $reported = ($output -join "`n").Trim().Trim([char]0xFEFF)
+  if ($reported -notmatch '^6\.7\.4$') { throw "ISCC reported an unexpected compiler version: $reported" }
+  return $reported
+}
+
 $gitStatus = @(git -C $root status --porcelain=v1 --untracked-files=all)
 if ($LASTEXITCODE -ne 0) { throw 'Unable to verify the source revision before packaging.' }
 if ($gitStatus.Count -ne 0) { throw 'Packaging requires a clean Git worktree; commit or otherwise resolve source changes before building packages.' }
@@ -30,6 +40,8 @@ $publishedDictionaryHash = (Get-FileHash $publishedDictionaryManifest -Algorithm
 if ($sourceDictionaryHash -ne $publishedDictionaryHash) { throw 'Published dictionary manifest differs from the verified generated data.' }
 Copy-Item (Join-Path $root 'windows\assets\MacSwitcher.ico') $publish
 Copy-Item (Join-Path $root 'windows\README.md') $publish
+Copy-Item (Join-Path $root 'LICENSE') $publish
+Copy-Item (Join-Path $root 'NOTICE.md') $publish
 $portableName = "MacSwitcher-Windows-$($version.version)-portable.zip"
 $portablePath = Join-Path $artifacts $portableName
 Compress-Archive -Path (Join-Path $publish '*') -DestinationPath $portablePath -Force
@@ -40,14 +52,14 @@ if (-not $InnoCompiler) {
   if ($env:LOCALAPPDATA) { $compilerCandidates += Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe' }
   foreach ($candidate in $compilerCandidates) {
     if (Test-Path $candidate) {
-      $candidateVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($candidate).FileVersion
-      if ($candidateVersion -match '^6\.7\.4(\.0)?$') { $InnoCompiler = $candidate; break }
+      try {
+        if ((Get-InnoCompilerVersion $candidate) -eq '6.7.4') { $InnoCompiler = $candidate; break }
+      } catch { }
     }
   }
 }
 if (-not (Test-Path $InnoCompiler)) { throw "ISCC compiler not found: $InnoCompiler" }
-$compilerVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($InnoCompiler).FileVersion
-if ($compilerVersion -notmatch '^6\.7\.4(\.0)?$') { throw "Packaging requires verified Inno Setup 6.7.4, found $compilerVersion" }
+$compilerVersion = Get-InnoCompilerVersion $InnoCompiler
 $versionDefine = '/DAppVersion="' + $version.version + '"'
 & $InnoCompiler $versionDefine (Join-Path $root 'windows\installer\MacSwitcher.iss')
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed: $LASTEXITCODE" }

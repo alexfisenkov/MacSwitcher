@@ -19,7 +19,8 @@ namespace MacSwitcher.Windows.Automation
         None = 0, Focus = 1, Desktop = 2, Layout = 3, Integrity = 4,
         Element = 5, Identity = 6, Password = 7, ReadOnly = 8,
         Pattern = 9, Value = 10, Selection = 11, RuntimeId = 12,
-        Postcheck = 13, Exception = 14
+        Postcheck = 13, Exception = 14, SelectionRange = 15,
+        SelectionPattern = 16
     }
 
     internal sealed class FieldSnapshot
@@ -291,7 +292,7 @@ namespace MacSwitcher.Windows.Automation
                         response.Field = BrokerWire.ReadField(responseFrame);
                         if (responseFrame.BaseStream.Position != responseFrame.BaseStream.Length)
                             throw new InvalidDataException("Unexpected response bytes.");
-                        if (response.Outcome > BrokerOutcome.Unknown || response.Stage > BrokerStage.Exception)
+                        if (response.Outcome > BrokerOutcome.Unknown || response.Stage > BrokerStage.SelectionPattern)
                             throw new InvalidDataException("Invalid broker response.");
                         return response;
                     });
@@ -364,7 +365,7 @@ namespace MacSwitcher.Windows.Automation
                             BrokerStage stage;
                             int nativeError;
                             var field = SafeCapture(focus, foreground, focusHwnd, pid, tid,
-                                expectedLayout, out stage, out nativeError);
+                                expectedLayout, out stage, out nativeError, 150);
                             result = new BrokerResponse { Outcome = field == null ? BrokerOutcome.Unsafe : BrokerOutcome.Success,
                                 Stage = stage, NativeError = nativeError, Field = field };
                         }
@@ -421,7 +422,7 @@ namespace MacSwitcher.Windows.Automation
 
         private static FieldSnapshot? SafeCapture(NativeFocusSnapshot? focus, IntPtr foreground,
             IntPtr hwnd, uint pid, uint tid, IntPtr expectedLayout,
-            out BrokerStage stage, out int nativeError)
+            out BrokerStage stage, out int nativeError, uint selectionTimeout = 20)
         {
             stage = BrokerStage.None;
             nativeError = 0;
@@ -490,7 +491,8 @@ namespace MacSwitcher.Windows.Automation
                 // EM_GETSEL is a system edit-control message. Field size is capped below 32768.
                 IntPtr selection;
                 if (Win32.SendMessageTimeout(hwnd, Win32.EM_GETSEL, IntPtr.Zero, IntPtr.Zero,
-                    Win32.SMTO_ABORTIFHUNG, 20, out selection) == IntPtr.Zero)
+                    Win32.SMTO_ABORTIFHUNG | Win32.SMTO_ERRORONEXIT,
+                    selectionTimeout, out selection) == IntPtr.Zero)
                 { stage = BrokerStage.Selection; nativeError = Marshal.GetLastWin32Error(); return null; }
                 var bits = unchecked((uint)selection.ToInt64());
                 start = (int)(bits & 0xFFFF);
@@ -503,30 +505,31 @@ namespace MacSwitcher.Windows.Automation
                 if (document.GetText(-1) != text) { stage = BrokerStage.Value; return null; }
                 var ranges = textPattern.GetSelection();
                 if (ranges == null || ranges.Length != 1)
-                { stage = BrokerStage.Selection; return null; }
+                { stage = BrokerStage.SelectionPattern; return null; }
                 var selected = ranges[0].GetText(-1);
                 var prefix = document.Clone();
                 prefix.MoveEndpointByRange(TextPatternRangeEndpoint.End, ranges[0], TextPatternRangeEndpoint.Start);
                 var preceding = prefix.GetText(-1);
                 if (preceding == null || selected == null || !text.StartsWith(preceding + selected, StringComparison.Ordinal))
-                { stage = BrokerStage.Selection; return null; }
+                { stage = BrokerStage.SelectionPattern; return null; }
                 start = preceding.Length;
                 end = start + selected.Length;
                 if (nativeRichEdit)
                 {
                     IntPtr nativeSelection;
                     if (Win32.SendMessageTimeout(hwnd, Win32.EM_GETSEL, IntPtr.Zero, IntPtr.Zero,
-                        Win32.SMTO_ABORTIFHUNG | Win32.SMTO_ERRORONEXIT, 20, out nativeSelection) == IntPtr.Zero)
+                        Win32.SMTO_ABORTIFHUNG | Win32.SMTO_ERRORONEXIT,
+                        selectionTimeout, out nativeSelection) == IntPtr.Zero)
                     { stage = BrokerStage.Selection; nativeError = Marshal.GetLastWin32Error(); return null; }
                     var bits = unchecked((uint)nativeSelection.ToInt64());
                     if (start != (int)(bits & 0xFFFF) || end != (int)((bits >> 16) & 0xFFFF))
-                    { stage = BrokerStage.Selection; return null; }
+                    { stage = BrokerStage.SelectionRange; return null; }
                 }
             }
             if (start > end || end > text.Length ||
                 !BrokerWire.IsScalarBoundary(text, start) ||
                 !BrokerWire.IsScalarBoundary(text, end))
-            { stage = BrokerStage.Selection; return null; }
+            { stage = BrokerStage.SelectionRange; return null; }
             var id = element.GetRuntimeId();
             if (id == null || id.Length == 0 || id.Length > 64)
             { stage = BrokerStage.RuntimeId; return null; }
