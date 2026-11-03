@@ -25,7 +25,7 @@ namespace MacSwitcher.Windows.Runtime
                 LayoutMap.ConvertBidirectional("ghbdtn") != "привет") return 18;
             var manualSpan = WindowsSwitcherRuntime.LastWordSpan("one ghbdtn ");
             if (manualSpan == null || manualSpan.Start != 4 || manualSpan.End != 11 ||
-                manualSpan.Token != "ghbdtn" || manualSpan.OriginalRange != "ghbdtn " ||
+                manualSpan.WordText != "ghbdtn" || manualSpan.OriginalRange != "ghbdtn " ||
                 manualSpan.ReplacementRange("привет") != "привет " ||
                 "one ghbdtn ".Substring(manualSpan.Start, manualSpan.End - manualSpan.Start)
                     != manualSpan.OriginalRange) return 19;
@@ -43,7 +43,7 @@ namespace MacSwitcher.Windows.Runtime
             manualSpan = WindowsSwitcherRuntime.LastWordSpan("one ghbdtn! ");
             if (manualSpan == null || manualSpan.Start != 4 || manualSpan.End != 12 ||
                 manualSpan.OriginalRange != "ghbdtn! " ||
-                manualSpan.ReplacementRange(LayoutMap.ConvertBidirectional(manualSpan.Token))
+                manualSpan.ReplacementRange(LayoutMap.ConvertBidirectional(manualSpan.WordText))
                     != "привет! ") return 21;
             if (!WindowsSwitcherRuntime.PermitMutation(true, true, false, 4, 4, 10, 10) ||
                 WindowsSwitcherRuntime.PermitMutation(true, true, false, 5, 4, 10, 10) ||

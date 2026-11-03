@@ -721,10 +721,12 @@ namespace MacSwitcher.Windows.Automation
                 if (element == null)
                     return new BrokerResponse { Outcome = BrokerOutcome.Unsafe,
                         Phase = BrokerPhase.ValueBeforeMutation, Stage = BrokerStage.Element };
-                if (element.Current.IsPassword || !element.Current.IsEnabled)
+                if (element.Current.IsPassword)
                     return new BrokerResponse { Outcome = BrokerOutcome.Unsafe,
-                        Phase = BrokerPhase.ValueBeforeMutation,
-                        Stage = element.Current.IsPassword ? BrokerStage.Password : BrokerStage.ReadOnly };
+                        Phase = BrokerPhase.ValueBeforeMutation, Stage = BrokerStage.Password };
+                if (!element.Current.IsEnabled)
+                    return new BrokerResponse { Outcome = BrokerOutcome.Unsafe,
+                        Phase = BrokerPhase.ValueBeforeMutation, Stage = BrokerStage.ReadOnly };
                 if (element.Current.ProcessId != pid || !before.RuntimeId.SequenceEqual(element.GetRuntimeId()) ||
                     !focus.StillSame() || Win32.GetKeyboardLayout(tid) != expectedLayout ||
                     !NativeSafety.IsNormalDesktop() || !NativeSafety.IsEqualOrLowerIntegrity(pid))

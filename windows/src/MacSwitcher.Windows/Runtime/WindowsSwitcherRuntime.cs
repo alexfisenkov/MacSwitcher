@@ -49,11 +49,11 @@ namespace MacSwitcher.Windows.Runtime
     {
         internal int Start;
         internal int End;
-        internal string Token = "";
+        internal string WordText = "";
         internal string TrailingWhitespace = "";
-        internal string OriginalRange { get { return Token + TrailingWhitespace; } }
-        internal string ReplacementRange(string convertedToken)
-        { return convertedToken + TrailingWhitespace; }
+        internal string OriginalRange { get { return WordText + TrailingWhitespace; } }
+        internal string ReplacementRange(string convertedWord)
+        { return convertedWord + TrailingWhitespace; }
     }
 
     public sealed class WindowsSwitcherRuntime : IDisposable
@@ -735,7 +735,7 @@ namespace MacSwitcher.Windows.Runtime
             if (start == wordEnd || wordEnd - start > 192 || value.Length - start > 4096)
                 return null;
             return new ManualWordSpan { Start = start, End = value.Length,
-                Token = value.Substring(start, wordEnd - start),
+                WordText = value.Substring(start, wordEnd - start),
                 TrailingWhitespace = value.Substring(wordEnd) };
         }
 
@@ -863,12 +863,12 @@ namespace MacSwitcher.Windows.Runtime
             { Interlocked.Exchange(ref fixtureManualCode, 7); return; }
             var span = LastWordSpan(field.Value);
             if (span == null) { Interlocked.Exchange(ref fixtureManualCode, 7); return; }
-            var wordSource = ActualWordLanguage(span.Token, source);
-            var convertedToken = LayoutMap.ConvertBidirectional(span.Token);
-            if (convertedToken == span.Token) { Interlocked.Exchange(ref fixtureManualCode, 7); return; }
-            var replacement = span.ReplacementRange(convertedToken);
+            var wordSource = ActualWordLanguage(span.WordText, source);
+            var convertedWord = LayoutMap.ConvertBidirectional(span.WordText);
+            if (convertedWord == span.WordText) { Interlocked.Exchange(ref fixtureManualCode, 7); return; }
+            var replacement = span.ReplacementRange(convertedWord);
             var targetValue = field.Value.Substring(0, span.Start) + replacement;
-            var wordLanguage = ResultLanguage(span.Token, convertedToken, target);
+            var wordLanguage = ResultLanguage(span.WordText, convertedWord, target);
             if (field.NativeRangeWriter)
                 Interlocked.Exchange(ref fixtureManualCode,
                     TryNativeRangeEdit(focus, field, span.Start, span.End,
