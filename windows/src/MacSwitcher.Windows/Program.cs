@@ -128,6 +128,11 @@ namespace MacSwitcher.Windows
                 NativeError = 5, HResult = 12345, DiagnosticTextLength = 7,
                 DiagnosticSelectionStart = 2, DiagnosticSelectionEnd = 4,
                 DiagnosticNativeClassKind = 1,
+                FocusDiagnostics = new BrokerFocusDiagnostics
+                { UiAvailable = true, UiSameRuntimeId = true, UiHasKeyboardFocus = true,
+                  UiSameProcess = true, UiEditType = true, UiCredentialFlagClear = true,
+                  UiEnabled = true, NativeSameRoot = true,
+                  NativeSameProcess = true, NativeSameThread = true },
                 Field = new FieldSnapshot
                 {
                     Foreground = new IntPtr(11), Focus = new IntPtr(12),

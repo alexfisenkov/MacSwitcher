@@ -1,9 +1,11 @@
 using System.Diagnostics;
 using System.ComponentModel;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Windows.Forms;
+using System.Windows.Automation;
 using MacSwitcher.Windows.UI;
 
 // Own-process synthetic controls only. Output is a closed status, never field contents.
@@ -15,6 +17,7 @@ internal static class Program
     [DllImport("user32.dll")] private static extern IntPtr GetKeyboardLayout(uint thread);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int maxCount);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr SetProp(IntPtr hwnd, string name, IntPtr value);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr GetProp(IntPtr hwnd, string name);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr RemoveProp(IntPtr hwnd, string name);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr LoadKeyboardLayout(string id, uint flags);
     [DllImport("user32.dll")] private static extern int GetKeyboardLayoutList(int count, [Out] IntPtr[]? layouts);
@@ -89,6 +92,9 @@ internal static class Program
         public int HResult;
         public int DiagnosticTextLength, DiagnosticStart, DiagnosticEnd;
         public int DiagnosticNativeClassKind;
+        public bool UiAvailable, UiSameRuntimeId, UiHasKeyboardFocus;
+        public bool UiSameProcess, UiEditType, UiCredentialFlagClear, UiEnabled;
+        public bool NativeSameRoot, NativeSameProcess, NativeSameThread;
         public Field? Field;
     }
 
@@ -98,7 +104,10 @@ internal static class Program
         internal int CaptureOutcome = -1, CaptureStage = -1, CapturePhase = -1;
         internal int WriteOutcome = -1, WriteStage = -1, WritePhase = -1, WriteHResult;
         internal bool OwnWindowAtCapture, OwnWindowAtWrite, CanWrite, InitialTextMatched;
-        internal bool DomEventAck, DomValueAck;
+        internal bool DomEventAck, DomValueAck, DomActiveAck, DomDocumentFocused;
+        internal bool UiAvailable, UiSameRuntimeId, UiHasKeyboardFocus;
+        internal bool UiSameProcess, UiEditType, UiCredentialFlagClear, UiEnabled;
+        internal bool NativeSameRoot, NativeSameProcess, NativeSameThread;
 
         internal string Json()
         {
@@ -111,14 +120,26 @@ internal static class Program
                 ",\"canWrite\":" + (CanWrite ? "true" : "false") +
                 ",\"initialTextMatched\":" + (InitialTextMatched ? "true" : "false") +
                 ",\"domEventAck\":" + (DomEventAck ? "true" : "false") +
-                ",\"domValueAck\":" + (DomValueAck ? "true" : "false") + "}";
+                ",\"domValueAck\":" + (DomValueAck ? "true" : "false") +
+                ",\"domActiveAck\":" + (DomActiveAck ? "true" : "false") +
+                ",\"domDocumentFocused\":" + (DomDocumentFocused ? "true" : "false") +
+                ",\"uiAvailable\":" + (UiAvailable ? "true" : "false") +
+                ",\"uiSameRuntimeId\":" + (UiSameRuntimeId ? "true" : "false") +
+                ",\"uiHasKeyboardFocus\":" + (UiHasKeyboardFocus ? "true" : "false") +
+                ",\"uiSameProcess\":" + (UiSameProcess ? "true" : "false") +
+                ",\"uiEditType\":" + (UiEditType ? "true" : "false") +
+                ",\"uiCredentialFlagClear\":" + (UiCredentialFlagClear ? "true" : "false") +
+                ",\"uiEnabled\":" + (UiEnabled ? "true" : "false") +
+                ",\"nativeSameRoot\":" + (NativeSameRoot ? "true" : "false") +
+                ",\"nativeSameProcess\":" + (NativeSameProcess ? "true" : "false") +
+                ",\"nativeSameThread\":" + (NativeSameThread ? "true" : "false") + "}";
         }
     }
 
     private sealed class EdgeRuntimeReceipt
     {
         internal string Status = "NOT_RUN";
-        internal bool OwnWindow, DomEventAck, DomValueAck, Recovery;
+        internal bool OwnWindow, DomEventAck, DomValueAck, DomActiveAck, DomDocumentFocused, Recovery;
         internal string InitialLayout = "", FinalLayout = "";
         internal int Applied, FullOutcome = -1, FullPhase = -1;
         internal int FullBudgetMilliseconds = -1, FullRpcMilliseconds = -1;
@@ -134,7 +155,9 @@ internal static class Program
                 ",\"fullRpcMilliseconds\":" + FullRpcMilliseconds +
                 ",\"recovery\":" + (Recovery ? "true" : "false") +
                 ",\"domEventAck\":" + (DomEventAck ? "true" : "false") +
-                ",\"domValueAck\":" + (DomValueAck ? "true" : "false") + "}";
+                ",\"domValueAck\":" + (DomValueAck ? "true" : "false") +
+                ",\"domActiveAck\":" + (DomActiveAck ? "true" : "false") +
+                ",\"domDocumentFocused\":" + (DomDocumentFocused ? "true" : "false") + "}";
         }
     }
 
@@ -180,7 +203,9 @@ internal static class Program
                     frame.DiagnosticTextLength != 7 || frame.DiagnosticStart != 2 ||
                     frame.DiagnosticEnd != 4 || frame.DiagnosticNativeClassKind != 1 ||
                     frame.Field?.Text != "fixture" || frame.Field.Start != 2 || frame.Field.End != 4 ||
-                    !frame.Field.NativeRangeWriter)
+                    !frame.Field.NativeRangeWriter || !frame.UiAvailable ||
+                    !frame.UiSameRuntimeId || !frame.UiHasKeyboardFocus ||
+                    !frame.NativeSameRoot || !frame.NativeSameProcess || !frame.NativeSameThread)
                     return Report("FAIL", "broker_protocol_schema", 0);
             }
             catch { return Report("FAIL", "broker_protocol_parse", 0); }
@@ -906,6 +931,49 @@ internal static class Program
         return title.ToString().StartsWith(pageMarker + "-", StringComparison.Ordinal);
     }
 
+    private static bool ReadEdgeTitleState(IntPtr window, string pageMarker,
+        out bool eventAck, out bool valueAck, out bool activeAck, out bool documentFocused)
+    {
+        eventAck = valueAck = activeAck = documentFocused = false;
+        var title = new StringBuilder(256);
+        GetWindowText(window, title, title.Capacity);
+        var observed = title.ToString();
+        if (!observed.StartsWith(pageMarker + "-", StringComparison.Ordinal)) return false;
+        var suffix = observed.Substring(pageMarker.Length + 1);
+        eventAck = suffix.StartsWith("event-", StringComparison.Ordinal);
+        valueAck = suffix.Contains("-value-", StringComparison.Ordinal);
+        activeAck = suffix.Contains("-active", StringComparison.Ordinal);
+        documentFocused = suffix.EndsWith("-focused", StringComparison.Ordinal);
+        return true;
+    }
+
+    private static bool FocusOwnEdgeField(IntPtr window, uint pid, string pageMarker,
+        int windowMarker)
+    {
+        if (!OwnEdgeWindow(window, pid, pageMarker) ||
+            GetProp(window, "MacSwitcher.RuntimeBrowserFixture").ToInt64() != windowMarker)
+            return false;
+        var accessibleName = pageMarker + "-field";
+        var task = Task.Run(() =>
+        {
+            if (!OwnEdgeWindow(window, pid, pageMarker) ||
+                GetProp(window, "MacSwitcher.RuntimeBrowserFixture").ToInt64() != windowMarker)
+                return false;
+            var root = AutomationElement.FromHandle(window);
+            var field = root.FindFirst(TreeScope.Descendants,
+                new PropertyCondition(AutomationElement.NameProperty, accessibleName));
+            if (field == null || field.Current.IsPassword || !field.Current.IsEnabled ||
+                field.Current.ControlType != ControlType.Edit) return false;
+            field.SetFocus();
+            return field.Current.HasKeyboardFocus;
+        });
+        var until = Environment.TickCount64 + 3000;
+        while (!task.IsCompleted && Environment.TickCount64 < until)
+        { Application.DoEvents(); if (!task.IsCompleted) WaitForUiMessage(until); }
+        return task.IsCompletedSuccessfully && task.Result &&
+            OwnEdgeWindow(window, pid, pageMarker);
+    }
+
     private static string ProbeEdge(Broker broker, string executable, bool textarea,
         EdgeProbeReceipt receipt)
     {
@@ -915,15 +983,21 @@ internal static class Program
         var kind = textarea ? "textarea" : "input";
         var pageMarker = "msw-" + kind + "-" + Guid.NewGuid().ToString("N");
         File.WriteAllText(page, "<!doctype html><meta charset=\"utf-8\"><title>" +
-            pageMarker + "-noevent-other</title><" + kind + " id=\"target\"" +
+            pageMarker + "-noevent-other-inactive-blurred</title><" + kind +
+            " id=\"target\" aria-label=\"" + pageMarker + "-field\"" +
             (textarea ? ">ghbdtn</textarea>" : " value=\"ghbdtn\">") +
             "<script>const x=document.getElementById('target');let seen=false;" +
             "function update(){document.title='" + pageMarker +
-            "-'+(seen?'event':'noevent')+'-'+(x.value==='привет'?'value':'other')}" +
+            "-'+(seen?'event':'noevent')+'-'+(x.value==='привет'?'value':'other')+" +
+            "'-'+(document.activeElement===x?'active':'inactive')+'-'+" +
+            "(document.hasFocus()?'focused':'blurred')}" +
             "x.addEventListener('input',()=>{seen=true;update()});" +
-            "window.onload=()=>{x.focus();update()};setInterval(update,40)</script>", Encoding.UTF8);
+            "function focusTarget(){x.focus();x.setSelectionRange(x.value.length,x.value.length);update()}" +
+            "window.onload=focusTarget;window.addEventListener('focus',focusTarget);" +
+            "setInterval(update,40)</script>", Encoding.UTF8);
         var profile = Path.Combine(temporary, "profile");
         Process? edge = null;
+        IntPtr markedWindow = IntPtr.Zero;
         bool writeAttempted = false;
         string Finish(string status) { receipt.Status = status; return status; }
         try
@@ -949,6 +1023,24 @@ internal static class Program
                 WaitForUiMessage(until);
             }
             if (edgeWindow == IntPtr.Zero) return Finish("NOT_RUN");
+            var windowMarker = System.Security.Cryptography.RandomNumberGenerator.GetInt32(1, int.MaxValue);
+            if (SetProp(edgeWindow, "MacSwitcher.RuntimeBrowserFixture", new IntPtr(windowMarker)) == IntPtr.Zero)
+                return Finish("MARKER_UNAVAILABLE");
+            markedWindow = edgeWindow;
+            if (!FocusOwnEdgeField(edgeWindow, edgePid, pageMarker, windowMarker))
+                return Finish("FOCUS_NOT_READY");
+            until = Environment.TickCount64 + 3000;
+            while (Environment.TickCount64 < until)
+            {
+                Application.DoEvents();
+                bool eventAck, valueAck, activeAck, documentFocused;
+                if (!OwnEdgeWindow(edgeWindow, edgePid, pageMarker)) return Finish("FOCUS_DRIFT");
+                if (ReadEdgeTitleState(edgeWindow, pageMarker, out eventAck, out valueAck,
+                    out activeAck, out documentFocused) && activeAck && documentFocused)
+                { receipt.DomActiveAck = true; receipt.DomDocumentFocused = true; break; }
+                WaitForUiMessage(until);
+            }
+            if (!receipt.DomActiveAck) return Finish("FOCUS_NOT_READY");
             Result? captured = null;
             for (int attempt = 0; attempt < 10; attempt++)
             {
@@ -967,30 +1059,45 @@ internal static class Program
                 !receipt.InitialTextMatched) return Finish("UNSUPPORTED");
             receipt.OwnWindowAtWrite = OwnEdgeWindow(edgeWindow, edgePid, pageMarker);
             if (!receipt.OwnWindowAtWrite) return Finish("FOCUS_DRIFT");
+            bool beforeEvent, beforeValue, beforeActive, beforeFocused;
+            if (!ReadEdgeTitleState(edgeWindow, pageMarker, out beforeEvent, out beforeValue,
+                out beforeActive, out beforeFocused) || !beforeActive || !beforeFocused)
+                return Finish("FOCUS_NOT_READY");
             writeAttempted = true;
             var changed = RequireBroker(() => broker.Call(2, captured.Field, "привет"));
             receipt.WriteOutcome = changed.Outcome;
             receipt.WriteStage = changed.Stage;
             receipt.WritePhase = changed.Phase;
             receipt.WriteHResult = changed.HResult;
+            receipt.UiAvailable = changed.UiAvailable;
+            receipt.UiSameRuntimeId = changed.UiSameRuntimeId;
+            receipt.UiHasKeyboardFocus = changed.UiHasKeyboardFocus;
+            receipt.UiSameProcess = changed.UiSameProcess;
+            receipt.UiEditType = changed.UiEditType;
+            receipt.UiCredentialFlagClear = changed.UiCredentialFlagClear;
+            receipt.UiEnabled = changed.UiEnabled;
+            receipt.NativeSameRoot = changed.NativeSameRoot;
+            receipt.NativeSameProcess = changed.NativeSameProcess;
+            receipt.NativeSameThread = changed.NativeSameThread;
             until = Environment.TickCount64 + 1500;
             while (Environment.TickCount64 < until)
             {
                 Application.DoEvents();
-                var title = new StringBuilder(256);
-                GetWindowText(edgeWindow, title, title.Capacity);
-                var observed = title.ToString();
-                if (!observed.StartsWith(pageMarker + "-", StringComparison.Ordinal))
+                bool eventAck, valueAck, activeAck, documentFocused;
+                if (!ReadEdgeTitleState(edgeWindow, pageMarker, out eventAck, out valueAck,
+                    out activeAck, out documentFocused))
                     return Finish("FOCUS_DRIFT");
-                var suffix = observed.Substring(pageMarker.Length + 1);
-                receipt.DomEventAck = suffix.StartsWith("event-", StringComparison.Ordinal);
-                receipt.DomValueAck = suffix.Contains("-value", StringComparison.Ordinal);
+                receipt.DomEventAck = eventAck;
+                receipt.DomValueAck = valueAck;
+                receipt.DomActiveAck = activeAck;
+                receipt.DomDocumentFocused = documentFocused;
                 if (receipt.DomEventAck && receipt.DomValueAck) break;
                 WaitForUiMessage(until);
             }
             if (changed.Outcome == 2) return Finish("WRITE_UNKNOWN");
             if (changed.Outcome == 0) return Finish("WRITE_REFUSED");
-            if (changed.Field?.Text != "привет" || !receipt.DomEventAck || !receipt.DomValueAck)
+            if (changed.Field?.Text != "привет" || !receipt.DomEventAck ||
+                !receipt.DomValueAck || !receipt.DomActiveAck || !receipt.DomDocumentFocused)
                 return Finish("SEMANTIC_GAP");
             return Finish("PASS");
         }
@@ -998,6 +1105,8 @@ internal static class Program
         catch { return Finish(writeAttempted ? "WRITE_EXCEPTION" : "NOT_RUN"); }
         finally
         {
+            if (markedWindow != IntPtr.Zero)
+            { try { RemoveProp(markedWindow, "MacSwitcher.RuntimeBrowserFixture"); } catch { } }
             try { if (edge != null && !edge.HasExited) edge.Kill(true); } catch { }
             edge?.Dispose();
             try { Directory.Delete(temporary, true); } catch { }
@@ -1013,13 +1122,17 @@ internal static class Program
         var kind = textarea ? "textarea" : "input";
         var pageMarker = "msw-" + kind + "-" + Guid.NewGuid().ToString("N");
         File.WriteAllText(page, "<!doctype html><meta charset=\"utf-8\"><title>" +
-            pageMarker + "-noevent-other</title><" + kind + " id=\"target\"" +
+            pageMarker + "-noevent-other-inactive-blurred</title><" + kind +
+            " id=\"target\" aria-label=\"" + pageMarker + "-field\"" +
             (textarea ? ">ghbdtn</textarea>" : " value=\"ghbdtn\">") +
             "<script>const x=document.getElementById('target');let seen=false;" +
             "function update(){document.title='" + pageMarker +
-            "-'+(seen?'event':'noevent')+'-'+(x.value==='привет'?'value':'other')}" +
+            "-'+(seen?'event':'noevent')+'-'+(x.value==='привет'?'value':'other')+" +
+            "'-'+(document.activeElement===x?'active':'inactive')+'-'+" +
+            "(document.hasFocus()?'focused':'blurred')}" +
             "x.addEventListener('input',()=>{seen=true;update()});" +
-            "window.onload=()=>{x.focus();x.setSelectionRange(x.value.length,x.value.length);update()};" +
+            "function focusTarget(){x.focus();x.setSelectionRange(x.value.length,x.value.length);update()}" +
+            "window.onload=focusTarget;window.addEventListener('focus',focusTarget);" +
             "setInterval(update,40)</script>", Encoding.UTF8);
         var profile = Path.Combine(temporary, "profile");
         var data = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(appExecutable))!, "data");
@@ -1055,6 +1168,20 @@ internal static class Program
             markedWindow = edgeWindow;
             receipt.OwnWindow = OwnEdgeWindow(edgeWindow, edgePid, pageMarker);
             if (!receipt.OwnWindow) return Finish("FOCUS_DRIFT");
+            if (!FocusOwnEdgeField(edgeWindow, edgePid, pageMarker, marker))
+                return Finish("FOCUS_NOT_READY");
+            until = Environment.TickCount64 + 3000;
+            while (Environment.TickCount64 < until)
+            {
+                Application.DoEvents();
+                bool eventAck, valueAck, activeAck, documentFocused;
+                if (!OwnEdgeWindow(edgeWindow, edgePid, pageMarker)) return Finish("FOCUS_DRIFT");
+                if (ReadEdgeTitleState(edgeWindow, pageMarker, out eventAck, out valueAck,
+                    out activeAck, out documentFocused) && activeAck && documentFocused)
+                { receipt.DomActiveAck = true; receipt.DomDocumentFocused = true; break; }
+                WaitForUiMessage(until);
+            }
+            if (!receipt.DomActiveAck) return Finish("FOCUS_NOT_READY");
             using var session = new FixtureSession(appExecutable, data, marker, edgePid, pageMarker);
             if (!session.Ready) return Finish("CLIENT_UNAVAILABLE");
             try
@@ -1066,6 +1193,10 @@ internal static class Program
             }
             catch { return Finish("UNSUPPORTED"); } // No text mutation has been attempted.
             if (!OwnEdgeWindow(edgeWindow, edgePid, pageMarker)) return Finish("FOCUS_DRIFT");
+            bool beforeEvent, beforeValue, beforeActive, beforeFocused;
+            if (!ReadEdgeTitleState(edgeWindow, pageMarker, out beforeEvent, out beforeValue,
+                out beforeActive, out beforeFocused) || !beforeActive || !beforeFocused)
+                return Finish("FOCUS_NOT_READY");
             var first = session.Command("TAP_L");
             if (first.Layout != "ru") return Finish("SOURCE_REFUSED");
             session.Command("TAP_R");
@@ -1081,14 +1212,14 @@ internal static class Program
             while (Environment.TickCount64 < until)
             {
                 Application.DoEvents();
-                var title = new StringBuilder(256);
-                GetWindowText(edgeWindow, title, title.Capacity);
-                var observed = title.ToString();
-                if (!observed.StartsWith(pageMarker + "-", StringComparison.Ordinal))
+                bool eventAck, valueAck, activeAck, documentFocused;
+                if (!ReadEdgeTitleState(edgeWindow, pageMarker, out eventAck, out valueAck,
+                    out activeAck, out documentFocused))
                     return Finish("FOCUS_DRIFT");
-                var suffix = observed.Substring(pageMarker.Length + 1);
-                receipt.DomEventAck = suffix.StartsWith("event-", StringComparison.Ordinal);
-                receipt.DomValueAck = suffix.Contains("-value", StringComparison.Ordinal);
+                receipt.DomEventAck = eventAck;
+                receipt.DomValueAck = valueAck;
+                receipt.DomActiveAck = activeAck;
+                receipt.DomDocumentFocused = documentFocused;
                 if (receipt.DomEventAck && receipt.DomValueAck) break;
                 WaitForUiMessage(until);
             }
@@ -1101,7 +1232,8 @@ internal static class Program
                 result.FullRpcMilliseconds > result.FullBudgetMilliseconds)
                 return Finish("RUNTIME_BUDGET_FAIL");
             if (result.Layout != "ru") return Finish("SOURCE_MISMATCH");
-            if (!receipt.DomEventAck || !receipt.DomValueAck)
+            if (!receipt.DomEventAck || !receipt.DomValueAck || !receipt.DomActiveAck ||
+                !receipt.DomDocumentFocused)
                 return Finish("RUNTIME_SEMANTIC_GAP");
             return Finish("PASS");
         }
@@ -1169,6 +1301,16 @@ internal static class Program
                 DiagnosticStart = response.ReadInt32(),
                 DiagnosticEnd = response.ReadInt32(),
                 DiagnosticNativeClassKind = response.ReadInt32(),
+                UiAvailable = response.ReadBoolean(),
+                UiSameRuntimeId = response.ReadBoolean(),
+                UiHasKeyboardFocus = response.ReadBoolean(),
+                UiSameProcess = response.ReadBoolean(),
+                UiEditType = response.ReadBoolean(),
+                UiCredentialFlagClear = response.ReadBoolean(),
+                UiEnabled = response.ReadBoolean(),
+                NativeSameRoot = response.ReadBoolean(),
+                NativeSameProcess = response.ReadBoolean(),
+                NativeSameThread = response.ReadBoolean(),
                 Field = ReadField(response) };
             if (response.BaseStream.Position != response.BaseStream.Length) throw new InvalidDataException();
             return result;

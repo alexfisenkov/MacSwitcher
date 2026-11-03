@@ -28,6 +28,7 @@ namespace MacSwitcher.Windows.Native
         internal const int ES_PASSWORD = 0x0020;
         internal const int ES_READONLY = 0x0800;
         internal const int WS_DISABLED = 0x08000000;
+        internal const uint GA_ROOT = 2;
         internal const int LLKHF_INJECTED = 0x10;
         internal const int LLMHF_INJECTED = 0x01;
         internal const int VK_LSHIFT = 0xA0;
@@ -93,7 +94,8 @@ namespace MacSwitcher.Windows.Native
         [DllImport("kernel32.dll")] internal static extern ulong GetTickCount64();
         [DllImport("user32.dll")] internal static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] internal static extern bool IsWindow(IntPtr hwnd);
-        [DllImport("user32.dll")] internal static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+        [DllImport("user32.dll")] internal static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
+        [DllImport("user32.dll", SetLastError = true)] internal static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
         [DllImport("user32.dll", SetLastError = true)] internal static extern bool GetGUIThreadInfo(uint threadId, ref GUITHREADINFO info);
         [DllImport("user32.dll")] internal static extern IntPtr GetKeyboardLayout(uint threadId);
         [DllImport("user32.dll")] internal static extern int GetKeyboardLayoutList(int count, [Out] IntPtr[]? layouts);

@@ -76,7 +76,15 @@ namespace MacSwitcher.Windows.Automation
         internal int DiagnosticSelectionStart = -1;
         internal int DiagnosticSelectionEnd = -1;
         internal int DiagnosticNativeClassKind = -1; // 0 other, 1 Edit, 2 RichEdit.
+        internal BrokerFocusDiagnostics FocusDiagnostics = new BrokerFocusDiagnostics();
         internal FieldSnapshot? Field;
+    }
+
+    internal sealed class BrokerFocusDiagnostics
+    {
+        internal bool UiAvailable, UiSameRuntimeId, UiHasKeyboardFocus;
+        internal bool UiSameProcess, UiEditType, UiCredentialFlagClear, UiEnabled;
+        internal bool NativeSameRoot, NativeSameProcess, NativeSameThread;
     }
 
     internal static class BrokerWire
@@ -158,6 +166,17 @@ namespace MacSwitcher.Windows.Automation
                 payload.Write(result.DiagnosticSelectionStart);
                 payload.Write(result.DiagnosticSelectionEnd);
                 payload.Write(result.DiagnosticNativeClassKind);
+                var focus = result.FocusDiagnostics;
+                payload.Write(focus.UiAvailable);
+                payload.Write(focus.UiSameRuntimeId);
+                payload.Write(focus.UiHasKeyboardFocus);
+                payload.Write(focus.UiSameProcess);
+                payload.Write(focus.UiEditType);
+                payload.Write(focus.UiCredentialFlagClear);
+                payload.Write(focus.UiEnabled);
+                payload.Write(focus.NativeSameRoot);
+                payload.Write(focus.NativeSameProcess);
+                payload.Write(focus.NativeSameThread);
                 WriteField(payload, result.Field);
             });
         }
@@ -343,6 +362,16 @@ namespace MacSwitcher.Windows.Automation
                         response.DiagnosticSelectionStart = responseFrame.ReadInt32();
                         response.DiagnosticSelectionEnd = responseFrame.ReadInt32();
                         response.DiagnosticNativeClassKind = responseFrame.ReadInt32();
+                        response.FocusDiagnostics.UiAvailable = responseFrame.ReadBoolean();
+                        response.FocusDiagnostics.UiSameRuntimeId = responseFrame.ReadBoolean();
+                        response.FocusDiagnostics.UiHasKeyboardFocus = responseFrame.ReadBoolean();
+                        response.FocusDiagnostics.UiSameProcess = responseFrame.ReadBoolean();
+                        response.FocusDiagnostics.UiEditType = responseFrame.ReadBoolean();
+                        response.FocusDiagnostics.UiCredentialFlagClear = responseFrame.ReadBoolean();
+                        response.FocusDiagnostics.UiEnabled = responseFrame.ReadBoolean();
+                        response.FocusDiagnostics.NativeSameRoot = responseFrame.ReadBoolean();
+                        response.FocusDiagnostics.NativeSameProcess = responseFrame.ReadBoolean();
+                        response.FocusDiagnostics.NativeSameThread = responseFrame.ReadBoolean();
                         response.Field = BrokerWire.ReadField(responseFrame);
                         if (responseFrame.BaseStream.Position != responseFrame.BaseStream.Length)
                             throw new InvalidDataException("Unexpected response bytes.");
@@ -882,6 +911,7 @@ namespace MacSwitcher.Windows.Automation
             BrokerStage lastMismatchStage = BrokerStage.ValueTextMismatch;
             int lastNativeError = 0, lastHResult = 0;
             bool caretIssued = false;
+            var focusDiagnostics = new BrokerFocusDiagnostics();
             while ((long)Win32.GetTickCount64() < deadline)
             {
                 FieldSnapshot? after;
@@ -946,7 +976,12 @@ namespace MacSwitcher.Windows.Automation
                     stage == BrokerStage.ElementNativeHwndMismatch ||
                     stage == BrokerStage.ControlTypeUnsupported ||
                     stage == BrokerStage.ElementDisabled)
+                {
+                    if (stage == BrokerStage.FocusHwndChanged &&
+                        (long)Win32.GetTickCount64() < deadline)
+                        focusDiagnostics = DiagnoseFocusDrift(before);
                     break;
+                }
                 var remaining = deadline - (long)Win32.GetTickCount64();
                 if (remaining <= 0) break;
                 Thread.Sleep((int)Math.Min(5, remaining));
@@ -956,7 +991,34 @@ namespace MacSwitcher.Windows.Automation
                     lastObservation == null ? BrokerPhase.ValueReadback : BrokerPhase.ValueFinalAck,
                 Stage = lastObservation == null ? lastStage : lastMismatchStage,
                 NativeError = lastNativeError, HResult = lastHResult,
-                Field = lastObservation };
+                Field = lastObservation, FocusDiagnostics = focusDiagnostics };
+        }
+
+        private static BrokerFocusDiagnostics DiagnoseFocusDrift(FieldSnapshot before)
+        {
+            var result = new BrokerFocusDiagnostics();
+            var native = NativeFocusSnapshot.Capture();
+            if (native != null)
+            {
+                result.NativeSameRoot = Win32.GetAncestor(native.Focus, Win32.GA_ROOT) ==
+                    before.Foreground;
+                result.NativeSameProcess = native.ProcessId == before.ProcessId;
+                result.NativeSameThread = native.ThreadId == before.ThreadId;
+            }
+            try
+            {
+                var element = AutomationElement.FocusedElement;
+                if (element == null) return result;
+                result.UiAvailable = true;
+                result.UiCredentialFlagClear = !element.Current.IsPassword;
+                result.UiEnabled = element.Current.IsEnabled;
+                result.UiSameProcess = element.Current.ProcessId == before.ProcessId;
+                result.UiEditType = element.Current.ControlType == ControlType.Edit;
+                result.UiHasKeyboardFocus = element.Current.HasKeyboardFocus;
+                result.UiSameRuntimeId = before.RuntimeId.SequenceEqual(element.GetRuntimeId());
+            }
+            catch { /* Diagnostic properties are never a write-authority fallback. */ }
+            return result;
         }
 
         private static bool TryNativeIdentity(FieldSnapshot expected, out BrokerStage stage)
