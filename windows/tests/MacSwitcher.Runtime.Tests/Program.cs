@@ -556,9 +556,12 @@ internal static class Program
             if (plain.Text != "прив" || result.Applied < 9) return "FAIL";
             checks++;
 
-            integrationProbe = "auto_after_verified_clear";
+            integrationProbe = "auto_clear_source";
+            if (LoadKeyboardLayout("00000409", 1) == IntPtr.Zero) return "FAIL";
             plain.Text = ""; plain.SelectionStart = 0;
             session.Command("CACHE");
+            if (session.Command("STATE").Layout != "en") return "FAIL";
+            integrationProbe = "auto_after_verified_clear";
             foreach (var letter in "ghbd")
             {
                 session.Command("KEY_D"); plain.AppendText(letter.ToString());
