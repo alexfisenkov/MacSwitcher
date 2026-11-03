@@ -122,7 +122,7 @@ namespace MacSwitcher.Windows
             {
                 Outcome = BrokerOutcome.Success, Stage = BrokerStage.SelectionRange,
                 Phase = BrokerPhase.NativeFinalAck,
-                NativeError = 5, DiagnosticTextLength = 7,
+                NativeError = 5, HResult = 12345, DiagnosticTextLength = 7,
                 DiagnosticSelectionStart = 2, DiagnosticSelectionEnd = 4,
                 DiagnosticNativeClassKind = 1,
                 Field = new FieldSnapshot

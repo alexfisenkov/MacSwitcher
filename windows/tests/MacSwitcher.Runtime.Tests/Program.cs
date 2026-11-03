@@ -25,6 +25,8 @@ internal static class Program
     private const uint MWMO_INPUTAVAILABLE = 0x0004;
     private static string edgeInput = "NOT_RUN";
     private static string edgeTextarea = "NOT_RUN";
+    private static readonly EdgeProbeReceipt edgeInputReceipt = new EdgeProbeReceipt();
+    private static readonly EdgeProbeReceipt edgeTextareaReceipt = new EdgeProbeReceipt();
     private static string hookStatus = "NOT_RUN";
     private static string integrationStatus = "NOT_RUN";
     private static string integrationProbe = "NOT_RUN";
@@ -44,6 +46,7 @@ internal static class Program
     private static int brokerOutcome = -1, brokerStage = -1;
     private static int brokerPhase = -1;
     private static int brokerNativeCode;
+    private static int brokerHResult;
     private static bool fixtureForeground, fixtureFocus;
     private static int brokerTextLength = -1, brokerSelectionStart = -1, brokerSelectionEnd = -1;
     private static int brokerNativeClassKind = -1;
@@ -74,9 +77,33 @@ internal static class Program
         public byte Stage;
         public byte Phase;
         public int NativeError;
+        public int HResult;
         public int DiagnosticTextLength, DiagnosticStart, DiagnosticEnd;
         public int DiagnosticNativeClassKind;
         public Field? Field;
+    }
+
+    private sealed class EdgeProbeReceipt
+    {
+        internal string Status = "NOT_RUN";
+        internal int CaptureOutcome = -1, CaptureStage = -1, CapturePhase = -1;
+        internal int WriteOutcome = -1, WriteStage = -1, WritePhase = -1, WriteHResult;
+        internal bool OwnWindowAtCapture, OwnWindowAtWrite, CanWrite, InitialTextMatched;
+        internal bool DomEventAck, DomValueAck;
+
+        internal string Json()
+        {
+            return "{\"status\":\"" + Status + "\",\"captureOutcome\":" + CaptureOutcome +
+                ",\"captureStage\":" + CaptureStage + ",\"capturePhase\":" + CapturePhase +
+                ",\"writeOutcome\":" + WriteOutcome + ",\"writeStage\":" + WriteStage +
+                ",\"writePhase\":" + WritePhase + ",\"writeHResult\":" + WriteHResult +
+                ",\"ownWindowAtCapture\":" + (OwnWindowAtCapture ? "true" : "false") +
+                ",\"ownWindowAtWrite\":" + (OwnWindowAtWrite ? "true" : "false") +
+                ",\"canWrite\":" + (CanWrite ? "true" : "false") +
+                ",\"initialTextMatched\":" + (InitialTextMatched ? "true" : "false") +
+                ",\"domEventAck\":" + (DomEventAck ? "true" : "false") +
+                ",\"domValueAck\":" + (DomValueAck ? "true" : "false") + "}";
+        }
     }
 
     private sealed class SelectionDriftTextBox : TextBox
@@ -117,7 +144,7 @@ internal static class Program
                 using var input = new BinaryReader(protocol.StandardOutput.BaseStream, Encoding.UTF8);
                 var frame = Broker.ReadResponse(input);
                 if (frame.Outcome != 1 || frame.Stage != 15 || frame.Phase != 9 ||
-                    frame.NativeError != 5 ||
+                    frame.NativeError != 5 || frame.HResult != 12345 ||
                     frame.DiagnosticTextLength != 7 || frame.DiagnosticStart != 2 ||
                     frame.DiagnosticEnd != 4 || frame.DiagnosticNativeClassKind != 1 ||
                     frame.Field?.Text != "fixture" || frame.Field.Start != 2 || frame.Field.End != 4 ||
@@ -133,13 +160,15 @@ internal static class Program
                 return Report("FAIL", "runtime_pure_state", 0);
         }
         Application.EnableVisualStyles();
-        using var form = new Form { Width = 400, Height = 280, Text = "MacSwitcher synthetic fixture" };
+        using var form = new Form { Width = 400, Height = 360, Text = "MacSwitcher synthetic fixture" };
         using var plain = new TextBox { Left = 10, Top = 10, Width = 320, Text = "ghbdtn" };
         using var password = new TextBox { Left = 10, Top = 45, Width = 320, Text = "synthetic-secret", UseSystemPasswordChar = true };
         using var readOnly = new TextBox { Left = 10, Top = 80, Width = 320, Text = "readonly", ReadOnly = true };
         using var rich = new RichTextBox { Left = 10, Top = 115, Width = 320, Height = 55, Text = "rich" };
         using var drift = new SelectionDriftTextBox { Left = 10, Top = 180, Width = 320, Text = "ghbdtn" };
-        form.Controls.AddRange([plain, password, readOnly, rich, drift]);
+        using var multiline = new TextBox { Left = 10, Top = 215, Width = 320, Height = 80,
+            Multiline = true, AcceptsReturn = true, AcceptsTab = true };
+        form.Controls.AddRange([plain, password, readOnly, rich, drift, multiline]);
         form.Show();
         form.Activate();
         plain.Focus();
@@ -194,6 +223,7 @@ internal static class Program
                 brokerStage = captured.Stage;
                 brokerPhase = captured.Phase;
                 brokerNativeCode = captured.NativeError;
+                brokerHResult = captured.HResult;
                 brokerTextLength = captured.DiagnosticTextLength;
                 brokerSelectionStart = captured.DiagnosticStart;
                 brokerSelectionEnd = captured.DiagnosticEnd;
@@ -259,19 +289,20 @@ internal static class Program
                 return Report("FAIL", "focus_drift_rejection", checks);
             checks++;
             if (!Focus(form, plain)) return Report("FAIL", "integration_fixture_focus", checks);
-            integrationStatus = RunRuntimeIntegration(form, plain, password, path, out var integrationChecks);
+            integrationStatus = RunRuntimeIntegration(form, plain, password, multiline,
+                path, out var integrationChecks);
             checks += integrationChecks;
             if (integrationStatus == "NOT_RUN") return Report("NOT_RUN", "runtime_integration_precondition", checks);
             if (integrationStatus != "PASS") return Report("FAIL", "runtime_integration", checks);
             var edge = FindEdge();
             if (edge != null)
             {
-                edgeInput = ProbeEdge(broker, edge, false);
-                if (edgeInput == "RPC_TIMEOUT") return Report("FAIL", "edge_rpc_timeout", checks);
-                edgeTextarea = ProbeEdge(broker, edge, true);
-                if (edgeTextarea == "RPC_TIMEOUT") return Report("FAIL", "edge_rpc_timeout", checks);
-                if (edgeInput == "SEMANTIC_GAP" || edgeTextarea == "SEMANTIC_GAP")
-                    return Report("FAIL", "edge_dom_input_event", checks);
+                edgeInput = ProbeEdge(broker, edge, false, edgeInputReceipt);
+                if (edgeInput != "PASS" && edgeInput != "UNSUPPORTED")
+                    return Report("FAIL", "edge_input_probe", checks);
+                edgeTextarea = ProbeEdge(broker, edge, true, edgeTextareaReceipt);
+                if (edgeTextarea != "PASS" && edgeTextarea != "UNSUPPORTED")
+                    return Report("FAIL", "edge_textarea_probe", checks);
                 if (edgeInput == "PASS") checks++;
                 if (edgeTextarea == "PASS") checks++;
             }
@@ -338,6 +369,7 @@ internal static class Program
         brokerOutcome = response.Outcome;
         brokerStage = response.Stage;
         brokerNativeCode = response.NativeError;
+        brokerHResult = response.HResult;
         return response;
     }
 
@@ -369,6 +401,7 @@ internal static class Program
             ",\"brokerStage\":" + brokerStage +
             ",\"brokerPhase\":" + brokerPhase +
             ",\"brokerNativeCode\":" + brokerNativeCode +
+            ",\"brokerHResult\":" + brokerHResult +
             ",\"fixtureForeground\":" + (fixtureForeground ? "true" : "false") +
             ",\"fixtureFocus\":" + (fixtureFocus ? "true" : "false") +
             ",\"brokerTextLength\":" + brokerTextLength +
@@ -378,7 +411,9 @@ internal static class Program
             ",\"brokerSameFixturePid\":" + (brokerSameFixturePid ? "true" : "false") +
             ",\"brokerFocusMatchesPlain\":" + (brokerFocusMatchesPlain ? "true" : "false") +
             ",\"edgeInput\":\"" + edgeInput +
-            "\",\"edgeTextarea\":\"" + edgeTextarea + "\"}");
+            "\",\"edgeTextarea\":\"" + edgeTextarea +
+            "\",\"edgeInputReceipt\":" + edgeInputReceipt.Json() +
+            ",\"edgeTextareaReceipt\":" + edgeTextareaReceipt.Json() + "}");
         return status == "PASS" ? 0 : 1;
     }
 
@@ -392,6 +427,7 @@ internal static class Program
     }
 
     private static string RunRuntimeIntegration(Form form, TextBox plain, TextBox password,
+        TextBox multiline,
         string executable, out int checks)
     {
         checks = 0;
@@ -543,7 +579,89 @@ internal static class Program
             if (plain.Text != "ghbdtn туче" || result.Applied < 8) return "FAIL";
             checks++;
 
+            integrationProbe = "manual_trailing_space";
+            LoadKeyboardLayout("00000409", 1);
+            plain.Text = "one ghbdtn "; plain.SelectionStart = plain.TextLength;
+            session.Command("CACHE"); session.Command("TAP_L"); session.Command("TAP_R");
+            result = session.Command("WAIT");
+            if (plain.Text != "one привет " || plain.SelectionStart != plain.TextLength ||
+                result.Layout != "ru" || result.Applied < 9) return "FAIL";
+            checks++;
+            integrationProbe = "manual_trailing_space_undo";
+            session.Command("TAP_R"); session.Command("TAP_L");
+            result = session.Command("WAIT");
+            if (plain.Text != "one ghbdtn " || plain.SelectionStart != plain.TextLength ||
+                result.Layout != "en" || result.Undone < 4) return "FAIL";
+            checks++;
+            integrationProbe = "manual_trailing_space_redo";
+            session.Command("TAP_L"); session.Command("TAP_R");
+            result = session.Command("WAIT");
+            if (plain.Text != "one привет " || plain.SelectionStart != plain.TextLength ||
+                result.Layout != "ru" || result.Applied < 10) return "FAIL";
+            checks++;
+
+            integrationProbe = "manual_punctuation_space";
+            LoadKeyboardLayout("00000409", 1);
+            plain.Text = "one ghbdtn! "; plain.SelectionStart = plain.TextLength;
+            session.Command("CACHE"); session.Command("TAP_L"); session.Command("TAP_R");
+            result = session.Command("WAIT");
+            if (plain.Text != "one привет! " || plain.SelectionStart != plain.TextLength ||
+                result.Layout != "ru" || result.Applied < 11) return "FAIL";
+            checks++;
+            integrationProbe = "manual_punctuation_space_undo";
+            session.Command("TAP_R"); session.Command("TAP_L");
+            result = session.Command("WAIT");
+            if (plain.Text != "one ghbdtn! " || plain.SelectionStart != plain.TextLength ||
+                result.Layout != "en" || result.Undone < 5) return "FAIL";
+            checks++;
+            integrationProbe = "manual_punctuation_space_redo";
+            session.Command("TAP_L"); session.Command("TAP_R");
+            result = session.Command("WAIT");
+            if (plain.Text != "one привет! " || plain.SelectionStart != plain.TextLength ||
+                result.Layout != "ru" || result.Applied < 12) return "FAIL";
+            checks++;
+
+            integrationProbe = "manual_multiline_crlf";
+            LoadKeyboardLayout("00000409", 1);
+            if (!Focus(form, multiline)) return "FAIL";
+            multiline.Text = "one ghbdtn\r\n";
+            if (multiline.Text != "one ghbdtn\r\n") return "FAIL";
+            multiline.SelectionStart = multiline.TextLength;
+            session.Command("CACHE"); session.Command("TAP_L"); session.Command("TAP_R");
+            result = session.Command("WAIT");
+            if (multiline.Text != "one привет\r\n" ||
+                multiline.SelectionStart != multiline.TextLength ||
+                result.Layout != "ru" || result.Applied < 13) return "FAIL";
+            checks++;
+            integrationProbe = "manual_multiline_crlf_undo";
+            session.Command("TAP_R"); session.Command("TAP_L");
+            result = session.Command("WAIT");
+            if (multiline.Text != "one ghbdtn\r\n" ||
+                multiline.SelectionStart != multiline.TextLength ||
+                result.Layout != "en" || result.Undone < 6) return "FAIL";
+            checks++;
+
+            integrationProbe = "manual_multiline_tab";
+            LoadKeyboardLayout("00000409", 1);
+            multiline.Text = "one ghbdtn\t";
+            if (multiline.Text != "one ghbdtn\t") return "FAIL";
+            multiline.SelectionStart = multiline.TextLength;
+            session.Command("CACHE"); session.Command("TAP_L"); session.Command("TAP_R");
+            result = session.Command("WAIT");
+            if (multiline.Text != "one привет\t" ||
+                multiline.SelectionStart != multiline.TextLength ||
+                result.Layout != "ru" || result.Applied < 14) return "FAIL";
+            checks++;
+            integrationProbe = "manual_multiline_tab_undo";
+            session.Command("TAP_R"); session.Command("TAP_L");
+            result = session.Command("WAIT");
+            if (multiline.Text != "one ghbdtn\t" ||
+                multiline.SelectionStart != multiline.TextLength ||
+                result.Layout != "en" || result.Undone < 7) return "FAIL";
+            checks++;
+
             integrationProbe = "auto_early";
+            if (!Focus(form, plain)) return "FAIL";
             LoadKeyboardLayout("00000409", 1);
             plain.Text = ""; plain.SelectionStart = 0;
             session.Command("AUTO_ON"); session.Command("CACHE");
@@ -553,7 +671,7 @@ internal static class Program
                 session.Command("KEY_U");
             }
             result = session.Command("WAIT");
-            if (plain.Text != "прив" || result.Applied < 9) return "FAIL";
+            if (plain.Text != "прив" || result.Applied < 15) return "FAIL";
             checks++;
 
             integrationProbe = "auto_clear_source";
@@ -568,7 +686,7 @@ internal static class Program
                 session.Command("KEY_U");
             }
             result = session.Command("WAIT");
-            if (plain.Text != "прив" || result.Applied < 10) return "FAIL";
+            if (plain.Text != "прив" || result.Applied < 16) return "FAIL";
             checks++;
 
             integrationProbe = "auto_fast_burst";
@@ -582,7 +700,7 @@ internal static class Program
                 session.Command(space ? "SPACE_U" : "KEY_U");
             }
             result = session.Command("WAIT");
-            if (plain.Text != "как " || result.Applied < 11) return "FAIL";
+            if (plain.Text != "как " || result.Applied < 17) return "FAIL";
             checks++;
 
             integrationProbe = "focus_drift";
@@ -677,26 +795,52 @@ internal static class Program
         }
     }
 
-    private static string ProbeEdge(Broker broker, string executable, bool textarea)
+    private static bool OwnEdgeWindow(IntPtr window, uint pid, string token)
+    {
+        if (window == IntPtr.Zero || GetForegroundWindow() != window) return false;
+        uint currentPid;
+        GetWindowThreadProcessId(window, out currentPid);
+        if (currentPid != pid) return false;
+        try
+        {
+            if (!Process.GetProcessById((int)pid).ProcessName.Equals("msedge",
+                StringComparison.OrdinalIgnoreCase)) return false;
+        }
+        catch { return false; }
+        var title = new StringBuilder(256);
+        GetWindowText(window, title, title.Capacity);
+        return title.ToString().StartsWith(token + "-", StringComparison.Ordinal);
+    }
+
+    private static string ProbeEdge(Broker broker, string executable, bool textarea,
+        EdgeProbeReceipt receipt)
     {
         var temporary = Path.Combine(Path.GetTempPath(), "MacSwitcher-EdgeFixture-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(temporary);
         var page = Path.Combine(temporary, "fixture.html");
         var kind = textarea ? "textarea" : "input";
-        File.WriteAllText(page, "<!doctype html><meta charset=\"utf-8\"><title>fixture-idle</title>" +
-            "<" + kind + " id=\"target\">" + (textarea ? "ghbdtn</textarea>" : "") +
-            (textarea ? "" : "<script>document.getElementById('target').value='ghbdtn'</script>") +
-            "<script>const x=document.getElementById('target');x.addEventListener('input',()=>document.title='fixture-input-fired');window.onload=()=>x.focus()</script>", Encoding.UTF8);
+        var token = "msw-" + kind + "-" + Guid.NewGuid().ToString("N");
+        File.WriteAllText(page, "<!doctype html><meta charset=\"utf-8\"><title>" +
+            token + "-noevent-other</title><" + kind + " id=\"target\"" +
+            (textarea ? ">ghbdtn</textarea>" : " value=\"ghbdtn\">") +
+            "<script>const x=document.getElementById('target');let seen=false;" +
+            "function update(){document.title='" + token +
+            "-'+(seen?'event':'noevent')+'-'+(x.value==='привет'?'value':'other')}" +
+            "x.addEventListener('input',()=>{seen=true;update()});" +
+            "window.onload=()=>{x.focus();update()};setInterval(update,40)</script>", Encoding.UTF8);
         var profile = Path.Combine(temporary, "profile");
         Process? edge = null;
+        bool writeAttempted = false;
+        string Finish(string status) { receipt.Status = status; return status; }
         try
         {
             edge = Process.Start(new ProcessStartInfo(executable,
                 "--no-first-run --no-default-browser-check --disable-background-networking " +
                 "--user-data-dir=\"" + profile + "\" --app=\"" + new Uri(page).AbsoluteUri + "\"")
             { UseShellExecute = false, CreateNoWindow = false });
-            if (edge == null) return "NOT_RUN";
+            if (edge == null) return Finish("NOT_RUN");
             IntPtr edgeWindow = IntPtr.Zero;
+            uint edgePid = 0;
             var until = Environment.TickCount64 + 6000;
             while (Environment.TickCount64 < until)
             {
@@ -704,41 +848,60 @@ internal static class Program
                 var window = GetForegroundWindow();
                 uint pid;
                 GetWindowThreadProcessId(window, out pid);
-                try
+                if (OwnEdgeWindow(window, pid, token))
                 {
-                    if (pid != 0 && Process.GetProcessById((int)pid).ProcessName.Equals("msedge", StringComparison.OrdinalIgnoreCase))
-                    { edgeWindow = window; break; }
+                    edgeWindow = window; edgePid = pid; break;
                 }
-                catch { }
-                Thread.Sleep(20);
+                WaitForUiMessage(until);
             }
-            if (edgeWindow == IntPtr.Zero) return "NOT_RUN";
+            if (edgeWindow == IntPtr.Zero) return Finish("NOT_RUN");
             Result? captured = null;
             for (int attempt = 0; attempt < 10; attempt++)
             {
+                receipt.OwnWindowAtCapture = OwnEdgeWindow(edgeWindow, edgePid, token);
+                if (!receipt.OwnWindowAtCapture) return Finish("FOCUS_DRIFT");
                 captured = RequireBroker(() => broker.Call(1, null, null), attempt == 0 ? 5000 : 3000);
-                if (captured?.Outcome == 1 && captured.Field?.Text == "ghbdtn") break;
-                Application.DoEvents(); Thread.Sleep(100);
+                receipt.CaptureOutcome = captured.Outcome;
+                receipt.CaptureStage = captured.Stage;
+                receipt.CapturePhase = captured.Phase;
+                receipt.CanWrite = captured.Field?.CanWrite == true;
+                receipt.InitialTextMatched = captured.Field?.Text == "ghbdtn";
+                if (captured.Outcome == 1 && receipt.InitialTextMatched) break;
+                Application.DoEvents(); WaitForUiMessage(Environment.TickCount64 + 100);
             }
             if (captured?.Outcome != 1 || captured.Field == null || !captured.Field.CanWrite ||
-                captured.Field.Text != "ghbdtn") return "UNSUPPORTED";
-            var title = new StringBuilder(256);
-            GetWindowText(edgeWindow, title, title.Capacity);
-            if (!title.ToString().Contains("fixture-idle", StringComparison.Ordinal)) return "NOT_RUN";
+                !receipt.InitialTextMatched) return Finish("UNSUPPORTED");
+            receipt.OwnWindowAtWrite = OwnEdgeWindow(edgeWindow, edgePid, token);
+            if (!receipt.OwnWindowAtWrite) return Finish("FOCUS_DRIFT");
+            writeAttempted = true;
             var changed = RequireBroker(() => broker.Call(2, captured.Field, "привет"));
-            if (changed?.Outcome != 1 || changed.Field?.Text != "привет") return "UNSUPPORTED";
-            until = Environment.TickCount64 + 1000;
+            receipt.WriteOutcome = changed.Outcome;
+            receipt.WriteStage = changed.Stage;
+            receipt.WritePhase = changed.Phase;
+            receipt.WriteHResult = changed.HResult;
+            until = Environment.TickCount64 + 1500;
             while (Environment.TickCount64 < until)
             {
                 Application.DoEvents();
+                var title = new StringBuilder(256);
                 GetWindowText(edgeWindow, title, title.Capacity);
-                if (title.ToString().Contains("fixture-input-fired", StringComparison.Ordinal)) return "PASS";
-                Thread.Sleep(10);
+                var observed = title.ToString();
+                if (!observed.StartsWith(token + "-", StringComparison.Ordinal))
+                    return Finish("FOCUS_DRIFT");
+                var suffix = observed.Substring(token.Length + 1);
+                receipt.DomEventAck = suffix.StartsWith("event-", StringComparison.Ordinal);
+                receipt.DomValueAck = suffix.Contains("-value", StringComparison.Ordinal);
+                if (receipt.DomEventAck && receipt.DomValueAck) break;
+                WaitForUiMessage(until);
             }
-            return "SEMANTIC_GAP";
+            if (changed.Outcome == 2) return Finish("WRITE_UNKNOWN");
+            if (changed.Outcome == 0) return Finish("WRITE_REFUSED");
+            if (changed.Field?.Text != "привет" || !receipt.DomEventAck || !receipt.DomValueAck)
+                return Finish("SEMANTIC_GAP");
+            return Finish("PASS");
         }
-        catch (IOException) { return "RPC_TIMEOUT"; }
-        catch { return "NOT_RUN"; }
+        catch (IOException) { return Finish("RPC_TIMEOUT"); }
+        catch { return Finish(writeAttempted ? "WRITE_EXCEPTION" : "NOT_RUN"); }
         finally
         {
             try { if (edge != null && !edge.HasExited) edge.Kill(true); } catch { }
@@ -795,6 +958,7 @@ internal static class Program
             var result = new Result { Outcome = response.ReadByte(), Stage = response.ReadByte(),
                 Phase = response.ReadByte(),
                 NativeError = response.ReadInt32(),
+                HResult = response.ReadInt32(),
                 DiagnosticTextLength = response.ReadInt32(),
                 DiagnosticStart = response.ReadInt32(),
                 DiagnosticEnd = response.ReadInt32(),

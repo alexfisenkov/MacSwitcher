@@ -23,6 +23,28 @@ namespace MacSwitcher.Windows.Runtime
             if (WindowsSwitcherRuntime.ActualWordLanguage("ghbdtn", "ru") != "en" ||
                 WindowsSwitcherRuntime.ActualWordLanguage("привет", "en") != "ru" ||
                 LayoutMap.ConvertBidirectional("ghbdtn") != "привет") return 18;
+            var manualSpan = WindowsSwitcherRuntime.LastWordSpan("one ghbdtn ");
+            if (manualSpan == null || manualSpan.Start != 4 || manualSpan.End != 11 ||
+                manualSpan.Token != "ghbdtn" || manualSpan.OriginalRange != "ghbdtn " ||
+                manualSpan.ReplacementRange("привет") != "привет " ||
+                "one ghbdtn ".Substring(manualSpan.Start, manualSpan.End - manualSpan.Start)
+                    != manualSpan.OriginalRange) return 19;
+            manualSpan = WindowsSwitcherRuntime.LastWordSpan("one ghbdtn  ");
+            if (manualSpan == null || manualSpan.Start != 4 || manualSpan.End != 12 ||
+                manualSpan.ReplacementRange("привет") != "привет  " ||
+                WindowsSwitcherRuntime.LastWordSpan("ghbdtn" + new string(' ', 4091)) != null)
+                return 20;
+            manualSpan = WindowsSwitcherRuntime.LastWordSpan("one ghbdtn\t\r\n\u00a0");
+            if (manualSpan == null || manualSpan.Start != 4 ||
+                manualSpan.End != "one ghbdtn\t\r\n\u00a0".Length ||
+                manualSpan.TrailingWhitespace != "\t\r\n\u00a0" ||
+                manualSpan.ReplacementRange("привет") != "привет\t\r\n\u00a0")
+                return 22;
+            manualSpan = WindowsSwitcherRuntime.LastWordSpan("one ghbdtn! ");
+            if (manualSpan == null || manualSpan.Start != 4 || manualSpan.End != 12 ||
+                manualSpan.OriginalRange != "ghbdtn! " ||
+                manualSpan.ReplacementRange(LayoutMap.ConvertBidirectional(manualSpan.Token))
+                    != "привет! ") return 21;
             if (!WindowsSwitcherRuntime.PermitMutation(true, true, false, 4, 4, 10, 10) ||
                 WindowsSwitcherRuntime.PermitMutation(true, true, false, 5, 4, 10, 10) ||
                 WindowsSwitcherRuntime.PermitMutation(false, true, false, 4, 4, 10, 10) ||

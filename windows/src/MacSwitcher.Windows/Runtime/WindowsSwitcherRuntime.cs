@@ -45,6 +45,17 @@ namespace MacSwitcher.Windows.Runtime
         internal string[] PrecedingWords = Array.Empty<string>();
     }
 
+    internal sealed class ManualWordSpan
+    {
+        internal int Start;
+        internal int End;
+        internal string Token = "";
+        internal string TrailingWhitespace = "";
+        internal string OriginalRange { get { return Token + TrailingWhitespace; } }
+        internal string ReplacementRange(string convertedToken)
+        { return convertedToken + TrailingWhitespace; }
+    }
+
     public sealed class WindowsSwitcherRuntime : IDisposable
     {
         private readonly object stateGate = new object();
@@ -709,15 +720,23 @@ namespace MacSwitcher.Windows.Runtime
             else lock (stateGate) { sessionField = field; unknownWord = false; pendingTextKeys = 0; }
         }
 
-        private static string? LastToken(string value)
+        internal static ManualWordSpan? LastWordSpan(string value)
         {
             if (value.Length == 0) return null;
-            int end = value.Length;
-            while (end > 0 && char.IsWhiteSpace(value[end - 1])) end--;
-            int start = end;
+            int wordEnd = value.Length;
+            while (wordEnd > 0 && char.IsWhiteSpace(value[wordEnd - 1]))
+            {
+                wordEnd--;
+                if (value.Length - wordEnd > 4096) return null;
+            }
+            if (wordEnd == 0) return null;
+            int start = wordEnd;
             while (start > 0 && !char.IsWhiteSpace(value[start - 1])) start--;
-            if (start == end || end - start > 192 || value.Length - end > 1) return null;
-            return value.Substring(start);
+            if (start == wordEnd || wordEnd - start > 192 || value.Length - start > 4096)
+                return null;
+            return new ManualWordSpan { Start = start, End = value.Length,
+                Token = value.Substring(start, wordEnd - start),
+                TrailingWhitespace = value.Substring(wordEnd) };
         }
 
         internal static PredictionContext? BuildPredictionContext(string value)
@@ -842,19 +861,21 @@ namespace MacSwitcher.Windows.Runtime
             }
             if (field.SelectionEnd != field.Value.Length)
             { Interlocked.Exchange(ref fixtureManualCode, 7); return; }
-            var token = LastToken(field.Value);
-            if (token == null) { Interlocked.Exchange(ref fixtureManualCode, 7); return; }
-            var wordSource = ActualWordLanguage(token, source);
-            var replacement = LayoutMap.ConvertBidirectional(token);
-            if (replacement == token) { Interlocked.Exchange(ref fixtureManualCode, 7); return; }
-            var targetValue = field.Value.Substring(0, field.Value.Length - token.Length) + replacement;
-            var wordLanguage = ResultLanguage(token, replacement, target);
+            var span = LastWordSpan(field.Value);
+            if (span == null) { Interlocked.Exchange(ref fixtureManualCode, 7); return; }
+            var wordSource = ActualWordLanguage(span.Token, source);
+            var convertedToken = LayoutMap.ConvertBidirectional(span.Token);
+            if (convertedToken == span.Token) { Interlocked.Exchange(ref fixtureManualCode, 7); return; }
+            var replacement = span.ReplacementRange(convertedToken);
+            var targetValue = field.Value.Substring(0, span.Start) + replacement;
+            var wordLanguage = ResultLanguage(span.Token, convertedToken, target);
             if (field.NativeRangeWriter)
                 Interlocked.Exchange(ref fixtureManualCode,
-                    TryNativeRangeEdit(focus, field, field.Value.Length - token.Length, field.Value.Length,
-                    replacement, revision, generation, token, wordSource, wordLanguage) ? 20 : 21);
+                    TryNativeRangeEdit(focus, field, span.Start, span.End,
+                    replacement, revision, generation, span.OriginalRange, wordSource, wordLanguage) ? 20 : 21);
             else Interlocked.Exchange(ref fixtureManualCode,
-                TryFullValueEdit(focus, field, targetValue, revision, generation, token, replacement,
+                TryFullValueEdit(focus, field, targetValue, revision, generation,
+                    span.OriginalRange, replacement,
                     wordSource, wordLanguage) ? 22 : 23);
         }
 
@@ -926,6 +947,11 @@ namespace MacSwitcher.Windows.Runtime
             if (focus == null || field == null || field.SelectionEnd != field.Value.Length || newValue.Length > 32768 ||
                 !recovery.CanRetain(field) || !allowRecovery && recovery.Contains(field) ||
                 !field.CanWrite || !focus.StillSame() || !CanMutate(generation, revision)) return false;
+            if (oldPhrase.Length > field.Value.Length ||
+                !field.Value.EndsWith(oldPhrase, StringComparison.Ordinal) ||
+                !string.Equals(newValue,
+                    field.Value.Substring(0, field.Value.Length - oldPhrase.Length) + newPhrase,
+                    StringComparison.Ordinal)) return false;
             lock (editGate)
             {
                 if (!CanMutate(generation, revision) || !focus.StillSame()) return false;
@@ -1002,6 +1028,10 @@ namespace MacSwitcher.Windows.Runtime
                 end > field.Value.Length || replacement.Length > 4096 ||
                 !recovery.CanRetain(field) || !allowRecovery && recovery.Contains(field) ||
                 !focus.StillSame() || !CanMutate(generation, revision))
+            { Interlocked.Exchange(ref fixtureNativeCode, 2); return false; }
+            if (end - start != oldPhrase.Length ||
+                !string.Equals(field.Value.Substring(start, end - start), oldPhrase,
+                    StringComparison.Ordinal))
             { Interlocked.Exchange(ref fixtureNativeCode, 2); return false; }
             var expected = field.Value.Substring(0, start) + replacement + field.Value.Substring(end);
             if (expected.Length > 32768)
