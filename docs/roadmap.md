@@ -1,5 +1,9 @@
 # Развитие и приёмка
 
+## Локальное обучение: macOS alpha.25 и Windows alpha.2 выпущены
+
+Владелец подтвердил две платформы, два независимых случая и default ON с пояснением. Отдельные локальные пары слов и счётчики, ручной словарь не меняется; undo/redo не добавляют голоса, противоположный выбор снимает правило. [Контракт](local-learning.md). Обе CI прошли на `58a529f0dcff6aa3cde5439f028d257ee023420a`: [macOS](https://github.com/alexfisenkov/MacSwitcher/actions/runs/41630893348)502/35/gold495; [Windows](https://github.com/alexfisenkov/MacSwitcher/actions/runs/41630906057)626/gold495/runtime44. Подписанный notarized Mac установлен, настройки и личный словарь сохранились; Windows Setup/portable и подписанные feeds перечитаны. [Mac notes](releases/0.1.0-alpha.25.md), [Windows notes](releases/windows-0.1.0-alpha.2.md). Физическое обучение, произвольные приложения и OS-матрица остаются живой приёмкой.
+
 ## Windows alpha.1 опубликована; физическая приёмка открыта
 
 [Windows 0.1.0-alpha.1](releases/windows-0.1.0-alpha.1.md), build1, выпущена из `7892dc51b8b80cb7628f272da436fce1b58ff875`. [CI22](https://github.com/alexfisenkov/MacSwitcher/actions/runs/41618728418) прошёл: 562 Core assertions, 495 gold-примеров и 44 runtime-проверки, включая собственные WinForms и Edge input/textarea через настоящий writer с бюджетом90мс. Установка, повторная установка, удаление, сохранение данных, первый запуск и single-instance/settings/reopen/quit прошли.

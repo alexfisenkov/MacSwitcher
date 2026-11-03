@@ -1,8 +1,8 @@
 # MacSwitcher for Windows
 
-Windows port of MacSwitcher with offline RU/EN correction and a tray menu. The first version is `0.1.0-alpha.1`.
+Windows port of MacSwitcher with offline RU/EN correction and a tray menu. Current preview: `0.1.0-alpha.2`.
 
-[Download Setup or portable](https://github.com/alexfisenkov/MacSwitcher/releases/tag/windows-v0.1.0-alpha.1). [Windows CI](https://github.com/alexfisenkov/MacSwitcher/actions/runs/41618728418) passed on source `7892dc51b8b80cb7628f272da436fce1b58ff875`: 562 Core assertions and 44 runtime checks, including owned Edge input/textarea through the actual 90 ms runtime writer and per-user installation/data preservation. [Acceptance matrix and open work](../docs/windows-port/acceptance.md).
+[Download Setup or portable](https://github.com/alexfisenkov/MacSwitcher/releases/tag/windows-v0.1.0-alpha.2). [Windows CI](https://github.com/alexfisenkov/MacSwitcher/actions/runs/41630906057) passed on source `58a529f0dcff6aa3cde5439f028d257ee023420a`: 626 Core assertions and 44 runtime checks, including owned Edge input/textarea through the actual 90 ms runtime writer and per-user installation/data preservation. [Acceptance matrix and open work](../docs/windows-port/acceptance.md).
 
 ## Requirements and support
 
@@ -30,7 +30,7 @@ Run `dotnet` commands from `windows/` so `global.json` selects the pinned SDK. T
 
 The per-user setup and portable ZIP are unsigned because this project has no Windows Authenticode certificate. Windows may display its normal publisher warning. Do not disable SmartScreen or other Windows protections to install the app. The installer checks for .NET Framework 4.6.2 and opens Microsoft's download page if the requirement is missing.
 
-Personal settings and lexicon files live under `%LOCALAPPDATA%\MacSwitcherWindows`. The alpha.2 candidate adds a separate `adaptive-rules.json`: two independent confirmed word choices activate a local preference; undo/redo does not add confirmations. Learning is enabled by default with a first-run explanation and can be disabled, reviewed, deleted or reset in Settings. Manual personal entries remain separate. No phrase or keystroke history is stored or synchronized. Recovery originals are kept in memory until explicitly exported by the user. See [the common contract](../docs/local-learning.md).
+Personal settings and lexicon files live under `%LOCALAPPDATA%\MacSwitcherWindows`. Alpha.2 adds a separate `adaptive-rules.json`: two independent confirmed word choices activate a local preference; undo/redo does not add confirmations. Learning is enabled by default with a first-run explanation and can be disabled, reviewed, deleted or reset in Settings. Manual personal entries remain separate. No phrase or keystroke history is stored or synchronized. Recovery originals are kept in memory until explicitly exported by the user. See [the common contract](../docs/local-learning.md).
 
 ## Окна администратора
 

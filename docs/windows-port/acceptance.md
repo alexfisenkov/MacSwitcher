@@ -1,5 +1,11 @@
 # Windows: приёмка и оставшаяся совместимость
 
+## Alpha.2 · локальное обучение
+
+[windows-v0.1.0-alpha.2](https://github.com/alexfisenkov/MacSwitcher/releases/tag/windows-v0.1.0-alpha.2), source `58a529f0dcff6aa3cde5439f028d257ee023420a`, [CI](https://github.com/alexfisenkov/MacSwitcher/actions/runs/41630906057) PASS: Core626/gold495/runtime44, отдельные adaptive storage/provenance/epoch/fault contracts, сохранность adaptive-rules.json при установке/переустановке/удалении. Default ON с пояснением, просмотр/удаление/сброс/off; журнал текста и клавиш не создаётся. Публичные пакеты и RSA feed перечитаны, [заметки](../releases/windows-0.1.0-alpha.2.md). Физические и широкие compatibility-ограничения ниже сохраняются.
+
+## Исторический первый выпуск
+
 Первый предварительный выпуск: [windows-v0.1.0-alpha.1](https://github.com/alexfisenkov/MacSwitcher/releases/tag/windows-v0.1.0-alpha.1), build1, source `7892dc51b8b80cb7628f272da436fce1b58ff875`. [CI22](https://github.com/alexfisenkov/MacSwitcher/actions/runs/41618728418) полностью прошёл. EXE/Setup unsigned в смысле Windows Authenticode; собственный update manifest подписан RSA-SHA256.
 
 ## Подтверждено

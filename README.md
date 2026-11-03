@@ -2,7 +2,7 @@
 
 Локальный переключатель русской и английской раскладки для macOS и Windows. Короткое одиночное нажатие Shift сразу меняет язык; двойное нажатие исправляет последнее слово или выделение. Уверенная автоматическая коррекция может срабатывать во время набора. Если MacSwitcher не может безопасно изменить текст или проверить результат, он остановится. Парольные поля приложение пропускает.
 
-**Последний выпуск — [MacSwitcher alpha.24](https://github.com/alexfisenkov/MacSwitcher/releases/tag/v0.1.0-alpha.24)**, предварительная версия для macOS 13+. Усилено восстановление ввода и контекстное распознавание RU/EN, добавлены 103 словоформы. [Финальная CI](https://github.com/alexfisenkov/MacSwitcher/actions/runs/41024794049) прошла: 486 Swift-тестов, 35 Python-проверок, 495/495 gold-примеров. Подписанная универсальная сборка принята Apple и установлена штатным обновлением с сохранением настроек. Живую приёмку владелец проводит самостоятельно. [Исходник выпуска](https://github.com/alexfisenkov/MacSwitcher/tree/v0.1.0-alpha.24) закреплён tag; [изменения кода](https://github.com/alexfisenkov/MacSwitcher/pull/2) ещё ожидают просмотра перед merge в main. [Заметки alpha.24](docs/releases/0.1.0-alpha.24.md).
+**Последний macOS-выпуск — [alpha.25](https://github.com/alexfisenkov/MacSwitcher/releases/tag/v0.1.0-alpha.25)**: локальное обучение на двух независимых исправлениях одного слова. Оно включено с пояснением и управлением в настройках; журнал текста и клавиш не создаётся. [CI](https://github.com/alexfisenkov/MacSwitcher/actions/runs/41630893348) прошёл: 502 Swift-теста, 35 Python-проверок, 495/495 языковых примеров. Universal пакет подписан Developer ID, принят Apple и установлен штатным обновлением с сохранением настроек. [Заметки](docs/releases/0.1.0-alpha.25.md), [контракт обучения](docs/local-learning.md).
 
 Версия для macOS предназначена для macOS 13 и новее. Обработка текста и словари локальные; данные набора не отправляются в сеть. На Mac для работы нужны разрешения Accessibility и Input Monitoring. Совместимость зависит от доступности безопасного текстового поля в конкретном приложении; поддержка всех редакторов не заявляется.
 
@@ -20,7 +20,7 @@
 
 ## Windows
 
-Доступна первая [Windows alpha.1 — Setup и portable](https://github.com/alexfisenkov/MacSwitcher/releases/tag/windows-v0.1.0-alpha.1). Целевой диапазон — Windows7 SP1/8.1/10/11, x86/x64, .NET Framework4.6.2+. [Windows CI](https://github.com/alexfisenkov/MacSwitcher/actions/runs/41618728418) прошёл: 562 Core assertions и 44 runtime-проверки, собственные поля Edge и цикл установки. EXE пока без Authenticode-подписи; физическая приёмка ещё не пройдена. [Инструкция](windows/README.md), [заметки выпуска](docs/releases/windows-0.1.0-alpha.1.md), [матрица доказательств и ограничений](docs/windows-port/acceptance.md). Сборка, установщик и канал обновления отделены от macOS.
+Доступна [Windows alpha.2 — Setup и portable](https://github.com/alexfisenkov/MacSwitcher/releases/tag/windows-v0.1.0-alpha.2), с тем же локальным обучением. Целевой диапазон — Windows7 SP1/8.1/10/11 x86/x64, .NET Framework4.6.2+. [CI](https://github.com/alexfisenkov/MacSwitcher/actions/runs/41630906057) прошёл: 626 Core assertions и 44 runtime-проверки, собственные поля Edge и цикл установки с сохранением файла обучения. EXE без Authenticode; физическая приёмка остаётся отдельной. [Инструкция](windows/README.md), [заметки](docs/releases/windows-0.1.0-alpha.2.md), [матрица](docs/windows-port/acceptance.md). Каналы платформ разделены.
 
 ## Лицензии
 
