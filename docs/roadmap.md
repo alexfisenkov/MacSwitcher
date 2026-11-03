@@ -1,5 +1,11 @@
 # Развитие и приёмка
 
+## Windows alpha.1 опубликована; физическая приёмка открыта
+
+[Windows 0.1.0-alpha.1](releases/windows-0.1.0-alpha.1.md), build1, выпущена из `7892dc51b8b80cb7628f272da436fce1b58ff875`. [CI22](https://github.com/alexfisenkov/MacSwitcher/actions/runs/41618728418) прошёл: 562 Core assertions, 495 gold-примеров и 44 runtime-проверки, включая собственные WinForms и Edge input/textarea через настоящий writer с бюджетом90мс. Установка, повторная установка, удаление, сохранение данных, первый запуск и single-instance/settings/reopen/quit прошли.
+
+Windows Setup/portable и RSA-подписанный канал отделены от macOS. EXE без Windows Authenticode; сертификат не приобретался. [Матрица проверок и незавершённое](windows-port/acceptance.md): физический Shift, целевые ОС/архитектуры, реальные редакторы и длительная работа ещё не приняты. Наличие alpha не означает «работает во всех приложениях». Код — в [PR #3](https://github.com/alexfisenkov/MacSwitcher/pull/3) до просмотра владельцем.
+
 ## Alpha.24 опубликована и установлена; живая приёмка у владельца
 
 [Alpha.24](releases/0.1.0-alpha.24.md) выпущена из `bcd3a8d5b96d3723242f48d00f02074f765c4d24`. [Финальная CI](https://github.com/alexfisenkov/MacSwitcher/actions/runs/41024794049) прошла: 486 Swift-тестов, 35 Python-проверок, 495/495 gold-примеров. Усилено восстановление после терминальных отказов якоря, повторных неудач перезапуска tap и подтверждённой смены источника. Добавлены ограниченные контекстные RU-исправления, пять пунктуационных форм и 103 редакционные словоформы.

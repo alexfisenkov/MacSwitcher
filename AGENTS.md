@@ -67,6 +67,7 @@ v3.4.0 и ранее разработанный native combined-Shift режим
 ## Windows-порт
 
 - Windows-компонент — `windows/`, правила — `windows/AGENTS.md`; канон — `docs/windows-port/design.md` и `contracts.md`.
+- Фактическая приёмка и долг — `docs/windows-port/acceptance.md`; выпуск Windows alpha.1 закреплён `windows-v0.1.0-alpha.1`, источник `7892dc51b8b80cb7628f272da436fce1b58ff875`, CI22 `41618728418`. Не приравнивать hosted fixture к физической клавиатуре/всем приложениям.
 - Core C# target `net462;net10.0`, GUI WinForms target `net462`; macOS Swift/version.json/updates/appcast.xml не меняются при Windows-выпуске.
 - Windows-only версия/пакеты — `windows/version.json`, tag `windows-v…`, канал `windows/updates/windows.json`; не назначать Windows-релиз global latest macOS.
 - Подпись собственного update manifest RSA не заменяет Authenticode; EXE пока unsigned. Приватный signer вне Git.

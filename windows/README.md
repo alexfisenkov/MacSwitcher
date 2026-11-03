@@ -2,6 +2,8 @@
 
 Windows port of MacSwitcher with offline RU/EN correction and a tray menu. The first version is `0.1.0-alpha.1`.
 
+[Download Setup or portable](https://github.com/alexfisenkov/MacSwitcher/releases/tag/windows-v0.1.0-alpha.1). [Windows CI](https://github.com/alexfisenkov/MacSwitcher/actions/runs/41618728418) passed on source `7892dc51b8b80cb7628f272da436fce1b58ff875`: 562 Core assertions and 44 runtime checks, including owned Edge input/textarea through the actual 90 ms runtime writer and per-user installation/data preservation. [Acceptance matrix and open work](../docs/windows-port/acceptance.md).
+
 ## Requirements and support
 
 - Windows 7 SP1, Windows 8.1, Windows 10, or Windows 11 with .NET Framework 4.6.2 or later on x86 or x64.
