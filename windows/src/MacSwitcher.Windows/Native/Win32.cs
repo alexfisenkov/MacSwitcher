@@ -104,7 +104,7 @@ namespace MacSwitcher.Windows.Native
         [DllImport("user32.dll")] internal static extern bool IsWindowUnicode(IntPtr hwnd);
         [DllImport("user32.dll")] internal static extern bool IsWindowEnabled(IntPtr hwnd);
         [DllImport("user32.dll")] internal static extern short GetAsyncKeyState(int key);
-        [DllImport("user32.dll", CharSet = CharSet.Unicode)] internal static extern int GetClassName(IntPtr hwnd, StringBuilder buffer, int maxCount);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] internal static extern int GetClassName(IntPtr hwnd, StringBuilder buffer, int maxCount);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] internal static extern int GetWindowText(IntPtr hwnd, StringBuilder buffer, int maxCount);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] internal static extern IntPtr GetProp(IntPtr hwnd, string name);
         [DllImport("user32.dll", SetLastError = true)] internal static extern IntPtr OpenInputDesktop(uint flags, bool inherit, uint desiredAccess);

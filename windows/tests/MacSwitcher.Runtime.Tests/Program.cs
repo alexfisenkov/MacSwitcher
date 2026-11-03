@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -10,7 +11,7 @@ internal static class Program
 {
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
-    [DllImport("user32.dll")] private static extern bool GetGUIThreadInfo(uint thread, ref GuiThreadInfo info);
+    [DllImport("user32.dll", SetLastError = true)] private static extern bool GetGUIThreadInfo(uint thread, ref GuiThreadInfo info);
     [DllImport("user32.dll")] private static extern IntPtr GetKeyboardLayout(uint thread);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int maxCount);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr SetProp(IntPtr hwnd, string name, IntPtr value);
@@ -22,6 +23,12 @@ internal static class Program
     private static string hookStatus = "NOT_RUN";
     private static string integrationStatus = "NOT_RUN";
     private static string integrationProbe = "NOT_RUN";
+    private static string brokerProbe = "NOT_RUN";
+    private static int brokerOutcome = -1, brokerStage = -1;
+    private static int brokerNativeCode;
+    private static bool fixtureForeground, fixtureFocus;
+    private static int brokerTextLength = -1, brokerSelectionStart = -1, brokerSelectionEnd = -1;
+    private static bool brokerSameFixturePid, brokerFocusMatchesPlain;
     private static int hookKeyboardCode, hookMouseCode;
 
     [StructLayout(LayoutKind.Sequential)] private struct GuiThreadInfo
@@ -45,6 +52,8 @@ internal static class Program
     private sealed class Result
     {
         public byte Outcome;
+        public byte Stage;
+        public int NativeError;
         public Field? Field;
     }
 
@@ -102,15 +111,30 @@ internal static class Program
         }
         if (GetForegroundWindow() != form.Handle || !plain.Focused)
             return Report("NOT_RUN", "no_interactive_fixture_focus", 5);
+        fixtureForeground = GetForegroundWindow() == form.Handle;
+        fixtureFocus = plain.Focused;
 
         using var broker = new Broker(path);
         int checks = 5;
         try
         {
             Result? captured = null;
-            for (int attempt = 0; attempt < 10; attempt++)
+            for (int attempt = 0; attempt < 4; attempt++)
             {
-                captured = Pump(() => broker.Call(1, null, null), 1000);
+                captured = PumpBroker(() => broker.Call(1, null, null),
+                    attempt == 0 ? 10000 : 3000, out brokerProbe);
+                if (captured == null) return Report("FAIL", "plain_capture_rpc", checks);
+                brokerOutcome = captured.Outcome;
+                brokerStage = captured.Stage;
+                brokerNativeCode = captured.NativeError;
+                if (captured.Field != null)
+                {
+                    brokerTextLength = captured.Field.Text.Length;
+                    brokerSelectionStart = captured.Field.Start;
+                    brokerSelectionEnd = captured.Field.End;
+                    brokerSameFixturePid = captured.Field.Pid == Environment.ProcessId;
+                    brokerFocusMatchesPlain = captured.Field.Focus == plain.Handle.ToInt64();
+                }
                 if (captured?.Outcome == 1 && captured.Field?.Text == "ghbdtn") break;
                 Application.DoEvents(); Thread.Sleep(100);
             }
@@ -118,35 +142,35 @@ internal static class Program
                 captured.Field.Start != plain.TextLength || captured.Field.End != plain.TextLength)
                 return Report("FAIL", "plain_capture", checks);
             checks++;
-            var changed = Pump(() => broker.Call(2, captured.Field, "привет"), 3000);
+            var changed = RequireBroker(() => broker.Call(2, captured.Field, "привет"));
             Application.DoEvents();
             if (changed?.Outcome != 1 || changed.Field?.Text != "привет" || plain.Text != "привет")
                 return Report("FAIL", "plain_value_write", checks);
             checks++;
             plain.SelectAll(); Application.DoEvents();
-            var nativeBefore = Pump(() => broker.Call(1, null, null), 3000);
+            var nativeBefore = RequireBroker(() => broker.Call(1, null, null));
             if (nativeBefore?.Outcome == 1 && nativeBefore.Field?.NativeRangeWriter == true)
             {
-                var nativeAfter = Pump(() => broker.Call(3, nativeBefore.Field, "ghbdtn",
-                    nativeBefore.Field.Start, nativeBefore.Field.End), 3000);
+                var nativeAfter = RequireBroker(() => broker.Call(3, nativeBefore.Field, "ghbdtn",
+                    nativeBefore.Field.Start, nativeBefore.Field.End));
                 Application.DoEvents();
                 if (nativeAfter?.Outcome != 1 || plain.Text != "ghbdtn")
                     return Report("FAIL", "native_range_write", checks);
                 checks++;
             }
-            if (!Focus(form, password) || Pump(() => broker.Call(1, null, null), 3000)?.Outcome == 1)
+            if (!Focus(form, password) || RequireBroker(() => broker.Call(1, null, null)).Outcome == 1)
                 return Report("FAIL", "password_rejection", checks);
             checks++;
-            if (!Focus(form, readOnly) || Pump(() => broker.Call(1, null, null), 3000)?.Outcome == 1)
+            if (!Focus(form, readOnly) || RequireBroker(() => broker.Call(1, null, null)).Outcome == 1)
                 return Report("FAIL", "readonly_rejection", checks);
             checks++;
             if (!Focus(form, rich)) return Report("FAIL", "rich_focus", checks);
-            var richCapture = Pump(() => broker.Call(1, null, null), 3000);
+            var richCapture = RequireBroker(() => broker.Call(1, null, null));
             if (richCapture == null || richCapture.Outcome == 2 ||
                 richCapture.Outcome == 1 && richCapture.Field?.CanWrite != false)
                 return Report("FAIL", "rich_atomic_rejection", checks);
             checks++;
-            if (!Focus(form, password) || Pump(() => broker.Call(2, captured.Field, "unsafe"), 3000)?.Outcome == 1)
+            if (!Focus(form, password) || RequireBroker(() => broker.Call(2, captured.Field, "unsafe")).Outcome == 1)
                 return Report("FAIL", "focus_drift_rejection", checks);
             checks++;
             if (!Focus(form, plain)) return Report("FAIL", "integration_fixture_focus", checks);
@@ -158,7 +182,9 @@ internal static class Program
             if (edge != null)
             {
                 edgeInput = ProbeEdge(broker, edge, false);
+                if (edgeInput == "RPC_TIMEOUT") return Report("FAIL", "edge_rpc_timeout", checks);
                 edgeTextarea = ProbeEdge(broker, edge, true);
+                if (edgeTextarea == "RPC_TIMEOUT") return Report("FAIL", "edge_rpc_timeout", checks);
                 if (edgeInput == "SEMANTIC_GAP" || edgeTextarea == "SEMANTIC_GAP")
                     return Report("FAIL", "edge_dom_input_event", checks);
                 if (edgeInput == "PASS") checks++;
@@ -184,6 +210,41 @@ internal static class Program
         return task.IsCompletedSuccessfully ? task.Result : null;
     }
 
+    private static Result? PumpBroker(Func<Result> action, int timeoutMilliseconds, out string stage)
+    {
+        var task = Task.Run(action);
+        var until = Environment.TickCount64 + timeoutMilliseconds;
+        while (!task.IsCompleted && Environment.TickCount64 < until)
+        { Application.DoEvents(); Thread.Sleep(1); }
+        if (!task.IsCompleted)
+        {
+            stage = "RPC_TIMEOUT";
+            task.ContinueWith(t => { var ignored = t.Exception; },
+                TaskContinuationOptions.OnlyOnFaulted);
+            return null;
+        }
+        if (task.IsFaulted || task.IsCanceled)
+        {
+            stage = "CLIENT_EXCEPTION";
+            if (task.Exception?.GetBaseException() is Win32Exception native)
+                brokerNativeCode = native.NativeErrorCode;
+            return null;
+        }
+        stage = "RESPONSE";
+        return task.Result;
+    }
+
+    private static Result RequireBroker(Func<Result> action, int timeoutMilliseconds = 3000)
+    {
+        var response = PumpBroker(action, timeoutMilliseconds, out var stage);
+        brokerProbe = stage;
+        if (response == null) throw new IOException("Broker RPC unavailable.");
+        brokerOutcome = response.Outcome;
+        brokerStage = response.Stage;
+        brokerNativeCode = response.NativeError;
+        return response;
+    }
+
     private static int Report(string status, string probe, int checks)
     {
         Console.WriteLine("{\"status\":\"" + status + "\",\"probe\":\"" + probe +
@@ -191,7 +252,18 @@ internal static class Program
             "\",\"keyboardCode\":" + hookKeyboardCode + ",\"mouseCode\":" + hookMouseCode +
             ",\"integration\":\"" + integrationStatus +
             "\",\"integrationProbe\":\"" + integrationProbe +
-            "\",\"edgeInput\":\"" + edgeInput +
+            "\",\"brokerProbe\":\"" + brokerProbe +
+            "\",\"brokerOutcome\":" + brokerOutcome +
+            ",\"brokerStage\":" + brokerStage +
+            ",\"brokerNativeCode\":" + brokerNativeCode +
+            ",\"fixtureForeground\":" + (fixtureForeground ? "true" : "false") +
+            ",\"fixtureFocus\":" + (fixtureFocus ? "true" : "false") +
+            ",\"brokerTextLength\":" + brokerTextLength +
+            ",\"brokerSelectionStart\":" + brokerSelectionStart +
+            ",\"brokerSelectionEnd\":" + brokerSelectionEnd +
+            ",\"brokerSameFixturePid\":" + (brokerSameFixturePid ? "true" : "false") +
+            ",\"brokerFocusMatchesPlain\":" + (brokerFocusMatchesPlain ? "true" : "false") +
+            ",\"edgeInput\":\"" + edgeInput +
             "\",\"edgeTextarea\":\"" + edgeTextarea + "\"}");
         return status == "PASS" ? 0 : 1;
     }
@@ -403,7 +475,7 @@ internal static class Program
             Result? captured = null;
             for (int attempt = 0; attempt < 10; attempt++)
             {
-                captured = Pump(() => broker.Call(1, null, null), 1000);
+                captured = RequireBroker(() => broker.Call(1, null, null), attempt == 0 ? 5000 : 3000);
                 if (captured?.Outcome == 1 && captured.Field?.Text == "ghbdtn") break;
                 Application.DoEvents(); Thread.Sleep(100);
             }
@@ -412,7 +484,7 @@ internal static class Program
             var title = new StringBuilder(256);
             GetWindowText(edgeWindow, title, title.Capacity);
             if (!title.ToString().Contains("fixture-idle", StringComparison.Ordinal)) return "NOT_RUN";
-            var changed = Pump(() => broker.Call(2, captured.Field, "привет"), 3000);
+            var changed = RequireBroker(() => broker.Call(2, captured.Field, "привет"));
             if (changed?.Outcome != 1 || changed.Field?.Text != "привет") return "UNSUPPORTED";
             until = Environment.TickCount64 + 1000;
             while (Environment.TickCount64 < until)
@@ -424,6 +496,7 @@ internal static class Program
             }
             return "SEMANTIC_GAP";
         }
+        catch (IOException) { return "RPC_TIMEOUT"; }
         catch { return "NOT_RUN"; }
         finally
         {
@@ -454,7 +527,8 @@ internal static class Program
             uint pid;
             var tid = GetWindowThreadProcessId(foreground, out pid);
             var info = new GuiThreadInfo { cbSize = (uint)Marshal.SizeOf<GuiThreadInfo>() };
-            if (!GetGUIThreadInfo(tid, ref info)) throw new InvalidOperationException();
+            if (!GetGUIThreadInfo(tid, ref info))
+                throw new Win32Exception(Marshal.GetLastWin32Error());
             byte[] packet;
             using (var memory = new MemoryStream())
             using (var payload = new BinaryWriter(memory, Encoding.UTF8, true))
@@ -471,7 +545,9 @@ internal static class Program
             var size = reader.ReadInt32(); if (size < 1 || size > 1048576) throw new InvalidDataException();
             var bytes = reader.ReadBytes(size); if (bytes.Length != size) throw new EndOfStreamException();
             using var response = new BinaryReader(new MemoryStream(bytes, false), Encoding.UTF8);
-            var result = new Result { Outcome = response.ReadByte(), Field = ReadField(response) };
+            var result = new Result { Outcome = response.ReadByte(), Stage = response.ReadByte(),
+                NativeError = response.ReadInt32(),
+                Field = ReadField(response) };
             if (response.BaseStream.Position != response.BaseStream.Length) throw new InvalidDataException();
             return result;
         }
