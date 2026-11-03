@@ -22,7 +22,13 @@ namespace MacSwitcher.Windows.Automation
         Postcheck = 13, Exception = 14, SelectionRange = 15,
         SelectionPattern = 16, NativeDeadline = 17,
         NativeModifier = 18, NativeMessage = 19, NativeMismatch = 20,
-        ValueIdentityMismatch = 21, ValueTextMismatch = 22, ValueCaretMismatch = 23
+        ValueIdentityMismatch = 21, ValueTextMismatch = 22, ValueCaretMismatch = 23,
+        FocusUnavailable = 24, ForegroundChanged = 25, FocusHwndChanged = 26,
+        FocusProcessChanged = 27, FocusThreadChanged = 28,
+        NoForeground = 29, OwnForeground = 30, NoWindowThread = 31,
+        GuiThreadInfoFailed = 32, NoFocusHwnd = 33,
+        ElementProcessMismatch = 34, ElementNativeHwndMismatch = 35,
+        ControlTypeUnsupported = 36, ElementDisabled = 37
     }
     internal enum BrokerPhase : byte
     {
@@ -341,7 +347,7 @@ namespace MacSwitcher.Windows.Automation
                         if (responseFrame.BaseStream.Position != responseFrame.BaseStream.Length)
                             throw new InvalidDataException("Unexpected response bytes.");
                         if (response.Outcome > BrokerOutcome.Unknown ||
-                            response.Stage > BrokerStage.ValueCaretMismatch ||
+                            response.Stage > BrokerStage.ElementDisabled ||
                             response.Phase > BrokerPhase.ValueCaret)
                             throw new InvalidDataException("Invalid broker response.");
                         return response;
@@ -541,20 +547,44 @@ namespace MacSwitcher.Windows.Automation
             nativeError = 0;
             diagnosticTextLength = diagnosticStart = diagnosticEnd = -1;
             diagnosticNativeClassKind = -1;
-            if (focus == null || focus.Foreground != foreground || focus.Focus != hwnd ||
-                focus.ProcessId != pid || focus.ThreadId != tid)
-            { stage = BrokerStage.Focus; if (focus == null) nativeError = Marshal.GetLastWin32Error(); return null; }
+            if (focus == null)
+            {
+                switch (NativeFocusSnapshot.LastFailure)
+                {
+                    case NativeFocusFailure.NoForeground: stage = BrokerStage.NoForeground; break;
+                    case NativeFocusFailure.OwnForeground: stage = BrokerStage.OwnForeground; break;
+                    case NativeFocusFailure.NoWindowThread: stage = BrokerStage.NoWindowThread; break;
+                    case NativeFocusFailure.GuiThreadInfoFailed: stage = BrokerStage.GuiThreadInfoFailed; break;
+                    case NativeFocusFailure.NoFocusHwnd: stage = BrokerStage.NoFocusHwnd; break;
+                    default: stage = BrokerStage.FocusUnavailable; break;
+                }
+                nativeError = NativeFocusSnapshot.LastNativeError;
+                return null;
+            }
+            if (focus.Foreground != foreground)
+            { stage = BrokerStage.ForegroundChanged; return null; }
+            if (focus.Focus != hwnd)
+            { stage = BrokerStage.FocusHwndChanged; return null; }
+            if (focus.ProcessId != pid)
+            { stage = BrokerStage.FocusProcessChanged; return null; }
+            if (focus.ThreadId != tid)
+            { stage = BrokerStage.FocusThreadChanged; return null; }
             if (!NativeSafety.IsNormalDesktop()) { stage = BrokerStage.Desktop; return null; }
             if (Win32.GetKeyboardLayout(tid) != expectedLayout) { stage = BrokerStage.Layout; return null; }
             if (!NativeSafety.IsEqualOrLowerIntegrity(pid)) { stage = BrokerStage.Integrity; return null; }
             var element = AutomationElement.FocusedElement;
             if (element == null) { stage = BrokerStage.Element; return null; }
             if (element.Current.IsPassword) { stage = BrokerStage.Password; return null; }
-            if (element.Current.ProcessId != pid ||
-                (element.Current.NativeWindowHandle != 0 && element.Current.NativeWindowHandle != hwnd.ToInt64()) ||
-                (element.Current.ControlType != ControlType.Edit && element.Current.ControlType != ControlType.Document) ||
-                !element.Current.IsEnabled)
-            { stage = BrokerStage.Identity; return null; }
+            if (element.Current.ProcessId != pid)
+            { stage = BrokerStage.ElementProcessMismatch; return null; }
+            if (element.Current.NativeWindowHandle != 0 &&
+                element.Current.NativeWindowHandle != hwnd.ToInt64())
+            { stage = BrokerStage.ElementNativeHwndMismatch; return null; }
+            if (element.Current.ControlType != ControlType.Edit &&
+                element.Current.ControlType != ControlType.Document)
+            { stage = BrokerStage.ControlTypeUnsupported; return null; }
+            if (!element.Current.IsEnabled)
+            { stage = BrokerStage.ElementDisabled; return null; }
             var nativeClassBuffer = new StringBuilder(256);
             if (Win32.GetClassName(hwnd, nativeClassBuffer, nativeClassBuffer.Capacity) == 0)
             { stage = BrokerStage.Identity; nativeError = Marshal.GetLastWin32Error(); return null; }
@@ -907,7 +937,15 @@ namespace MacSwitcher.Windows.Automation
                 }
                 else if (stage == BrokerStage.Password || stage == BrokerStage.ReadOnly ||
                     stage == BrokerStage.Integrity || stage == BrokerStage.Desktop ||
-                    stage == BrokerStage.Identity || stage == BrokerStage.Layout)
+                    stage == BrokerStage.Identity || stage == BrokerStage.Layout ||
+                    stage == BrokerStage.OwnForeground || stage == BrokerStage.ForegroundChanged ||
+                    stage == BrokerStage.FocusHwndChanged ||
+                    stage == BrokerStage.FocusProcessChanged ||
+                    stage == BrokerStage.FocusThreadChanged ||
+                    stage == BrokerStage.ElementProcessMismatch ||
+                    stage == BrokerStage.ElementNativeHwndMismatch ||
+                    stage == BrokerStage.ControlTypeUnsupported ||
+                    stage == BrokerStage.ElementDisabled)
                     break;
                 var remaining = deadline - (long)Win32.GetTickCount64();
                 if (remaining <= 0) break;

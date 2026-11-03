@@ -5,9 +5,19 @@ using System.Text;
 
 namespace MacSwitcher.Windows.Native
 {
+    internal enum NativeFocusFailure
+    {
+        None = 0, NoForeground = 1, OwnForeground = 2,
+        NoWindowThread = 3, GuiThreadInfoFailed = 4, NoFocusHwnd = 5
+    }
+
     internal sealed class NativeFocusSnapshot
     {
         private static readonly int OwnProcessId = Process.GetCurrentProcess().Id;
+        [ThreadStatic] private static NativeFocusFailure lastFailure;
+        [ThreadStatic] private static int lastNativeError;
+        internal static NativeFocusFailure LastFailure { get { return lastFailure; } }
+        internal static int LastNativeError { get { return lastNativeError; } }
         internal IntPtr Foreground { get; private set; }
         internal IntPtr Focus { get; private set; }
         internal uint ProcessId { get; private set; }
@@ -16,13 +26,30 @@ namespace MacSwitcher.Windows.Native
 
         internal static NativeFocusSnapshot? Capture()
         {
+            lastFailure = NativeFocusFailure.None;
+            lastNativeError = 0;
             var foreground = Win32.GetForegroundWindow();
-            if (foreground == IntPtr.Zero) return null;
+            if (foreground == IntPtr.Zero)
+            { lastFailure = NativeFocusFailure.NoForeground; return null; }
             uint pid;
             var thread = Win32.GetWindowThreadProcessId(foreground, out pid);
-            if (thread == 0 || pid == 0 || pid == OwnProcessId) return null;
+            if (thread == 0 || pid == 0)
+            {
+                lastFailure = NativeFocusFailure.NoWindowThread;
+                lastNativeError = Marshal.GetLastWin32Error();
+                return null;
+            }
+            if (pid == OwnProcessId)
+            { lastFailure = NativeFocusFailure.OwnForeground; return null; }
             var info = new Win32.GUITHREADINFO { cbSize = (uint)Marshal.SizeOf(typeof(Win32.GUITHREADINFO)) };
-            if (!Win32.GetGUIThreadInfo(thread, ref info) || info.hwndFocus == IntPtr.Zero) return null;
+            if (!Win32.GetGUIThreadInfo(thread, ref info))
+            {
+                lastFailure = NativeFocusFailure.GuiThreadInfoFailed;
+                lastNativeError = Marshal.GetLastWin32Error();
+                return null;
+            }
+            if (info.hwndFocus == IntPtr.Zero)
+            { lastFailure = NativeFocusFailure.NoFocusHwnd; return null; }
             return new NativeFocusSnapshot { Foreground = foreground, Focus = info.hwndFocus,
                 ProcessId = pid, ThreadId = thread, Layout = Win32.GetKeyboardLayout(thread) };
         }
