@@ -23,6 +23,11 @@ internal static class Program
     private static string hookStatus = "NOT_RUN";
     private static string integrationStatus = "NOT_RUN";
     private static string integrationProbe = "NOT_RUN";
+    private static string integrationLayout = "";
+    private static int integrationApplied, integrationUndone, integrationTextLength = -1;
+    private static bool integrationExpectedText;
+    private static int integrationManualCode;
+    private static string integrationWaitStatus = "NOT_RUN";
     private static string brokerProbe = "NOT_RUN";
     private static int brokerOutcome = -1, brokerStage = -1;
     private static int brokerNativeCode;
@@ -277,6 +282,13 @@ internal static class Program
             "\",\"keyboardCode\":" + hookKeyboardCode + ",\"mouseCode\":" + hookMouseCode +
             ",\"integration\":\"" + integrationStatus +
             "\",\"integrationProbe\":\"" + integrationProbe +
+            "\",\"integrationLayout\":\"" + integrationLayout +
+            "\",\"integrationApplied\":" + integrationApplied +
+            ",\"integrationUndone\":" + integrationUndone +
+            ",\"integrationTextLength\":" + integrationTextLength +
+            ",\"integrationExpectedText\":" + (integrationExpectedText ? "true" : "false") +
+            ",\"integrationManualCode\":" + integrationManualCode +
+            ",\"integrationWaitStatus\":\"" + integrationWaitStatus +
             "\",\"brokerProbe\":\"" + brokerProbe +
             "\",\"brokerOutcome\":" + brokerOutcome +
             ",\"brokerStage\":" + brokerStage +
@@ -335,12 +347,24 @@ internal static class Program
             using var session = new FixtureSession(executable, data, marker);
             integrationProbe = "client_ready";
             if (!session.Ready) return "FAIL";
-            integrationProbe = "manual_word";
+            integrationProbe = "single_shift_left";
             session.Command("CACHE");
-            if (session.Command("TAP_L").Layout != "ru") return "FAIL";
+            var firstTap = session.Command("TAP_L");
+            integrationLayout = firstTap.Layout;
+            if (firstTap.Layout != "ru") return "FAIL";
+            integrationProbe = "manual_word_text";
             session.Command("TAP_R");
             var result = session.Command("WAIT");
-            if (plain.Text != "привет" || result.Applied < 1 || result.Layout != "ru") return "FAIL";
+            integrationLayout = result.Layout;
+            integrationApplied = result.Applied;
+            integrationUndone = result.Undone;
+            integrationTextLength = plain.Text.Length;
+            integrationExpectedText = plain.Text == "привет";
+            if (!integrationExpectedText) return "FAIL";
+            integrationProbe = "manual_word_receipt";
+            if (result.Applied < 1) return "FAIL";
+            integrationProbe = "manual_word_layout";
+            if (result.Layout != "ru") return "FAIL";
             checks++;
             integrationProbe = "manual_undo";
             if (session.Command("TAP_R").Layout != "en") return "FAIL";
@@ -429,6 +453,7 @@ internal static class Program
         public int Applied, Undone;
         public string Layout = "";
         public bool Recovery;
+        public int ManualCode;
     }
 
     private sealed class FixtureSession : IDisposable
@@ -453,16 +478,21 @@ internal static class Program
             process.StandardInput.WriteLine(command);
             process.StandardInput.Flush();
             var line = Pump(() => process.StandardOutput.ReadLine(),
-                command == "CACHE" ? 5500 : 4000);
+                command == "CACHE" || command == "WAIT" ? 5500 : 4000);
             if (line == "CACHE_NOT_READY")
             { integrationProbe = "cache_preparation"; throw new InvalidOperationException(); }
             if (line == null && command == "CACHE") integrationProbe = "cache_preparation";
+            if (line == "WORK_NOT_READY" || line == null && command == "WAIT")
+            { integrationWaitStatus = "WORK_NOT_READY"; throw new InvalidOperationException(); }
             if (line == null || !line.StartsWith("OK|", StringComparison.Ordinal))
                 throw new InvalidOperationException();
             var pieces = line.Split('|');
-            if (pieces.Length != 5) throw new InvalidOperationException();
-            return new FixtureReply { Applied = int.Parse(pieces[1]), Undone = int.Parse(pieces[2]),
-                Layout = pieces[3], Recovery = pieces[4] == "1" };
+            if (pieces.Length != 6) throw new InvalidOperationException();
+            if (command == "WAIT") integrationWaitStatus = "SETTLED";
+            var reply = new FixtureReply { Applied = int.Parse(pieces[1]), Undone = int.Parse(pieces[2]),
+                Layout = pieces[3], Recovery = pieces[4] == "1", ManualCode = int.Parse(pieces[5]) };
+            integrationManualCode = reply.ManualCode;
+            return reply;
         }
 
         public void Dispose()

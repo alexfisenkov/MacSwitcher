@@ -14,16 +14,46 @@ function Install-Package {
   return $process.ExitCode
 }
 function Find-UninstallEntry {
-  $base = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall'
-  Get-ChildItem $base -ErrorAction SilentlyContinue | ForEach-Object {
-    $item = Get-ItemProperty $_.PSPath
-    if ($item.DisplayName -eq 'MacSwitcher') { return $item }
-  } | Select-Object -First 1
+  $appIdKey = '{39557FE2-AB10-4BCF-AFC6-2F6A713E5EB5}_is1'
+  $subKeyPath = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\' + $appIdKey
+  foreach ($view in @([Microsoft.Win32.RegistryView]::Registry64, [Microsoft.Win32.RegistryView]::Registry32)) {
+    $baseKey = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::CurrentUser, $view)
+    try {
+      $key = $baseKey.OpenSubKey($subKeyPath)
+      if ($key) {
+        try {
+          return [pscustomobject]@{
+            AppIdKey = $appIdKey
+            RegistryView = $view.ToString()
+            DisplayName = $key.GetValue('DisplayName', $null)
+            InstallLocation = $key.GetValue('InstallLocation', $null)
+            UninstallString = $key.GetValue('UninstallString', $null)
+          }
+        } finally { $key.Dispose() }
+      }
+    } finally { $baseKey.Dispose() }
+  }
+  return $null
 }
 
 $firstInstallExitCode = Install-Package
 $entry = Find-UninstallEntry
-if (-not $entry) { throw 'Per-user uninstall registration was not created.' }
+if (-not $entry) {
+  $registryReceipt = [ordered]@{ schema = 1; status = 'FAIL'; hive = 'HKCU'; expectedAppIdKey = '{39557FE2-AB10-4BCF-AFC6-2F6A713E5EB5}_is1'; viewsChecked = @('Registry64','Registry32'); found = $false }
+  $registryReceipt | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 (Join-Path $artifacts 'install-registry-receipt.json')
+  throw 'Per-user uninstall registration for the exact MacSwitcher AppId was not created.'
+}
+$registryReceipt = [ordered]@{
+  schema = 1
+  status = 'PASS'
+  hive = 'HKCU'
+  appIdKey = $entry.AppIdKey
+  registryView = $entry.RegistryView
+  displayName = $entry.DisplayName
+  installLocationPresent = [bool]$entry.InstallLocation
+  uninstallerPresent = [bool]$entry.UninstallString
+}
+$registryReceipt | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 (Join-Path $artifacts 'install-registry-receipt.json')
 if (-not (Test-Path $sentinel)) { throw 'User data disappeared on first install.' }
 
 $reinstallExitCode = Install-Package
@@ -57,6 +87,9 @@ $receipt = [ordered]@{
   reopenSettingsCount = [int]($startupReceipt.reopenRequestPid -ne $null)
   normalQuitExitCode = $startupReceipt.quitRequestExitCode
   uninstallExitCode = $uninstallProcess.ExitCode
+  perUserRegistration = $registryReceipt.status
+  appIdRegistryKey = $registryReceipt.appIdKey
+  appRegistryView = $registryReceipt.registryView
   userDataPreservedOnInstall = $true
   userDataPreservedOnReinstall = $true
   userDataPreservedOnUninstall = $true

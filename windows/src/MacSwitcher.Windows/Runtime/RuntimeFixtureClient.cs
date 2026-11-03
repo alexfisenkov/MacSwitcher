@@ -58,7 +58,20 @@ namespace MacSwitcher.Windows.Runtime
                                 if (!runtime.FixtureCacheReadyFor(cacheFocus, cacheStarted))
                                 { output.WriteLine("CACHE_NOT_READY"); return 7; }
                                 break;
-                            case "WAIT": Thread.Sleep(400); break;
+                            case "WAIT":
+                                var workDeadline = (long)Win32.GetTickCount64() + 4000;
+                                while ((long)Win32.GetTickCount64() < workDeadline)
+                                {
+                                    if (runtime.FixtureWorkSettled)
+                                    {
+                                        Thread.Sleep(20);
+                                        if (runtime.FixtureWorkSettled) break;
+                                    }
+                                    Thread.Sleep(20);
+                                }
+                                if (!runtime.FixtureWorkSettled)
+                                { output.WriteLine("WORK_NOT_READY"); return 8; }
+                                break;
                             case "GAP": syntheticTick += 500; break;
                             case "TAP_L":
                                 runtime.EmitFixtureKey(PhysicalInputKind.KeyDown, Win32.VK_LSHIFT, 42, syntheticTick);
@@ -93,7 +106,8 @@ namespace MacSwitcher.Windows.Runtime
                         }
                         output.WriteLine("OK|" + Volatile.Read(ref applied) + "|" +
                             Volatile.Read(ref undone) + "|" + runtime.CurrentLayoutLanguage + "|" +
-                            (runtime.HasRecoveryOriginals ? "1" : "0"));
+                            (runtime.HasRecoveryOriginals ? "1" : "0") + "|" +
+                            runtime.FixtureManualCode);
                     }
                     catch { output.WriteLine("ERROR"); return 6; }
                 }

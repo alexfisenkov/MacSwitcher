@@ -73,6 +73,8 @@ namespace MacSwitcher.Windows.Runtime
         private int refreshing;
         private bool observing;
         private PhysicalInput? latestObservation;
+        private int manualWorkInFlight;
+        private int fixtureManualCode;
         private CorrectionReceipt? receipt;
 
         public event Action<RuntimeStatus>? StatusChanged;
@@ -96,6 +98,15 @@ namespace MacSwitcher.Windows.Runtime
 
         public bool HasRecoveryOriginals { get { return recovery.Count > 0; } }
         internal bool FixtureHookReady { get { return hook.Ready; } }
+        internal int FixtureManualCode { get { return Volatile.Read(ref fixtureManualCode); } }
+        internal bool FixtureWorkSettled
+        {
+            get
+            {
+                if (Volatile.Read(ref manualWorkInFlight) != 0) return false;
+                lock (stateGate) return !observing && latestObservation == null;
+            }
+        }
         internal bool FixtureCacheReadyFor(NativeFocusSnapshot? focus, long notBeforeTick)
         {
             if (focus == null || !focus.StillSame()) return false;
@@ -379,8 +390,21 @@ namespace MacSwitcher.Windows.Runtime
                     if (!switched) Publish("Смена раскладки не подтверждена.", false);
                 }
                 else if (saved.Kind == ShiftActionKind.Convert)
-                    Task.Run(() => ConvertManual(focus, origin, saved.Direction.SourceId,
-                        saved.Direction.TargetId, revision, eventGeneration));
+                {
+                    Interlocked.Exchange(ref fixtureManualCode, 0);
+                    Interlocked.Increment(ref manualWorkInFlight);
+                    try
+                    {
+                        Task.Run(() =>
+                        {
+                            try { ConvertManual(focus, origin, saved.Direction.SourceId,
+                                saved.Direction.TargetId, revision, eventGeneration); }
+                            catch { Interlocked.Exchange(ref fixtureManualCode, 99); }
+                            finally { Interlocked.Decrement(ref manualWorkInFlight); }
+                        });
+                    }
+                    catch { Interlocked.Decrement(ref manualWorkInFlight); throw; }
+                }
             }
             else if (input.Kind == PhysicalInputKind.KeyUp && IsTextKey(input.VirtualKey)) QueueObservation(input);
         }
@@ -622,27 +646,32 @@ namespace MacSwitcher.Windows.Runtime
         private void ConvertManual(NativeFocusSnapshot? focus, FieldSnapshot? origin, string source,
             string target, long revision, long generation)
         {
-            if (!CanMutate(generation, revision)) return;
+            Interlocked.Exchange(ref fixtureManualCode, 1);
+            if (!CanMutate(generation, revision)) { Interlocked.Exchange(ref fixtureManualCode, 2); return; }
             if (origin == null || focus == null)
             {
+                Interlocked.Exchange(ref fixtureManualCode, 3);
                 Publish("Не удалось заранее подтвердить поле для исправления. Повторите двойное нажатие Shift после выбора текстового поля.", false);
                 return;
             }
             if (KeyboardLayoutSource.Language(Win32.GetKeyboardLayout(focus.ThreadId)) != target)
             {
+                Interlocked.Exchange(ref fixtureManualCode, 4);
                 Publish("Смена раскладки не подтверждена; текст не изменён.", false);
                 return;
             }
             var read = ReadField(focus, 100);
             var field = read.Field;
-            if (!CanMutate(generation, revision)) return;
+            if (!CanMutate(generation, revision)) { Interlocked.Exchange(ref fixtureManualCode, 2); return; }
             if (read.Outcome != BrokerOutcome.Success || field == null)
             {
+                Interlocked.Exchange(ref fixtureManualCode, 5);
                 Publish("Это текстовое поле не удалось безопасно проверить. Текст не изменён.", false);
                 return;
             }
             if (!field.SameState(origin) || !CanMutate(generation, revision))
             {
+                Interlocked.Exchange(ref fixtureManualCode, 6);
                 Publish("Поле или выделение изменилось после первого Shift. Текст не изменён; повторите действие.", false);
                 return;
             }
@@ -655,49 +684,63 @@ namespace MacSwitcher.Windows.Runtime
                     ? prior.RangeStart + (prior.Undone ? prior.OriginalPhrase.Length : prior.ReplacementPhrase.Length)
                     : field.Value.Length))
             {
-                ToggleReceipt(prior, !prior.Undone, generation);
+                Interlocked.Exchange(ref fixtureManualCode,
+                    ToggleReceipt(prior, !prior.Undone, generation) ? 30 : 31);
                 return;
             }
             var pendingOriginal = recovery.FindForField(field);
             if (pendingOriginal != null)
             {
-                TryRestoreRecoveryCurrent(pendingOriginal, focus, field, revision, generation);
+                Interlocked.Exchange(ref fixtureManualCode,
+                    TryRestoreRecoveryCurrent(pendingOriginal, focus, field, revision, generation) ? 40 : 41);
                 return;
             }
             if (field.SelectionEnd > field.SelectionStart)
             {
-                if (lexicon == null && settings.SmartSelection) return;
+                if (lexicon == null && settings.SmartSelection)
+                { Interlocked.Exchange(ref fixtureManualCode, 7); return; }
                 var selected = field.Value.Substring(field.SelectionStart, field.SelectionEnd - field.SelectionStart);
-                if (selected.Length > 4096) return;
+                if (selected.Length > 4096)
+                { Interlocked.Exchange(ref fixtureManualCode, 7); return; }
                 var converted = settings.SmartSelection
                     ? SelectionConverter.Convert(selected, lexicon!, true, source, settings.RussianPriority)
                     : LayoutMap.ConvertBidirectional(selected);
-                if (converted == selected || converted.Length > 4096) return;
+                if (converted == selected || converted.Length > 4096)
+                { Interlocked.Exchange(ref fixtureManualCode, 7); return; }
                 var resultLanguage = ResultLanguage(selected, converted, target);
                 if (field.NativeRangeWriter)
-                    TryNativeRangeEdit(focus, field, field.SelectionStart, field.SelectionEnd, converted,
-                        revision, generation, selected, source, resultLanguage);
+                    Interlocked.Exchange(ref fixtureManualCode,
+                        TryNativeRangeEdit(focus, field, field.SelectionStart, field.SelectionEnd, converted,
+                            revision, generation, selected, source, resultLanguage) ? 20 : 21);
                 else if (field.CanWrite && field.SelectionEnd == field.Value.Length)
                 {
                     var whole = field.Value.Substring(0, field.SelectionStart) + converted;
-                    TryFullValueEdit(focus, field, whole, revision, generation, selected, converted, source,
-                        resultLanguage);
+                    Interlocked.Exchange(ref fixtureManualCode,
+                        TryFullValueEdit(focus, field, whole, revision, generation, selected, converted, source,
+                            resultLanguage) ? 22 : 23);
                 }
-                else Publish("Это выделение нельзя изменить с проверкой результата в данном редакторе.", false);
+                else
+                {
+                    Interlocked.Exchange(ref fixtureManualCode, 7);
+                    Publish("Это выделение нельзя изменить с проверкой результата в данном редакторе.", false);
+                }
                 return;
             }
-            if (field.SelectionEnd != field.Value.Length) return;
+            if (field.SelectionEnd != field.Value.Length)
+            { Interlocked.Exchange(ref fixtureManualCode, 7); return; }
             var token = LastToken(field.Value);
-            if (token == null) return;
+            if (token == null) { Interlocked.Exchange(ref fixtureManualCode, 7); return; }
             var replacement = LayoutMap.Convert(token, source);
-            if (replacement == token) return;
+            if (replacement == token) { Interlocked.Exchange(ref fixtureManualCode, 7); return; }
             var targetValue = field.Value.Substring(0, field.Value.Length - token.Length) + replacement;
             var wordLanguage = ResultLanguage(token, replacement, target);
             if (field.NativeRangeWriter)
-                TryNativeRangeEdit(focus, field, field.Value.Length - token.Length, field.Value.Length,
-                    replacement, revision, generation, token, source, wordLanguage);
-            else TryFullValueEdit(focus, field, targetValue, revision, generation, token, replacement,
-                source, wordLanguage);
+                Interlocked.Exchange(ref fixtureManualCode,
+                    TryNativeRangeEdit(focus, field, field.Value.Length - token.Length, field.Value.Length,
+                        replacement, revision, generation, token, source, wordLanguage) ? 20 : 21);
+            else Interlocked.Exchange(ref fixtureManualCode,
+                TryFullValueEdit(focus, field, targetValue, revision, generation, token, replacement,
+                    source, wordLanguage) ? 22 : 23);
         }
 
         internal static string ResultLanguage(string original, string changed, string fallback)
