@@ -307,25 +307,33 @@ internal static class Program
         string executable, out int checks)
     {
         checks = 0;
-        integrationProbe = "preconditions";
-        var data = Path.Combine(Directory.GetCurrentDirectory(), "windows", "data");
+        integrationProbe = "app_data_manifest";
+        var appDirectory = Path.GetDirectoryName(Path.GetFullPath(executable));
+        if (string.IsNullOrEmpty(appDirectory)) return "FAIL";
+        var data = Path.Combine(appDirectory, "data");
         if (!File.Exists(Path.Combine(data, "dictionary-manifest.json"))) return "FAIL";
+        integrationProbe = "load_layouts";
         if (LoadKeyboardLayout("00000419", 1) == IntPtr.Zero ||
             LoadKeyboardLayout("00000409", 1) == IntPtr.Zero) return "NOT_RUN";
+        integrationProbe = "list_layouts";
         int count = GetKeyboardLayoutList(0, null);
         if (count < 2 || count > 256) return "NOT_RUN";
         var layouts = new IntPtr[count];
         GetKeyboardLayoutList(count, layouts);
         if (!layouts.Any(x => unchecked((uint)x.ToInt64()) == 0x04190419u) ||
             !layouts.Any(x => unchecked((uint)x.ToInt64()) == 0x04090409u)) return "NOT_RUN";
+        integrationProbe = "fixture_focus";
         if (!Focus(form, plain)) return "NOT_RUN";
         plain.Text = "ghbdtn"; plain.SelectionStart = plain.TextLength;
         var marker = System.Security.Cryptography.RandomNumberGenerator.GetInt32(1, int.MaxValue);
+        integrationProbe = "fixture_marker";
         if (SetProp(form.Handle, "MacSwitcher.RuntimeFixture", new IntPtr(marker)) == IntPtr.Zero)
             return "FAIL";
         try
         {
+            integrationProbe = "client_start";
             using var session = new FixtureSession(executable, data, marker);
+            integrationProbe = "client_ready";
             if (!session.Ready) return "FAIL";
             integrationProbe = "manual_word";
             session.Command("CACHE");
@@ -403,7 +411,7 @@ internal static class Program
             if (plain.Text != "ghbdt" || password.Text != "synthetic-secret" || result.Recovery) return "FAIL";
             checks++;
             integrationProbe = "password_rejection";
-            session.Command("CACHE"); session.Command("TAP_L"); session.Command("TAP_R");
+            session.Command("WAIT"); session.Command("TAP_L"); session.Command("TAP_R");
             var priorApplied = result.Applied;
             result = session.Command("WAIT");
             if (password.Text != "synthetic-secret" || result.Applied != priorApplied || result.Recovery)
@@ -444,7 +452,11 @@ internal static class Program
         {
             process.StandardInput.WriteLine(command);
             process.StandardInput.Flush();
-            var line = Pump(() => process.StandardOutput.ReadLine(), 4000);
+            var line = Pump(() => process.StandardOutput.ReadLine(),
+                command == "CACHE" ? 5500 : 4000);
+            if (line == "CACHE_NOT_READY")
+            { integrationProbe = "cache_preparation"; throw new InvalidOperationException(); }
+            if (line == null && command == "CACHE") integrationProbe = "cache_preparation";
             if (line == null || !line.StartsWith("OK|", StringComparison.Ordinal))
                 throw new InvalidOperationException();
             var pieces = line.Split('|');

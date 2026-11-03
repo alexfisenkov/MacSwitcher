@@ -48,7 +48,16 @@ namespace MacSwitcher.Windows.Runtime
                     {
                         switch (command)
                         {
-                            case "CACHE": Thread.Sleep(250); break;
+                            case "CACHE":
+                                var cacheFocus = NativeFocusSnapshot.Capture();
+                                var cacheStarted = (long)Win32.GetTickCount64();
+                                var cacheDeadline = cacheStarted + 4000;
+                                while (!runtime.FixtureCacheReadyFor(cacheFocus, cacheStarted) &&
+                                    (long)Win32.GetTickCount64() < cacheDeadline)
+                                    Thread.Sleep(20);
+                                if (!runtime.FixtureCacheReadyFor(cacheFocus, cacheStarted))
+                                { output.WriteLine("CACHE_NOT_READY"); return 7; }
+                                break;
                             case "WAIT": Thread.Sleep(400); break;
                             case "GAP": syntheticTick += 500; break;
                             case "TAP_L":

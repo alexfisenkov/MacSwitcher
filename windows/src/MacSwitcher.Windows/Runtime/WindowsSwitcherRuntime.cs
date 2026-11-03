@@ -96,6 +96,14 @@ namespace MacSwitcher.Windows.Runtime
 
         public bool HasRecoveryOriginals { get { return recovery.Count > 0; } }
         internal bool FixtureHookReady { get { return hook.Ready; } }
+        internal bool FixtureCacheReadyFor(NativeFocusSnapshot? focus, long notBeforeTick)
+        {
+            if (focus == null || !focus.StillSame()) return false;
+            lock (stateGate)
+                return cachedField != null &&
+                    cachedAtTicks >= notBeforeTick &&
+                    cachedAtRevision == hook.Revision && MatchesFocus(cachedField, focus);
+        }
         internal void EmitFixtureKey(PhysicalInputKind kind, int virtualKey, uint scanCode, long timestamp)
         { hook.EmitFixtureKey(kind, virtualKey, scanCode, timestamp); }
         public string CurrentLayoutLanguage

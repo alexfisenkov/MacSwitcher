@@ -53,7 +53,7 @@ begin
   Result := Net462Installed();
   if not Result then begin
     if MsgBox('.NET Framework 4.6.2 или новее не найден. Открыть официальный сайт Microsoft для загрузки?', mbError, MB_YESNO) = IDYES then
-      ShellExec('open', 'https://dotnet.microsoft.com/download/dotnet-framework/net462', '', '', SW_SHOWNORMAL, ErrorCode);
+      ShellExec('open', 'https://dotnet.microsoft.com/download/dotnet-framework/net462', '', '', SW_SHOWNORMAL, ewNoWait, ErrorCode);
     MsgBox('Установите .NET Framework 4.6.2 или новее, затем запустите установщик снова.', mbInformation, MB_OK);
   end;
 end;
