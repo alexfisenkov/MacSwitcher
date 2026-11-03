@@ -947,31 +947,72 @@ internal static class Program
         return true;
     }
 
-    private static bool FocusOwnEdgeField(IntPtr window, uint pid, string pageMarker,
+    private static string FocusOwnEdgeField(IntPtr window, uint pid, string pageMarker,
         int windowMarker)
     {
         if (!OwnEdgeWindow(window, pid, pageMarker) ||
             GetProp(window, "MacSwitcher.RuntimeBrowserFixture").ToInt64() != windowMarker)
-            return false;
+            return "FOCUS_MARKER_CHANGED";
         var accessibleName = pageMarker + "-field";
+        var until = Environment.TickCount64 + 3000;
         var task = Task.Run(() =>
         {
-            if (!OwnEdgeWindow(window, pid, pageMarker) ||
-                GetProp(window, "MacSwitcher.RuntimeBrowserFixture").ToInt64() != windowMarker)
-                return false;
-            var root = AutomationElement.FromHandle(window);
-            var field = root.FindFirst(TreeScope.Descendants,
-                new PropertyCondition(AutomationElement.NameProperty, accessibleName));
-            if (field == null || field.Current.IsPassword || !field.Current.IsEnabled ||
-                field.Current.ControlType != ControlType.Edit) return false;
-            field.SetFocus();
-            return field.Current.HasKeyboardFocus;
+            var phase = "ROOT";
+            try
+            {
+                if (!OwnEdgeWindow(window, pid, pageMarker) ||
+                    GetProp(window, "MacSwitcher.RuntimeBrowserFixture").ToInt64() != windowMarker)
+                    return "FOCUS_MARKER_CHANGED";
+                var root = AutomationElement.FromHandle(window);
+                if (root == null) return "FOCUS_UIA_ROOT_MISSING";
+                AutomationElement? field = null;
+                phase = "FIND";
+                while (field == null && Environment.TickCount64 < until)
+                {
+                    field = root.FindFirst(TreeScope.Descendants,
+                        new PropertyCondition(AutomationElement.NameProperty, accessibleName));
+                    if (field == null) Thread.Sleep(20);
+                }
+                if (field == null) return "FOCUS_UIA_FIELD_MISSING";
+                phase = "METADATA";
+                var runtimeId = field.GetRuntimeId();
+                if (runtimeId == null || runtimeId.Length == 0 ||
+                    field.Current.Name != accessibleName)
+                    return "FOCUS_UIA_IDENTITY_INVALID";
+                if (field.Current.IsPassword || !field.Current.IsEnabled ||
+                    field.Current.ControlType != ControlType.Edit)
+                    return "FOCUS_UIA_FIELD_UNSAFE";
+                if (Environment.TickCount64 >= until) return "FOCUS_UIA_TIMEOUT";
+                if (!OwnEdgeWindow(window, pid, pageMarker) ||
+                    GetProp(window, "MacSwitcher.RuntimeBrowserFixture").ToInt64() != windowMarker)
+                    return "FOCUS_MARKER_CHANGED";
+                phase = "SET";
+                field.SetFocus(); // One addressed focus request in this private fixture.
+                phase = "ACK";
+                while (Environment.TickCount64 < until)
+                {
+                    if (!OwnEdgeWindow(window, pid, pageMarker) ||
+                        GetProp(window, "MacSwitcher.RuntimeBrowserFixture").ToInt64() != windowMarker)
+                        return "FOCUS_MARKER_CHANGED";
+                    if (field.Current.Name != accessibleName ||
+                        !runtimeId.SequenceEqual(field.GetRuntimeId()))
+                        return "FOCUS_UIA_IDENTITY_CHANGED";
+                    if (field.Current.HasKeyboardFocus) return "READY";
+                    Thread.Sleep(20);
+                }
+                return "FOCUS_UIA_NOT_ACKED";
+            }
+            catch (Exception error)
+            {
+                return phase == "SET"
+                    ? "FOCUS_SET_HRESULT_" + error.HResult.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    : "FOCUS_" + phase + "_EXCEPTION";
+            }
         });
-        var until = Environment.TickCount64 + 3000;
         while (!task.IsCompleted && Environment.TickCount64 < until)
         { Application.DoEvents(); if (!task.IsCompleted) WaitForUiMessage(until); }
-        return task.IsCompletedSuccessfully && task.Result &&
-            OwnEdgeWindow(window, pid, pageMarker);
+        if (!task.IsCompletedSuccessfully) return "FOCUS_UIA_TIMEOUT";
+        return OwnEdgeWindow(window, pid, pageMarker) ? task.Result : "FOCUS_MARKER_CHANGED";
     }
 
     private static string ProbeEdge(Broker broker, string executable, bool textarea,
@@ -1027,8 +1068,8 @@ internal static class Program
             if (SetProp(edgeWindow, "MacSwitcher.RuntimeBrowserFixture", new IntPtr(windowMarker)) == IntPtr.Zero)
                 return Finish("MARKER_UNAVAILABLE");
             markedWindow = edgeWindow;
-            if (!FocusOwnEdgeField(edgeWindow, edgePid, pageMarker, windowMarker))
-                return Finish("FOCUS_NOT_READY");
+            var focusPreparation = FocusOwnEdgeField(edgeWindow, edgePid, pageMarker, windowMarker);
+            if (focusPreparation != "READY") return Finish(focusPreparation);
             until = Environment.TickCount64 + 3000;
             while (Environment.TickCount64 < until)
             {
@@ -1040,7 +1081,7 @@ internal static class Program
                 { receipt.DomActiveAck = true; receipt.DomDocumentFocused = true; break; }
                 WaitForUiMessage(until);
             }
-            if (!receipt.DomActiveAck) return Finish("FOCUS_NOT_READY");
+            if (!receipt.DomActiveAck) return Finish("FOCUS_DOM_NOT_READY");
             Result? captured = null;
             for (int attempt = 0; attempt < 10; attempt++)
             {
@@ -1168,8 +1209,8 @@ internal static class Program
             markedWindow = edgeWindow;
             receipt.OwnWindow = OwnEdgeWindow(edgeWindow, edgePid, pageMarker);
             if (!receipt.OwnWindow) return Finish("FOCUS_DRIFT");
-            if (!FocusOwnEdgeField(edgeWindow, edgePid, pageMarker, marker))
-                return Finish("FOCUS_NOT_READY");
+            var focusPreparation = FocusOwnEdgeField(edgeWindow, edgePid, pageMarker, marker);
+            if (focusPreparation != "READY") return Finish(focusPreparation);
             until = Environment.TickCount64 + 3000;
             while (Environment.TickCount64 < until)
             {
@@ -1181,7 +1222,7 @@ internal static class Program
                 { receipt.DomActiveAck = true; receipt.DomDocumentFocused = true; break; }
                 WaitForUiMessage(until);
             }
-            if (!receipt.DomActiveAck) return Finish("FOCUS_NOT_READY");
+            if (!receipt.DomActiveAck) return Finish("FOCUS_DOM_NOT_READY");
             using var session = new FixtureSession(appExecutable, data, marker, edgePid, pageMarker);
             if (!session.Ready) return Finish("CLIENT_UNAVAILABLE");
             try
