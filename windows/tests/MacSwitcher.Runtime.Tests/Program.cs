@@ -56,6 +56,9 @@ internal static class Program
     private static int brokerTextLength = -1, brokerSelectionStart = -1, brokerSelectionEnd = -1;
     private static int brokerNativeClassKind = -1;
     private static bool brokerSameFixturePid, brokerFocusMatchesPlain;
+    private static int brokerObservedTextLength = -1, brokerObservedSelectionStart = -1;
+    private static int brokerObservedSelectionEnd = -1;
+    private static bool brokerObservedIdentity, brokerObservedValueMatched;
     private static int hookKeyboardCode, hookMouseCode;
 
     [StructLayout(LayoutKind.Sequential)] private struct GuiThreadInfo
@@ -273,6 +276,17 @@ internal static class Program
             checks++;
             var changed = RequireBroker(() => broker.Call(2, captured.Field, "привет"));
             Application.DoEvents();
+            if (changed.Field != null)
+            {
+                brokerObservedTextLength = changed.Field.Text.Length;
+                brokerObservedSelectionStart = changed.Field.Start;
+                brokerObservedSelectionEnd = changed.Field.End;
+                brokerObservedIdentity = changed.Field.Foreground == captured.Field.Foreground &&
+                    changed.Field.Focus == captured.Field.Focus && changed.Field.Pid == captured.Field.Pid &&
+                    changed.Field.Tid == captured.Field.Tid &&
+                    changed.Field.Id.SequenceEqual(captured.Field.Id);
+                brokerObservedValueMatched = changed.Field.Text == "привет";
+            }
             if (changed?.Outcome != 1 || changed.Field?.Text != "привет" || plain.Text != "привет")
                 return Report("FAIL", "plain_value_write", checks);
             checks++;
@@ -404,6 +418,7 @@ internal static class Program
         if (response == null) throw new IOException("Broker RPC unavailable.");
         brokerOutcome = response.Outcome;
         brokerStage = response.Stage;
+        brokerPhase = response.Phase;
         brokerNativeCode = response.NativeError;
         brokerHResult = response.HResult;
         return response;
@@ -450,6 +465,11 @@ internal static class Program
             ",\"brokerNativeClassKind\":" + brokerNativeClassKind +
             ",\"brokerSameFixturePid\":" + (brokerSameFixturePid ? "true" : "false") +
             ",\"brokerFocusMatchesPlain\":" + (brokerFocusMatchesPlain ? "true" : "false") +
+            ",\"brokerObservedTextLength\":" + brokerObservedTextLength +
+            ",\"brokerObservedSelectionStart\":" + brokerObservedSelectionStart +
+            ",\"brokerObservedSelectionEnd\":" + brokerObservedSelectionEnd +
+            ",\"brokerObservedIdentity\":" + (brokerObservedIdentity ? "true" : "false") +
+            ",\"brokerObservedValueMatched\":" + (brokerObservedValueMatched ? "true" : "false") +
             ",\"edgeInput\":\"" + edgeInput +
             "\",\"edgeTextarea\":\"" + edgeTextarea +
             "\",\"edgeInputReceipt\":" + edgeInputReceipt.Json() +

@@ -21,7 +21,8 @@ namespace MacSwitcher.Windows.Automation
         Pattern = 9, Value = 10, Selection = 11, RuntimeId = 12,
         Postcheck = 13, Exception = 14, SelectionRange = 15,
         SelectionPattern = 16, NativeDeadline = 17,
-        NativeModifier = 18, NativeMessage = 19, NativeMismatch = 20
+        NativeModifier = 18, NativeMessage = 19, NativeMismatch = 20,
+        ValueIdentityMismatch = 21, ValueTextMismatch = 22, ValueCaretMismatch = 23
     }
     internal enum BrokerPhase : byte
     {
@@ -31,7 +32,7 @@ namespace MacSwitcher.Windows.Automation
         NativeReadback = 8, NativeFinalAck = 9,
         ValuePrecondition = 10, ValuePreflight = 11,
         ValueBeforeMutation = 12, ValueSet = 13,
-        ValueReadback = 14, ValueFinalAck = 15
+        ValueReadback = 14, ValueFinalAck = 15, ValueCaret = 16
     }
 
     internal sealed class FieldSnapshot
@@ -340,8 +341,8 @@ namespace MacSwitcher.Windows.Automation
                         if (responseFrame.BaseStream.Position != responseFrame.BaseStream.Length)
                             throw new InvalidDataException("Unexpected response bytes.");
                         if (response.Outcome > BrokerOutcome.Unknown ||
-                            response.Stage > BrokerStage.NativeMismatch ||
-                            response.Phase > BrokerPhase.ValueFinalAck)
+                            response.Stage > BrokerStage.ValueCaretMismatch ||
+                            response.Phase > BrokerPhase.ValueCaret)
                             throw new InvalidDataException("Invalid broker response.");
                         return response;
                     });
@@ -679,6 +680,91 @@ namespace MacSwitcher.Windows.Automation
                 NativeRangeWriter = nativeRange };
         }
 
+        private static bool TryPlaceCaretAtEnd(FieldSnapshot expected, FieldSnapshot observed,
+            IntPtr expectedLayout, long deadline, out bool issued,
+            out BrokerStage stage, out int nativeError, out int hresult)
+        {
+            issued = false; stage = BrokerStage.None; nativeError = hresult = 0;
+            if ((long)Win32.GetTickCount64() >= deadline)
+            { stage = BrokerStage.NativeDeadline; return false; }
+            var focus = NativeFocusSnapshot.Capture();
+            if (focus == null || focus.Foreground != expected.Foreground || focus.Focus != expected.Focus ||
+                focus.ProcessId != expected.ProcessId || focus.ThreadId != expected.ThreadId)
+            { stage = BrokerStage.Focus; return false; }
+            if (Win32.GetKeyboardLayout(expected.ThreadId) != expectedLayout)
+            { stage = BrokerStage.Layout; return false; }
+            if (!NativeSafety.IsNormalDesktop()) { stage = BrokerStage.Desktop; return false; }
+            if (!NativeSafety.IsEqualOrLowerIntegrity(expected.ProcessId))
+            { stage = BrokerStage.Integrity; return false; }
+            if (!NativeSafety.ModifiersUp()) { stage = BrokerStage.NativeModifier; return false; }
+            try
+            {
+                var element = AutomationElement.FocusedElement;
+                if (element == null) { stage = BrokerStage.Element; return false; }
+                if (element.Current.IsPassword) { stage = BrokerStage.Password; return false; }
+                if (!element.Current.IsEnabled) { stage = BrokerStage.ReadOnly; return false; }
+                if (element.Current.ProcessId != expected.ProcessId ||
+                    (element.Current.NativeWindowHandle != 0 &&
+                     element.Current.NativeWindowHandle != expected.Focus.ToInt64()) ||
+                    !expected.RuntimeId.SequenceEqual(element.GetRuntimeId()))
+                { stage = BrokerStage.RuntimeId; return false; }
+                object valueObject;
+                if (!element.TryGetCurrentPattern(ValuePattern.Pattern, out valueObject) ||
+                    ((ValuePattern)valueObject).Current.IsReadOnly)
+                { stage = BrokerStage.ReadOnly; return false; }
+                if (observed.NativeRangeWriter)
+                {
+                    var nativeClass = new StringBuilder(256);
+                    if (Win32.GetClassName(expected.Focus, nativeClass, nativeClass.Capacity) == 0)
+                    { stage = BrokerStage.Identity; nativeError = Marshal.GetLastWin32Error(); return false; }
+                    var name = nativeClass.ToString();
+                    bool nativeEdit = name.Equals("Edit", StringComparison.OrdinalIgnoreCase) ||
+                        name.StartsWith("WindowsForms10.EDIT", StringComparison.OrdinalIgnoreCase) ||
+                        name.StartsWith("RichEdit", StringComparison.OrdinalIgnoreCase) ||
+                        name.StartsWith("WindowsForms10.RichEdit", StringComparison.OrdinalIgnoreCase);
+                    var style = Win32.GetWindowStyle(expected.Focus, Win32.GWL_STYLE);
+                    if (!nativeEdit || !Win32.IsWindowUnicode(expected.Focus) ||
+                        !Win32.IsWindowEnabled(expected.Focus))
+                    { stage = BrokerStage.Identity; return false; }
+                    if ((style & Win32.ES_PASSWORD) != 0) { stage = BrokerStage.Password; return false; }
+                    if ((style & (Win32.ES_READONLY | Win32.WS_DISABLED)) != 0)
+                    { stage = BrokerStage.ReadOnly; return false; }
+                    var remaining = deadline - (long)Win32.GetTickCount64();
+                    if (remaining <= 0) { stage = BrokerStage.NativeDeadline; return false; }
+                    issued = true;
+                    IntPtr ignored;
+                    if (Win32.SendMessageTimeout(expected.Focus, Win32.EM_SETSEL,
+                        new IntPtr(observed.Value.Length), new IntPtr(observed.Value.Length),
+                        Win32.SMTO_ABORTIFHUNG | Win32.SMTO_ERRORONEXIT,
+                        (uint)Math.Min(20, remaining), out ignored) == IntPtr.Zero)
+                    { stage = BrokerStage.NativeMessage; nativeError = Marshal.GetLastWin32Error(); return false; }
+                    if ((long)Win32.GetTickCount64() >= deadline)
+                    { stage = BrokerStage.NativeDeadline; return false; }
+                    return true;
+                }
+                object textObject;
+                if (!element.TryGetCurrentPattern(TextPattern.Pattern, out textObject))
+                { stage = BrokerStage.Pattern; return false; }
+                var range = ((TextPattern)textObject).DocumentRange.Clone();
+                var readOnly = range.GetAttributeValue(TextPattern.IsReadOnlyAttribute);
+                if (!(readOnly is bool) || (bool)readOnly)
+                { stage = BrokerStage.ReadOnly; return false; }
+                range.MoveEndpointByRange(TextPatternRangeEndpoint.Start, range,
+                    TextPatternRangeEndpoint.End);
+                if ((long)Win32.GetTickCount64() >= deadline)
+                { stage = BrokerStage.NativeDeadline; return false; }
+                issued = true;
+                range.Select();
+                if ((long)Win32.GetTickCount64() >= deadline)
+                { stage = BrokerStage.NativeDeadline; return false; }
+                return true;
+            }
+            catch (Exception error)
+            {
+                stage = BrokerStage.Exception; hresult = error.HResult; return false;
+            }
+        }
+
         private static BrokerResponse SafeWrite(NativeFocusSnapshot? focus, IntPtr foreground,
             IntPtr hwnd, uint pid, uint tid, IntPtr expectedLayout, long deadline,
             FieldSnapshot? expected, string? replacement)
@@ -763,7 +849,9 @@ namespace MacSwitcher.Windows.Automation
             // absolute deadline. Never convert a different field or unknown source to ACK.
             FieldSnapshot? lastObservation = null;
             BrokerStage lastStage = BrokerStage.None;
+            BrokerStage lastMismatchStage = BrokerStage.ValueTextMismatch;
             int lastNativeError = 0, lastHResult = 0;
+            bool caretIssued = false;
             while ((long)Win32.GetTickCount64() < deadline)
             {
                 FieldSnapshot? after;
@@ -786,17 +874,36 @@ namespace MacSwitcher.Windows.Automation
                 {
                     if (!after.SameIdentity(before))
                         return new BrokerResponse { Outcome = BrokerOutcome.Unknown,
-                            Phase = BrokerPhase.ValueFinalAck, Stage = BrokerStage.NativeMismatch };
+                            Phase = BrokerPhase.ValueFinalAck,
+                            Stage = BrokerStage.ValueIdentityMismatch };
                     lastObservation = after;
                     if (after.Value == replacement && after.SelectionStart == after.SelectionEnd &&
                         after.SelectionEnd == replacement.Length &&
                         (long)Win32.GetTickCount64() <= deadline)
                         return new BrokerResponse { Outcome = BrokerOutcome.Success,
                             Phase = BrokerPhase.ValueFinalAck, Field = after };
+                    if (after.Value == replacement && !caretIssued)
+                    {
+                        bool issued;
+                        BrokerStage caretStage;
+                        int caretError, caretHResult;
+                        bool placed = TryPlaceCaretAtEnd(before, after, expectedLayout, deadline,
+                            out issued, out caretStage, out caretError, out caretHResult);
+                        if (issued) caretIssued = true;
+                        if (!placed && (issued || caretStage == BrokerStage.Pattern ||
+                            caretStage == BrokerStage.Password || caretStage == BrokerStage.ReadOnly ||
+                            caretStage == BrokerStage.Integrity || caretStage == BrokerStage.Desktop ||
+                            caretStage == BrokerStage.Layout || caretStage == BrokerStage.NativeDeadline))
+                            return new BrokerResponse { Outcome = BrokerOutcome.Unknown,
+                                Phase = BrokerPhase.ValueCaret, Stage = caretStage,
+                                NativeError = caretError, HResult = caretHResult, Field = after };
+                    }
                     if (after.Value != before.Value && after.Value != replacement)
                         return new BrokerResponse { Outcome = BrokerOutcome.Unknown,
-                            Phase = BrokerPhase.ValueFinalAck, Stage = BrokerStage.NativeMismatch,
+                            Phase = BrokerPhase.ValueFinalAck, Stage = BrokerStage.ValueTextMismatch,
                             Field = after };
+                    lastMismatchStage = after.Value == replacement
+                        ? BrokerStage.ValueCaretMismatch : BrokerStage.ValueTextMismatch;
                 }
                 else if (stage == BrokerStage.Password || stage == BrokerStage.ReadOnly ||
                     stage == BrokerStage.Integrity || stage == BrokerStage.Desktop ||
@@ -807,8 +914,9 @@ namespace MacSwitcher.Windows.Automation
                 Thread.Sleep((int)Math.Min(5, remaining));
             }
             return new BrokerResponse { Outcome = BrokerOutcome.Unknown,
-                Phase = lastObservation == null ? BrokerPhase.ValueReadback : BrokerPhase.ValueFinalAck,
-                Stage = lastObservation == null ? lastStage : BrokerStage.NativeMismatch,
+                Phase = caretIssued ? BrokerPhase.ValueCaret :
+                    lastObservation == null ? BrokerPhase.ValueReadback : BrokerPhase.ValueFinalAck,
+                Stage = lastObservation == null ? lastStage : lastMismatchStage,
                 NativeError = lastNativeError, HResult = lastHResult,
                 Field = lastObservation };
         }
