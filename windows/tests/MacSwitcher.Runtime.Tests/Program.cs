@@ -33,6 +33,7 @@ internal static class Program
     private static bool integrationExpectedText;
     private static int integrationManualCode;
     private static int integrationShiftCode;
+    private static int integrationResetReason;
     private static int integrationNativeCode, integrationNativeBrokerOutcome = -1;
     private static int integrationNativeBrokerStage = -1, integrationNativeBudgetMilliseconds = -1;
     private static int integrationNativeBrokerPhase = -1;
@@ -342,6 +343,7 @@ internal static class Program
             ",\"integrationExpectedText\":" + (integrationExpectedText ? "true" : "false") +
             ",\"integrationManualCode\":" + integrationManualCode +
             ",\"integrationShiftCode\":" + integrationShiftCode +
+            ",\"integrationResetReason\":" + integrationResetReason +
             ",\"integrationNativeCode\":" + integrationNativeCode +
             ",\"integrationNativeBrokerOutcome\":" + integrationNativeBrokerOutcome +
             ",\"integrationNativeBrokerStage\":" + integrationNativeBrokerStage +
@@ -551,7 +553,7 @@ internal static class Program
         public bool Recovery;
         public int ManualCode;
         public int NativeCode, NativeBrokerOutcome, NativeBrokerStage, NativeBudgetMilliseconds,
-            NativeBrokerPhase, NativeRpcMilliseconds, ShiftCode;
+            NativeBrokerPhase, NativeRpcMilliseconds, ShiftCode, ResetReason;
     }
 
     private sealed class FixtureSession : IDisposable
@@ -585,14 +587,14 @@ internal static class Program
             if (line == null || !line.StartsWith("OK|", StringComparison.Ordinal))
                 throw new InvalidOperationException();
             var pieces = line.Split('|');
-            if (pieces.Length != 13) throw new InvalidOperationException();
+            if (pieces.Length != 14) throw new InvalidOperationException();
             if (command == "WAIT") integrationWaitStatus = "SETTLED";
             var reply = new FixtureReply { Applied = int.Parse(pieces[1]), Undone = int.Parse(pieces[2]),
                 Layout = pieces[3], Recovery = pieces[4] == "1", ManualCode = int.Parse(pieces[5]),
                 NativeCode = int.Parse(pieces[6]), NativeBrokerOutcome = int.Parse(pieces[7]),
                 NativeBrokerStage = int.Parse(pieces[8]), NativeBudgetMilliseconds = int.Parse(pieces[9]),
                 NativeBrokerPhase = int.Parse(pieces[10]), NativeRpcMilliseconds = int.Parse(pieces[11]),
-                ShiftCode = int.Parse(pieces[12]) };
+                ShiftCode = int.Parse(pieces[12]), ResetReason = int.Parse(pieces[13]) };
             integrationManualCode = reply.ManualCode;
             integrationNativeCode = reply.NativeCode;
             integrationNativeBrokerOutcome = reply.NativeBrokerOutcome;
@@ -601,6 +603,7 @@ internal static class Program
             integrationNativeBrokerPhase = reply.NativeBrokerPhase;
             integrationNativeRpcMilliseconds = reply.NativeRpcMilliseconds;
             integrationShiftCode = reply.ShiftCode;
+            integrationResetReason = reply.ResetReason;
             return reply;
         }
 

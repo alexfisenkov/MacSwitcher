@@ -76,6 +76,7 @@ namespace MacSwitcher.Windows.Runtime
         private int manualWorkInFlight;
         private int fixtureManualCode;
         private int fixtureShiftCode;
+        private int fixtureResetReason;
         private int fixtureNativeCode;
         private int fixtureNativeBrokerOutcome = -1;
         private int fixtureNativeBrokerStage = -1;
@@ -107,6 +108,7 @@ namespace MacSwitcher.Windows.Runtime
         internal bool FixtureHookReady { get { return hook.Ready; } }
         internal int FixtureManualCode { get { return Volatile.Read(ref fixtureManualCode); } }
         internal int FixtureShiftCode { get { return Volatile.Read(ref fixtureShiftCode); } }
+        internal int FixtureResetReason { get { return Volatile.Read(ref fixtureResetReason); } }
         internal int FixtureNativeCode { get { return Volatile.Read(ref fixtureNativeCode); } }
         internal int FixtureNativeBrokerOutcome { get { return Volatile.Read(ref fixtureNativeBrokerOutcome); } }
         internal int FixtureNativeBrokerStage { get { return Volatile.Read(ref fixtureNativeBrokerStage); } }
@@ -317,18 +319,18 @@ namespace MacSwitcher.Windows.Runtime
                     else
                     {
                         if (shiftEvent) Interlocked.Exchange(ref fixtureShiftCode, 11);
-                        ResetSession(); return;
+                        ResetSession(5); return;
                     }
                 }
                 if (input.Kind == PhysicalInputKind.Overflow || input.Kind == PhysicalInputKind.Mouse || input.Focus == null)
-                { if (shiftEvent) Interlocked.Exchange(ref fixtureShiftCode, 3); ResetSession(); return; }
+                { if (shiftEvent) Interlocked.Exchange(ref fixtureShiftCode, 3); ResetSession(4); return; }
                 if (IsExcluded(input.Focus.ProcessId, current))
-                { if (shiftEvent) Interlocked.Exchange(ref fixtureShiftCode, 4); ResetSession(); return; }
+                { if (shiftEvent) Interlocked.Exchange(ref fixtureShiftCode, 4); ResetSession(6); return; }
                 bool higher;
                 if (NativeSafety.TryTargetHigherIntegrity(input.Focus.ProcessId, out higher) && higher)
                 {
                     if (shiftEvent) Interlocked.Exchange(ref fixtureShiftCode, 5);
-                    ResetSession();
+                    ResetSession(7);
                     if (reportedHigherPid != input.Focus.ProcessId)
                     {
                         reportedHigherPid = input.Focus.ProcessId;
@@ -337,7 +339,7 @@ namespace MacSwitcher.Windows.Runtime
                     return;
                 }
                 reportedHigherPid = 0;
-                if (cachedField != null && !MatchesFocus(cachedField, input.Focus)) ResetSession();
+                if (cachedField != null && !MatchesFocus(cachedField, input.Focus)) ResetSession(8);
                 if (IsShift(input.VirtualKey))
                 {
                     var side = Side(input);
@@ -382,7 +384,7 @@ namespace MacSwitcher.Windows.Runtime
                     gesture.Interrupt(); gestureField = null;
                     if (!IsTextKey(input.VirtualKey) || leftShiftDown || rightShiftDown ||
                         !NativeSafety.CommandModifiersUp())
-                    { ResetSession(); return; }
+                    { ResetSession(9); return; }
                     if (input.Kind == PhysicalInputKind.KeyDown)
                     {
                         if (sessionField == null && !unknownWord)
@@ -452,8 +454,9 @@ namespace MacSwitcher.Windows.Runtime
                 ? cachedField : null;
         }
 
-        private void ResetSession()
+        private void ResetSession(int reason = 1)
         {
+            Interlocked.Exchange(ref fixtureResetReason, reason);
             operationGeneration++;
             gesture.Interrupt();
             cachedField = sessionField = gestureField = null;
@@ -498,7 +501,27 @@ namespace MacSwitcher.Windows.Runtime
             try
             {
                 var focus = NativeFocusSnapshot.Capture();
-                if (focus == null) { lock (stateGate) ResetSession(); return; }
+                if (focus == null)
+                {
+                    var foreground = Win32.GetForegroundWindow();
+                    lock (stateGate)
+                    {
+                        if (foreground != IntPtr.Zero && lastExternalFocus?.Foreground == foreground)
+                        {
+                            // GetGUIThreadInfo can briefly have no focused HWND while a native
+                            // input-language transition is being delivered. Preserve the pending
+                            // Shift gesture, but invalidate automatic text work and its generation.
+                            Interlocked.Exchange(ref fixtureResetReason, 2);
+                            operationGeneration++;
+                            sessionField = null;
+                            unknownWord = true;
+                            lastSource = null;
+                            pendingTextKeys = 0;
+                        }
+                        else ResetSession(10);
+                    }
+                    return;
+                }
                 lock (stateGate)
                 {
                     lastExternalFocus = focus;
@@ -514,7 +537,7 @@ namespace MacSwitcher.Windows.Runtime
                     if (!started || !focus.StillSame() || hook.Revision != beforeRevision) return;
                     if (response.Outcome == BrokerOutcome.Success && response.Field != null)
                     {
-                        if (cachedField != null && !cachedField.SameIdentity(response.Field)) ResetSession();
+                        if (cachedField != null && !cachedField.SameIdentity(response.Field)) ResetSession(11);
                         cachedField = response.Field;
                         cachedAtTicks = (long)Win32.GetTickCount64();
                         cachedAtRevision = beforeRevision;
@@ -875,6 +898,9 @@ namespace MacSwitcher.Windows.Runtime
                                 ResultLanguage = targetLanguage ?? source, OriginalPhrase = oldPhrase,
                                 ReplacementPhrase = newPhrase, Undone = false };
                             sessionField = write.Field;
+                            cachedField = write.Field;
+                            cachedAtTicks = (long)Win32.GetTickCount64();
+                            cachedAtRevision = revision;
                             unknownWord = false;
                             pendingTextKeys = 0;
                             lastSource = sourceConfirmed ? targetLanguage ?? source : null;
@@ -966,6 +992,9 @@ namespace MacSwitcher.Windows.Runtime
                                 ReplacementPhrase = replacement, SourceLanguage = source,
                                 ResultLanguage = targetLanguage, NativeRange = true, RangeStart = start };
                             sessionField = write.Field.SelectionEnd == write.Field.Value.Length ? write.Field : null;
+                            cachedField = write.Field;
+                            cachedAtTicks = (long)Win32.GetTickCount64();
+                            cachedAtRevision = revision;
                             unknownWord = sessionField == null;
                             pendingTextKeys = 0;
                             lastSource = sourceConfirmed ? targetLanguage : null;
