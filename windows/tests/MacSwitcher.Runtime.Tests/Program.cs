@@ -410,6 +410,14 @@ internal static class Program
             using var session = new FixtureSession(executable, data, marker);
             integrationProbe = "client_ready";
             if (!session.Ready) return "FAIL";
+            integrationProbe = "chord_cancellation";
+            session.Command("CACHE");
+            var beforeChord = session.Command("STATE");
+            var afterChord = session.Command("CHORD_CTRL");
+            if (beforeChord.Layout != "en" || afterChord.Layout != "en" ||
+                beforeChord.Applied != afterChord.Applied || plain.Text != "ghbdtn")
+                return "FAIL";
+            checks++;
             integrationProbe = "single_shift_left";
             session.Command("CACHE");
             var firstTap = session.Command("TAP_L");

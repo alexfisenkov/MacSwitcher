@@ -63,6 +63,7 @@ namespace MacSwitcher.Windows.Native
         private readonly ManualResetEventSlim ready = new ManualResetEventSlim(false);
         private readonly Win32.HookProc keyboardCallback;
         private readonly Win32.HookProc mouseCallback;
+        private readonly bool syntheticFixtureOnly;
         private Thread? hookThread, dispatchThread;
         private IntPtr keyboardHook, mouseHook;
         private int keyboardRegistrationError, mouseRegistrationError;
@@ -79,8 +80,9 @@ namespace MacSwitcher.Windows.Native
         internal int KeyboardRegistrationError { get { return Volatile.Read(ref keyboardRegistrationError); } }
         internal int MouseRegistrationError { get { return Volatile.Read(ref mouseRegistrationError); } }
 
-        internal PhysicalHookHost()
+        internal PhysicalHookHost(bool syntheticFixtureOnly = false)
         {
+            this.syntheticFixtureOnly = syntheticFixtureOnly;
             keyboardCallback = Keyboard;
             mouseCallback = Mouse;
             maxFenceMilliseconds = ReadFenceBudget();
@@ -147,6 +149,8 @@ namespace MacSwitcher.Windows.Native
         private IntPtr Keyboard(int code, IntPtr wParam, IntPtr lParam)
         {
             if (code < 0) return Win32.CallNextHookEx(keyboardHook, code, wParam, lParam);
+            if (syntheticFixtureOnly)
+                return Win32.CallNextHookEx(keyboardHook, code, wParam, lParam);
             try
             {
                 var data = (Win32.KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(Win32.KBDLLHOOKSTRUCT));
@@ -174,6 +178,8 @@ namespace MacSwitcher.Windows.Native
         private IntPtr Mouse(int code, IntPtr wParam, IntPtr lParam)
         {
             if (code < 0) return Win32.CallNextHookEx(mouseHook, code, wParam, lParam);
+            if (syntheticFixtureOnly)
+                return Win32.CallNextHookEx(mouseHook, code, wParam, lParam);
             if (IsPassiveMouseMessage(wParam.ToInt32()))
                 return Win32.CallNextHookEx(mouseHook, code, wParam, lParam);
             try

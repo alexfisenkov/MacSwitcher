@@ -50,7 +50,7 @@ namespace MacSwitcher.Windows.Runtime
         private readonly object stateGate = new object();
         private readonly object editGate = new object();
         private readonly IPersonalLexicon personal;
-        private readonly PhysicalHookHost hook = new PhysicalHookHost();
+        private readonly PhysicalHookHost hook;
         private readonly AutomationBrokerClient broker = new AutomationBrokerClient();
         private readonly RecoveryOriginals recovery = new RecoveryOriginals();
         private readonly PredictionLexicon? lexicon;
@@ -90,7 +90,12 @@ namespace MacSwitcher.Windows.Runtime
         public event Action<CorrectionNotice>? CorrectionUndone;
 
         public WindowsSwitcherRuntime(AppSettings settings, IPersonalLexicon personal, string dataDirectory)
+            : this(settings, personal, dataDirectory, false) { }
+
+        internal WindowsSwitcherRuntime(AppSettings settings, IPersonalLexicon personal,
+            string dataDirectory, bool syntheticFixtureOnly)
         {
+            hook = new PhysicalHookHost(syntheticFixtureOnly);
             this.settings = settings ?? throw new ArgumentNullException(nameof(settings));
             this.settings.Validate();
             this.personal = personal ?? throw new ArgumentNullException(nameof(personal));

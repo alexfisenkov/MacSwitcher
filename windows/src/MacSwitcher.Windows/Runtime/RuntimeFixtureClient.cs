@@ -25,7 +25,7 @@ namespace MacSwitcher.Windows.Runtime
 
             var settings = new AppSettings { Enabled = true, AutomaticCorrection = false,
                 RussianPriority = true, DoubleShiftMilliseconds = 180 };
-            using (var runtime = new WindowsSwitcherRuntime(settings, new PersonalLexicon(), data))
+            using (var runtime = new WindowsSwitcherRuntime(settings, new PersonalLexicon(), data, true))
             using (var input = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false, true)))
             using (var output = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)))
             {
@@ -80,6 +80,12 @@ namespace MacSwitcher.Windows.Runtime
                             case "TAP_R":
                                 runtime.EmitFixtureKey(PhysicalInputKind.KeyDown, Win32.VK_RSHIFT, 54, syntheticTick);
                                 runtime.EmitFixtureKey(PhysicalInputKind.KeyUp, Win32.VK_RSHIFT, 54, syntheticTick + 20);
+                                syntheticTick += 80; break;
+                            case "CHORD_CTRL":
+                                runtime.EmitFixtureKey(PhysicalInputKind.KeyDown, Win32.VK_LSHIFT, 42, syntheticTick);
+                                runtime.EmitFixtureKey(PhysicalInputKind.KeyDown, Win32.VK_CONTROL, 29, syntheticTick + 10);
+                                runtime.EmitFixtureKey(PhysicalInputKind.KeyUp, Win32.VK_CONTROL, 29, syntheticTick + 20);
+                                runtime.EmitFixtureKey(PhysicalInputKind.KeyUp, Win32.VK_LSHIFT, 42, syntheticTick + 30);
                                 syntheticTick += 80; break;
                             case "KEY_D":
                                 runtime.EmitFixtureKey(PhysicalInputKind.KeyDown, 0x47, 34, syntheticTick);
