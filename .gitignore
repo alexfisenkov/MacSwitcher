@@ -21,3 +21,13 @@ AGENTS.override.md
 
 .autopilot/
 .autopilot/serve.*
+
+# Windows build and generated distribution data
+windows/**/bin/
+windows/**/obj/
+windows/**/TestResults/
+windows/data/
+windows/artifacts/
+windows/.tooling/
+windows/publish/
+*.pem

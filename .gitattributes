@@ -1,2 +1,6 @@
 # Keep the pinned upstream license notice byte-for-byte, including its whitespace.
 dictionaries/LICENSE-ESDB-Copyright.txt -whitespace
+
+# Hash-pinned shared data must stay byte-identical on Windows checkouts.
+dictionaries/** -text
+macos/Sources/RuSwitcher/Resources/** -text
