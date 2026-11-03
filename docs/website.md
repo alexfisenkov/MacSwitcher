@@ -1,12 +1,14 @@
 # MacSwitcher website
 
-The static website lives in `website/` and adapts the published MacDictate landing page's visual language: fixed glass navigation, dark gradient hero, three feature cards, download/setup section and responsive footer. The design reference is `MacDictate/macos/web-landing/index.html` in the source checkout, byte-identical to the live MacDictate page at the time of the project brief (source commit `4c387ebe382a845fc5987715357b399604c38c39`, SHA-256 `20b16744775c02380dab53bda01f3cbbca6566d7ca3e3177a4ac18c6a218428b`). Only layout and styling patterns were adapted; the copied product mark is MacSwitcher's own `assets/MacSwitcher.svg`.
+The static website lives in `website/` and adapts the published MacDictate landing page's visual language: fixed glass navigation, dark gradient hero, three feature cards, a learning callout, download/setup section and responsive footer. The design reference is `MacDictate/macos/web-landing/index.html` in the source checkout, byte-identical to the live MacDictate page at the time of the project brief (source commit `4c387ebe382a845fc5987715357b399604c38c39`, SHA-256 `20b16744775c02380dab53bda01f3cbbca6566d7ca3e3177a4ac18c6a218428b`). Only layout and styling patterns were adapted; the copied product mark is MacSwitcher's own `assets/MacSwitcher.svg`.
 
 ## Preview and checks
 
 From the repository root, run `python3 -m http.server 8000 --directory website` and open `http://localhost:8000`. Validate the static pages and local references with `python3 script/check_website.py`; include `--javascript` to parse inline scripts with Node.
 
 Publish the signed alpha.25 archive before deploying the website. The manual `Publish MacSwitcher website` workflow checks the static website and JavaScript, verifies that the linked archive is publicly reachable and nonempty, then uploads only `website/` to GitHub Pages. The local `python3 script/check_website.py` check leaves this network guard off; use `--published-release` when validating release availability. The workflow is triggered with `workflow_dispatch`; it does not run the Swift app build. The archive availability guard does not replace release SHA-256 or signature verification. GitHub Pages must be enabled for the repository before deployment. A successful local check or workflow file does not mean the site is published; verify the deployment URL and page contents after the workflow runs.
+
+The main page also links Windows alpha.2 and explains default-on learning in Russian and English. The checker derives both versions from the platform version JSON files, requires their current download/release links, and checks public availability of the macOS ZIP plus Windows Setup and portable ZIP. The Windows target range is distinguished from tested hardware; unsigned Windows packages are identified as such.
 
 ## Release details and open limits
 
@@ -19,3 +21,5 @@ Planned site URL: https://alexfisenkov.github.io/MacSwitcher/.
 ## Learning release deployment · 2026-11-03
 
 The alpha.25 download and learning disclosure sources passed the Pages workflow's static/JavaScript/public-download checks at `53e1f08add419bbc1c116d51fd2ddf4882dd5384`. Deployment [41635185709](https://github.com/alexfisenkov/MacSwitcher/actions/runs/41635185709) was rejected before deployment steps: the `github-pages` environment does not allow the feature branch. Protection was not changed. The updated site is not claimed live. After owner review and integration of [PR #4](https://github.com/alexfisenkov/MacSwitcher/pull/4), publish it from an allowed branch and read back the public pages. App releases and the installed first-launch explanation are already delivered independently.
+
+The owner subsequently explicitly authorized merging PR #4 and publishing the site. PR #4 will target `main` and preserve the already released ancestor stack in one merge commit. The application source and release artifacts remain unchanged; the new delta is website content, its checker and precise release documentation. Local browser checks passed at 1440×900 and 375×812 in both languages, including language switching, privacy/terms tabs, return navigation and overflow checks, with no console errors. Deployment and public read-back remain separate steps.
