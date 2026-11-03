@@ -15,3 +15,7 @@ The page points directly to the alpha.25 universal ZIP because GitHub's `release
 The app source uses MIT; upstream code attribution is in `NOTICE.md`. Dictionary data has separate attribution and licensing in `dictionaries/NOTICE.md`; the site links to both and makes no claim that dictionary assets share the code license.
 
 Planned site URL: https://alexfisenkov.github.io/MacSwitcher/.
+
+## Learning release deployment · 2026-11-03
+
+The alpha.25 download and learning disclosure sources passed the Pages workflow's static/JavaScript/public-download checks at `53e1f08add419bbc1c116d51fd2ddf4882dd5384`. Deployment [41635185709](https://github.com/alexfisenkov/MacSwitcher/actions/runs/41635185709) was rejected before deployment steps: the `github-pages` environment does not allow the feature branch. Protection was not changed. The updated site is not claimed live. After owner review and integration of [PR #4](https://github.com/alexfisenkov/MacSwitcher/pull/4), publish it from an allowed branch and read back the public pages. App releases and the installed first-launch explanation are already delivered independently.
