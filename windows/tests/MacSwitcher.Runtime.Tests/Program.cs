@@ -45,6 +45,7 @@ internal static class Program
     private static int integrationNativeRpcMilliseconds = -1;
     private static int integrationFullBrokerOutcome = -1, integrationFullBrokerPhase = -1;
     private static int integrationFullBudgetMilliseconds = -1, integrationFullRpcMilliseconds = -1;
+    private static int integrationAutoCode, integrationAutoSourceCode;
     private static string integrationWaitStatus = "NOT_RUN";
     private static string brokerProbe = "NOT_RUN";
     private static int brokerRestartCount;
@@ -449,6 +450,8 @@ internal static class Program
             ",\"integrationFullBrokerPhase\":" + integrationFullBrokerPhase +
             ",\"integrationFullBudgetMilliseconds\":" + integrationFullBudgetMilliseconds +
             ",\"integrationFullRpcMilliseconds\":" + integrationFullRpcMilliseconds +
+            ",\"integrationAutoCode\":" + integrationAutoCode +
+            ",\"integrationAutoSourceCode\":" + integrationAutoSourceCode +
             ",\"integrationWaitStatus\":\"" + integrationWaitStatus +
             "\",\"brokerProbe\":\"" + brokerProbe +
             "\",\"brokerRestartCount\":" + brokerRestartCount +
@@ -735,7 +738,10 @@ internal static class Program
                 session.Command("KEY_U");
             }
             result = session.Command("WAIT");
-            if (plain.Text != "прив" || result.Applied < 15) return "FAIL";
+            integrationLayout = result.Layout; integrationApplied = result.Applied;
+            integrationUndone = result.Undone; integrationTextLength = plain.Text.Length;
+            integrationExpectedText = plain.Text == "прив";
+            if (!integrationExpectedText || result.Applied < 15) return "FAIL";
             checks++;
 
             integrationProbe = "auto_clear_source";
@@ -750,7 +756,10 @@ internal static class Program
                 session.Command("KEY_U");
             }
             result = session.Command("WAIT");
-            if (plain.Text != "прив" || result.Applied < 16) return "FAIL";
+            integrationLayout = result.Layout; integrationApplied = result.Applied;
+            integrationUndone = result.Undone; integrationTextLength = plain.Text.Length;
+            integrationExpectedText = plain.Text == "прив";
+            if (!integrationExpectedText || result.Applied < 16) return "FAIL";
             checks++;
 
             integrationProbe = "auto_fast_burst";
@@ -764,7 +773,10 @@ internal static class Program
                 session.Command(space ? "SPACE_U" : "KEY_U");
             }
             result = session.Command("WAIT");
-            if (plain.Text != "как " || result.Applied < 17) return "FAIL";
+            integrationLayout = result.Layout; integrationApplied = result.Applied;
+            integrationUndone = result.Undone; integrationTextLength = plain.Text.Length;
+            integrationExpectedText = plain.Text == "как ";
+            if (!integrationExpectedText || result.Applied < 17) return "FAIL";
             checks++;
 
             integrationProbe = "focus_drift";
@@ -798,6 +810,7 @@ internal static class Program
         public int NativeCode, NativeBrokerOutcome, NativeBrokerStage, NativeBudgetMilliseconds,
             NativeBrokerPhase, NativeRpcMilliseconds, ShiftCode, ResetReason;
         public int FullBrokerOutcome, FullBrokerPhase, FullBudgetMilliseconds, FullRpcMilliseconds;
+        public int AutoCode, AutoSourceCode;
     }
 
     private sealed class FixtureSession : IDisposable
@@ -838,7 +851,7 @@ internal static class Program
             if (line == null || !line.StartsWith("OK|", StringComparison.Ordinal))
                 throw new InvalidOperationException();
             var pieces = line.Split('|');
-            if (pieces.Length != 18) throw new InvalidOperationException();
+            if (pieces.Length != 20) throw new InvalidOperationException();
             if (command == "WAIT") integrationWaitStatus = "SETTLED";
             var reply = new FixtureReply { Applied = int.Parse(pieces[1]), Undone = int.Parse(pieces[2]),
                 Layout = pieces[3], Recovery = pieces[4] == "1", ManualCode = int.Parse(pieces[5]),
@@ -847,7 +860,8 @@ internal static class Program
                 NativeBrokerPhase = int.Parse(pieces[10]), NativeRpcMilliseconds = int.Parse(pieces[11]),
                 ShiftCode = int.Parse(pieces[12]), ResetReason = int.Parse(pieces[13]),
                 FullBrokerOutcome = int.Parse(pieces[14]), FullBrokerPhase = int.Parse(pieces[15]),
-                FullBudgetMilliseconds = int.Parse(pieces[16]), FullRpcMilliseconds = int.Parse(pieces[17]) };
+                FullBudgetMilliseconds = int.Parse(pieces[16]), FullRpcMilliseconds = int.Parse(pieces[17]),
+                AutoCode = int.Parse(pieces[18]), AutoSourceCode = int.Parse(pieces[19]) };
             integrationManualCode = reply.ManualCode;
             integrationNativeCode = reply.NativeCode;
             integrationNativeBrokerOutcome = reply.NativeBrokerOutcome;
@@ -861,6 +875,8 @@ internal static class Program
             integrationFullBrokerPhase = reply.FullBrokerPhase;
             integrationFullBudgetMilliseconds = reply.FullBudgetMilliseconds;
             integrationFullRpcMilliseconds = reply.FullRpcMilliseconds;
+            integrationAutoCode = reply.AutoCode;
+            integrationAutoSourceCode = reply.AutoSourceCode;
             return reply;
         }
 

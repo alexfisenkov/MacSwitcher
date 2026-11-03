@@ -149,7 +149,8 @@ namespace MacSwitcher.Windows.Runtime
                             runtime.FixtureNativeRpcMilliseconds + "|" + runtime.FixtureShiftCode + "|" +
                             runtime.FixtureResetReason + "|" + runtime.FixtureFullBrokerOutcome + "|" +
                             runtime.FixtureFullBrokerPhase + "|" + runtime.FixtureFullBudgetMilliseconds + "|" +
-                            runtime.FixtureFullRpcMilliseconds);
+                            runtime.FixtureFullRpcMilliseconds + "|" + runtime.FixtureAutoCode + "|" +
+                            runtime.FixtureAutoSourceCode);
                     }
                     catch { output.WriteLine("ERROR"); return 6; }
                 }

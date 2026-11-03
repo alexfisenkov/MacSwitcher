@@ -88,6 +88,8 @@ namespace MacSwitcher.Windows.Runtime
         private int manualWorkInFlight;
         private int fixtureManualCode;
         private int fixtureShiftCode;
+        private int fixtureAutoCode;
+        private int fixtureAutoSourceCode;
         private int fixtureResetReason;
         private int fixtureNativeCode;
         private int fixtureNativeBrokerOutcome = -1;
@@ -127,6 +129,8 @@ namespace MacSwitcher.Windows.Runtime
         internal bool FixtureHookReady { get { return hook.Ready; } }
         internal int FixtureManualCode { get { return Volatile.Read(ref fixtureManualCode); } }
         internal int FixtureShiftCode { get { return Volatile.Read(ref fixtureShiftCode); } }
+        internal int FixtureAutoCode { get { return Volatile.Read(ref fixtureAutoCode); } }
+        internal int FixtureAutoSourceCode { get { return Volatile.Read(ref fixtureAutoSourceCode); } }
         internal int FixtureResetReason { get { return Volatile.Read(ref fixtureResetReason); } }
         internal int FixtureNativeCode { get { return Volatile.Read(ref fixtureNativeCode); } }
         internal int FixtureNativeBrokerOutcome { get { return Volatile.Read(ref fixtureNativeBrokerOutcome); } }
@@ -215,6 +219,8 @@ namespace MacSwitcher.Windows.Runtime
                 lock (stateGate)
                 {
                     settings = next;
+                    if (next.AutomaticCorrection)
+                    { Interlocked.Exchange(ref fixtureAutoCode, 0); Interlocked.Exchange(ref fixtureAutoSourceCode, 0); }
                     operationGeneration++;
                     gestureEpoch++;
                     gesture = new ShiftGesture(next.DoubleShiftMilliseconds);
@@ -409,9 +415,18 @@ namespace MacSwitcher.Windows.Runtime
                 else
                 {
                     gesture.Interrupt(); gestureField = null; gestureEpoch++;
-                    if (!IsTextKey(input.VirtualKey) || leftShiftDown || rightShiftDown ||
-                        !NativeSafety.CommandModifiersUp())
-                    { ResetSession(9); return; }
+                    bool textKey = IsTextKey(input.VirtualKey);
+                    bool shiftHeld = leftShiftDown || rightShiftDown;
+                    bool commandModifiersUp = NativeSafety.CommandModifiersUp();
+                    if (!textKey || shiftHeld || !commandModifiersUp)
+                    {
+                        // Closed fixture categories only: 30 nontext, 31 Shift chord,
+                        // 32 actual Ctrl/Alt/Win held. Never record VK or typed content.
+                        Interlocked.Exchange(ref fixtureAutoCode,
+                            !textKey ? 30 : shiftHeld ? 31 : 32);
+                        Interlocked.Exchange(ref fixtureAutoSourceCode, 0);
+                        ResetSession(9); return;
+                    }
                     if (input.Kind == PhysicalInputKind.KeyDown)
                     {
                         if (sessionField == null && !unknownWord)
@@ -648,13 +663,15 @@ namespace MacSwitcher.Windows.Runtime
                         latestObservation = null;
                         if (next == null) { observing = false; return; }
                     }
-                    try { ObserveText(next); } catch { }
+                    try { ObserveText(next); }
+                    catch { Interlocked.Exchange(ref fixtureAutoCode, 99); }
                 }
             });
         }
 
         private void ObserveText(PhysicalInput input)
         {
+            Interlocked.Exchange(ref fixtureAutoCode, 1);
             Thread.Sleep(12); // The hook precedes target dispatch.
             FieldSnapshot? origin;
             string? source;
@@ -666,8 +683,10 @@ namespace MacSwitcher.Windows.Runtime
                 origin = sessionField; source = lastSource; current = settings;
                 pendingKeys = pendingTextKeys; generation = operationGeneration;
             }
+            Interlocked.Exchange(ref fixtureAutoSourceCode, source == "en" ? 1 : source == "ru" ? 2 : 0);
             if (origin == null)
             {
+                Interlocked.Exchange(ref fixtureAutoCode, 2);
                 if (input.VirtualKey == 0x20 && hook.Revision == input.Revision)
                 {
                     var boundaryRead = ReadField(input.Focus, 80);
@@ -681,23 +700,29 @@ namespace MacSwitcher.Windows.Runtime
             }
             if (source == null || !current.AutomaticCorrection || prediction == null ||
                 !CanMutate(generation, input.Revision) ||
-                !MatchesFocus(origin, input.Focus)) return;
+                !MatchesFocus(origin, input.Focus))
+            { Interlocked.Exchange(ref fixtureAutoCode, 4); return; }
             BrokerResponse? response = null;
             for (int attempt = 0; attempt < 3; attempt++)
             {
-                if (hook.Revision != input.Revision) return;
+                if (hook.Revision != input.Revision)
+                { Interlocked.Exchange(ref fixtureAutoCode, 5); return; }
                 response = ReadField(input.Focus, 80);
                 if (response.Outcome == BrokerOutcome.Success && response.Field != null &&
                     response.Field.SameIdentity(origin) && response.Field.Value != origin.Value) break;
                 Thread.Sleep(15);
             }
             var field = response?.Field;
-            if (field == null || !field.SameIdentity(origin) || field.SelectionStart != field.SelectionEnd ||
-                field.SelectionEnd != field.Value.Length || hook.Revision != input.Revision) return;
+            if (field == null || !field.SameIdentity(origin))
+            { Interlocked.Exchange(ref fixtureAutoCode, 6); return; }
+            if (field.SelectionStart != field.SelectionEnd ||
+                field.SelectionEnd != field.Value.Length || hook.Revision != input.Revision)
+            { Interlocked.Exchange(ref fixtureAutoCode, 7); return; }
             if (origin.SelectionStart != origin.SelectionEnd || origin.SelectionEnd != origin.Value.Length ||
                 !field.Value.StartsWith(origin.Value, StringComparison.Ordinal) ||
                 field.Value.Length - origin.Value.Length > Math.Max(2, 2 * pendingKeys))
             {
+                Interlocked.Exchange(ref fixtureAutoCode, 8);
                 lock (stateGate) { sessionField = null; unknownWord = true; pendingTextKeys = 0; }
                 return;
             }
@@ -705,25 +730,32 @@ namespace MacSwitcher.Windows.Runtime
             var context = BuildPredictionContext(field.Value);
             if (context == null)
             {
+                Interlocked.Exchange(ref fixtureAutoCode, 9);
                 if (boundary) lock (stateGate) { unknownWord = false; sessionField = field; pendingTextKeys = 0; }
                 return;
             }
             PredictionProposal? proposal;
             try { proposal = prediction.Evaluate(context.Suffix, source, boundary,
                 context.PrecedingWords, current.RussianPriority, current.AlwaysConvertWords); }
-            catch { return; }
+            catch { Interlocked.Exchange(ref fixtureAutoCode, 98); return; }
             if (proposal != null && proposal.OriginalSuffix == context.Suffix &&
                 field.Value.EndsWith(context.Suffix, StringComparison.Ordinal))
             {
                 var replacement = field.Value.Substring(0, field.Value.Length - context.Suffix.Length) + proposal.ReplacementSuffix;
                 if (field.NativeRangeWriter)
-                    TryNativeRangeEdit(input.Focus, field, field.Value.Length - context.Suffix.Length,
-                        field.Value.Length, proposal.ReplacementSuffix, input.Revision, generation,
-                        context.Suffix, source, proposal.TargetLanguage);
-                else TryFullValueEdit(input.Focus, field, replacement, input.Revision, generation,
-                    context.Suffix, proposal.ReplacementSuffix, source, proposal.TargetLanguage);
+                    Interlocked.Exchange(ref fixtureAutoCode,
+                        TryNativeRangeEdit(input.Focus, field, field.Value.Length - context.Suffix.Length,
+                            field.Value.Length, proposal.ReplacementSuffix, input.Revision, generation,
+                            context.Suffix, source, proposal.TargetLanguage) ? 20 : 21);
+                else Interlocked.Exchange(ref fixtureAutoCode,
+                    TryFullValueEdit(input.Focus, field, replacement, input.Revision, generation,
+                        context.Suffix, proposal.ReplacementSuffix, source, proposal.TargetLanguage) ? 22 : 23);
             }
-            else lock (stateGate) { sessionField = field; unknownWord = false; pendingTextKeys = 0; }
+            else
+            {
+                Interlocked.Exchange(ref fixtureAutoCode, proposal == null ? 10 : 11);
+                lock (stateGate) { sessionField = field; unknownWord = false; pendingTextKeys = 0; }
+            }
         }
 
         internal static ManualWordSpan? LastWordSpan(string value)
