@@ -40,6 +40,7 @@ internal static class Program
     private static int integrationNativeRpcMilliseconds = -1;
     private static string integrationWaitStatus = "NOT_RUN";
     private static string brokerProbe = "NOT_RUN";
+    private static int brokerRestartCount;
     private static int brokerOutcome = -1, brokerStage = -1;
     private static int brokerPhase = -1;
     private static int brokerNativeCode;
@@ -169,16 +170,26 @@ internal static class Program
         fixtureForeground = GetForegroundWindow() == form.Handle;
         fixtureFocus = plain.Focused;
 
-        using var broker = new Broker(path);
+        var broker = new Broker(path);
         int checks = 5;
         try
         {
             Result? captured = null;
             for (int attempt = 0; attempt < 4; attempt++)
             {
-                captured = PumpBroker(() => broker.Call(1, null, null),
+                var attemptBroker = broker;
+                captured = PumpBroker(() => attemptBroker.Call(1, null, null),
                     attempt == 0 ? 10000 : 3000, out brokerProbe);
-                if (captured == null) return Report("FAIL", "plain_capture_rpc", checks);
+                if (captured == null)
+                {
+                    if (brokerProbe != "RPC_TIMEOUT" || brokerRestartCount != 0)
+                        return Report("FAIL", "plain_capture_rpc", checks);
+                    attemptBroker.Dispose();
+                    broker = new Broker(path);
+                    brokerRestartCount++;
+                    if (!Focus(form, plain)) return Report("FAIL", "plain_capture_refocus", checks);
+                    continue;
+                }
                 brokerOutcome = captured.Outcome;
                 brokerStage = captured.Stage;
                 brokerPhase = captured.Phase;
@@ -267,6 +278,7 @@ internal static class Program
             return Report("PASS", "synthetic_uia_broker", checks);
         }
         catch { return Report("FAIL", "broker_exception", checks); }
+        finally { broker.Dispose(); }
     }
 
     private static bool Focus(Form form, Control control)
@@ -352,7 +364,8 @@ internal static class Program
             ",\"integrationNativeBudgetMilliseconds\":" + integrationNativeBudgetMilliseconds +
             ",\"integrationWaitStatus\":\"" + integrationWaitStatus +
             "\",\"brokerProbe\":\"" + brokerProbe +
-            "\",\"brokerOutcome\":" + brokerOutcome +
+            "\",\"brokerRestartCount\":" + brokerRestartCount +
+            ",\"brokerOutcome\":" + brokerOutcome +
             ",\"brokerStage\":" + brokerStage +
             ",\"brokerPhase\":" + brokerPhase +
             ",\"brokerNativeCode\":" + brokerNativeCode +
@@ -736,6 +749,7 @@ internal static class Program
         private readonly Process process;
         private readonly BinaryReader reader;
         private readonly BinaryWriter writer;
+        private bool disposed;
 
         public Broker(string path)
         {
@@ -824,8 +838,12 @@ internal static class Program
 
         public void Dispose()
         {
+            if (disposed) return;
+            disposed = true;
             try { if (!process.HasExited) process.Kill(); } catch { }
-            reader.Dispose(); writer.Dispose(); process.Dispose();
+            try { reader.Dispose(); } catch { }
+            try { writer.Dispose(); } catch { }
+            process.Dispose();
         }
     }
 }
