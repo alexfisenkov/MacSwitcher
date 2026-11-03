@@ -1,10 +1,12 @@
 import AppKit
 import Carbon
 
-/// Окно настроек с вкладками
+/// Окно настроек с боковой навигацией и прокруткой длинных разделов.
 @MainActor
-final class SettingsWindowController: NSObject, NSTabViewDelegate {
+final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDataSource, NSTableViewDelegate, NSSplitViewDelegate {
     private var window: NSWindow?
+    private var settingsTabView: NSTabView?
+    private var navigationTable: NSTableView?
     private var autoSwitchCheckbox: NSButton?
     private var launchAtLoginCheckbox: NSButton?
     private var checkUpdatesCheckbox: NSButton?
@@ -39,7 +41,7 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate {
         }
 
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 752),
+            contentRect: NSRect(x: 0, y: 0, width: 700, height: 680),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -57,17 +59,19 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate {
         tabView.addTabViewItem(createPersonalDictionaryTab())
         tabView.addTabViewItem(createAdaptiveRulesTab())
         tabView.addTabViewItem(createAboutTab())
+        tabView.tabViewType = .noTabsNoBorder
         tabView.delegate = self
 
-        win.contentView = tabView
-        // Each pane uses its own content height. Keep the window within the visible screen;
-        // compact panes such as About do not inherit the height of the full settings form.
-        let chrome = tabView.bounds.height - tabView.contentRect.height
-        let paneHeight = tabView.selectedTabViewItem?.view?.subviews.first?.frame.height ?? 700
-        var height = paneHeight + chrome
-        if let screen = NSScreen.main { height = min(height, screen.visibleFrame.height - 60) }
-        win.setContentSize(NSSize(width: 480, height: height))
+        let root = makeSettingsContent(tabView: tabView)
+        win.contentView = root
+        navigationTable?.reloadData()
+        // A consistent window size keeps navigation stable; long forms scroll inside
+        // their pane and remain usable on short displays.
+        let screen = NSScreen.main
+        win.setContentSize(fittedSettingsWindowSize(visibleFrame: screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 760, height: 740)))
         win.center()
+        navigationTable?.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        if let navigationTable { win.initialFirstResponder = navigationTable }
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
@@ -75,17 +79,103 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate {
     }
 
     func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
+        if let tabViewItem, let index = tabView.tabViewItems.firstIndex(of: tabViewItem),
+           navigationTable?.selectedRow != index {
+            navigationTable?.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+        }
         resizeSettingsWindow(for: tabView)
+    }
+
+    /// Builds the navigation shell separately so its structure can be inspected without
+    /// opening or activating a window.
+    func makeSettingsContent(tabView: NSTabView) -> NSView {
+        // Set the pane source before NSTableView requests rows or cell labels.
+        settingsTabView = tabView
+        let splitView = NSSplitView(frame: NSRect(x: 0, y: 0, width: 700, height: 600))
+        splitView.isVertical = true
+        splitView.dividerStyle = .thin
+        splitView.autoresizingMask = [.width, .height]
+        splitView.delegate = self
+
+        let navigation = NSTableView(frame: NSRect(x: 0, y: 0, width: 160, height: 600))
+        navigation.headerView = nil
+        navigation.rowSizeStyle = .medium
+        navigation.selectionHighlightStyle = .sourceList
+        navigation.style = .sourceList
+        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("settings-section"))
+        column.width = 160
+        column.resizingMask = .autoresizingMask
+        navigation.addTableColumn(column)
+        navigation.dataSource = self
+        navigation.delegate = self
+
+        let navigationScroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 160, height: 600))
+        navigationScroll.autoresizingMask = [.width, .height]
+        navigationScroll.hasVerticalScroller = false
+        navigationScroll.borderType = .noBorder
+        navigationScroll.drawsBackground = true
+        navigationScroll.backgroundColor = .underPageBackgroundColor
+        navigationScroll.documentView = navigation
+
+        splitView.addSubview(navigationScroll)
+        splitView.addSubview(tabView)
+        splitView.setPosition(160, ofDividerAt: 0)
+        navigationTable = navigation
+        navigation.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        return splitView
+    }
+
+    func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat,
+                   ofSubviewAt dividerIndex: Int) -> CGFloat {
+        dividerIndex == 0 ? 130 : proposedMinimumPosition
+    }
+
+    func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposedMaximumPosition: CGFloat,
+                   ofSubviewAt dividerIndex: Int) -> CGFloat {
+        dividerIndex == 0 ? max(130, splitView.bounds.width - 320) : proposedMaximumPosition
+    }
+
+    func fittedSettingsWindowSize(visibleFrame: NSRect) -> NSSize {
+        NSSize(width: min(700, max(1, visibleFrame.width - 60)),
+               height: min(680, max(1, visibleFrame.height - 60)))
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int {
+        settingsTabView?.numberOfTabViewItems ?? 6
+    }
+
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        let cellID = NSUserInterfaceItemIdentifier("SettingsNavigationCell")
+        let cell = tableView.makeView(withIdentifier: cellID, owner: self) as? NSTableCellView
+            ?? NSTableCellView(frame: .zero)
+        cell.identifier = cellID
+        if cell.textField == nil {
+            let label = NSTextField(labelWithString: "")
+            label.translatesAutoresizingMaskIntoConstraints = false
+            cell.addSubview(label)
+            NSLayoutConstraint.activate([
+                label.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 8),
+                label.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
+                label.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            ])
+            cell.textField = label
+        }
+        cell.textField?.stringValue = settingsTabView?.tabViewItem(at: row).label ?? ""
+        return cell
+    }
+
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        guard let tabView = settingsTabView, let table = notification.object as? NSTableView,
+              table.selectedRow >= 0, table.selectedRow < tabView.numberOfTabViewItems else { return }
+        tabView.selectTabViewItem(at: table.selectedRow)
     }
 
     private func resizeSettingsWindow(for tabView: NSTabView) {
         guard let window else { return }
-        let chrome = tabView.bounds.height - tabView.contentRect.height
-        let paneHeight = tabView.selectedTabViewItem?.view?.subviews.first?.frame.height ?? 700
         let screen = window.screen ?? NSScreen.main
-        let height = min(paneHeight + chrome, (screen?.visibleFrame.height ?? 900) - 60)
         let top = window.frame.maxY
-        window.setContentSize(NSSize(width: 480, height: height))
+        let visibleFrame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 760, height: 740)
+        window.setContentSize(fittedSettingsWindowSize(visibleFrame: visibleFrame))
         var origin = NSPoint(x: window.frame.minX, y: top - window.frame.height)
         if let screen {
             origin.y = max(screen.visibleFrame.minY,
@@ -114,17 +204,23 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate {
 
     // MARK: - General Tab
 
-    /// Прижимает контент вкладки к ВЕРХУ. NSTabView растягивает вид вкладки на всю высоту окна,
-    /// а под-вью с абсолютными координатами (y от низа) иначе провисают к низу/центру короткой
-    /// вкладки. Оборачиваем фиксированный контент в растягивающийся контейнер и пиним контент к
-    /// верхнему краю (гибкий нижний отступ — .minYMargin).
+    /// Длинные формы прокручиваются в пределах вкладки. Компактные разделы остаются
+    /// прижатыми к верху, а размер окна не меняется при навигации.
     private func topAligned(_ content: NSView) -> NSView {
-        let outer = NSView(frame: content.frame)
-        outer.autoresizingMask = [.width, .height]
-        outer.autoresizesSubviews = true
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 460, height: 600))
+        scrollView.autoresizingMask = [.width, .height]
+        scrollView.hasVerticalScroller = true
+        // Existing pane forms use fixed 460 pt coordinates; preserve access to their
+        // controls if the available display is narrower than the normal window.
+        scrollView.hasHorizontalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .noBorder
         content.autoresizingMask = [.minYMargin]
-        outer.addSubview(content)
-        return outer
+        scrollView.documentView = content
+        let topOffset = max(0, content.frame.height - scrollView.contentSize.height)
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: topOffset))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        return scrollView
     }
 
     // MARK: - Подгонка вёрстки под длину текста
@@ -277,7 +373,7 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate {
     }
 
     private func createGeneralTab() -> NSTabViewItem {
-        let item = NSTabViewItem()
+        let item = NSTabViewItem(identifier: "settings.general")
         item.label = L10n.settingsTabGeneral
 
         let view = NSView(frame: NSRect(x: 0, y: 0, width: 460, height: 790))
@@ -946,17 +1042,24 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate {
     }
 
     private func refreshGeneralTabPresentation() {
-        guard let tabView = window?.contentView as? NSTabView,
-              let oldItem = tabView.tabViewItems.first(where: { $0.label == L10n.settingsTabGeneral }) else { return }
+        refreshGeneralTabPresentation { createGeneralTab() }
+        if let p = switchHotkeyPopup { populateSwitchHotkeyPopup(p) }
+        if let p = caseHotkeyPopup { populateCaseHotkeyPopup(p) }
+    }
+
+    /// Replace the general pane while keeping its selected state and the sidebar in sync.
+    /// The factory also gives UI tests a way to exercise refresh without reading user settings.
+    func refreshGeneralTabPresentation(makeReplacement: () -> NSTabViewItem) {
+        guard let tabView = settingsTabView,
+              let oldItem = tabView.tabViewItems.first(where: { ($0.identifier as? String) == "settings.general" }) else { return }
         let selectedGeneral = tabView.selectedTabViewItem === oldItem
         let index = tabView.indexOfTabViewItem(oldItem)
-        let replacement = createGeneralTab()
+        let replacement = makeReplacement()
         tabView.removeTabViewItem(oldItem)
         tabView.insertTabViewItem(replacement, at: index)
         if selectedGeneral { tabView.selectTabViewItem(replacement) }
+        navigationTable?.reloadData()
         resizeSettingsWindow(for: tabView)
-        if let p = switchHotkeyPopup { populateSwitchHotkeyPopup(p) }
-        if let p = caseHotkeyPopup { populateCaseHotkeyPopup(p) }
     }
 
     @objc private func doubleShiftIntervalChanged(_ sender: NSSlider) {

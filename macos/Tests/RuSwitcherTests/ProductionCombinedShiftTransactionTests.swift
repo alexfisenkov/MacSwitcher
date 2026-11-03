@@ -63,7 +63,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
             guard wholeObservationAvailable else { return nil }
             return fields.first(where: { $0.pid == focus.processID
                 && CFEqual($0.element, focus.element) && $0.valid })?.observation
-        })
+        }, automaticRoute: { _, _, _ in .nativeVerified })
 
         init(fields: [Field]) throws {
             let layouts = LayoutSwitcher.installedLayouts()
@@ -432,6 +432,69 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
             .confirmed(resultID: rig.enToRu.targetLayoutID))
         XCTAssertEqual(field.text, "ghbdtn привет")
         XCTAssertEqual(field.queuedText, 3)
+    }
+
+    @MainActor
+    func testExactRecoveryOfUnknownManualEditAllowsNextAutomaticWord() throws {
+        let field = Field(pid: 5114, text: "hello")
+        let rig = try Rig(fields: [field])
+        let probe = PredictionEvaluationProbe()
+        let platform = PredictionCoordinatorPlatform(
+            frontmost: { ("com.apple.TextEdit", field.pid) },
+            currentLayoutID: { rig.sourceID },
+            route: { _, _, _ in .nativeVerified }, deniedApp: { _ in false },
+            autoSwitchEnabled: { true }, autoConvertEnabled: { true }, remoteDeferred: { false },
+            secureInputActive: { field.secure },
+            captureFocus: { pid in pid == field.pid ? field.focus() : nil },
+            focusIsCurrent: { focus in
+                field.valid && focus.processID == field.pid && CFEqual(focus.element, field.element)
+            },
+            beginLease: { rig.fence.begin(processID: $0, maximumDuration: 0.250) },
+            leaseIsCurrent: { rig.fence.isCurrent($0) },
+            leaseRemaining: { rig.fence.remainingDuration($0) },
+            finishLease: { rig.fence.finish($0, replayLayoutID: $1) },
+            selectSource: { target in rig.sourceID = target; return .confirmed },
+            sourceRequestedAt: { DispatchTime.now().uptimeNanoseconds },
+            noteUnconfirmedSource: { target, at in
+                rig.monitor.noteUnconfirmedInputSource(target, requestedAt: at)
+            })
+        let coordinator = PredictionCoordinator(monitor: rig.monitor, converter: rig.converter,
+            platform: platform, engine: PredictionEngine(lexicon: PredictionLexicon(wordsByLanguage: [
+                "en": ["hello": 900_000], "ru": ["привет": 1_000_000]
+            ])))
+        coordinator.onEvaluationFinished = { id, outcome in probe.finished(id, outcome) }
+        rig.monitor.onPredictionInput = { snapshot in
+            coordinator.submit(snapshot)
+            probe.submitted(coordinator.latestSubmittedEvaluationID)
+        }
+        rig.monitor.onPredictionInvalidated = { coordinator.invalidate() }
+
+        try rig.type("hello", source: rig.enToRu.sourceLayoutID)
+        rig.monitor.recordPredictionText("hello", processID: field.pid, sourceLayoutID: rig.sourceID)
+        probe.awaitLatest(expected: .noProposal)
+        rig.reportWrongCaretAfterText = true
+        rig.sourceID = rig.enToRu.targetLayoutID
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome, .stopped)
+        XCTAssertEqual(field.text, "руддщ")
+        XCTAssertTrue(rig.converter.hasUnconfirmedAXEdit(in: field.focus()))
+
+        rig.reportWrongCaretAfterText = false
+        field.caret = 0
+        field.selection = field.text.utf16.count
+        rig.sourceID = rig.ruToEn.targetLayoutID
+        XCTAssertEqual(rig.run(try rig.request(rig.ruToEn), direction: rig.ruToEn).outcome,
+            .confirmed(resultID: rig.ruToEn.targetLayoutID))
+        XCTAssertEqual(field.text, "hello")
+        XCTAssertFalse(rig.converter.hasUnconfirmedAXEdit(in: field.focus()))
+
+        field.type(" ")
+        rig.monitor.recordPredictionText(" ", processID: field.pid, sourceLayoutID: rig.sourceID)
+        probe.awaitLatest(expected: .noProposal)
+        field.type("ghbd")
+        rig.monitor.recordPredictionText("ghbd", processID: field.pid, sourceLayoutID: rig.sourceID)
+        probe.awaitLatest(expected: .applied)
+        XCTAssertEqual(field.text, "hello прив")
+        XCTAssertEqual(field.queuedText, 3, "Unknown, explicit recovery, then one automatic edit")
     }
 
     @MainActor

@@ -3,6 +3,35 @@ import XCTest
 @testable import RuSwitcher
 
 final class RuntimeDiagnosticFailureTests: XCTestCase {
+    func testActionableAutoRefusalReemitsAfterFiveSecondsWithoutFlooding() {
+        var now: UInt64 = 1_000_000_000
+        let seen = RuntimeDiagnostics.SeenEvents(now: { now })
+        XCTAssertTrue(seen.shouldEmit(.autoFocusAnchorUnavailable))
+        XCTAssertFalse(seen.shouldEmit(.autoFocusAnchorUnavailable))
+        now += 4_999_999_999
+        XCTAssertFalse(seen.shouldEmit(.autoFocusAnchorUnavailable))
+        now += 1
+        XCTAssertTrue(seen.shouldEmit(.autoFocusAnchorUnavailable))
+        XCTAssertFalse(seen.shouldEmit(.autoFocusAnchorUnavailable))
+        XCTAssertTrue(seen.shouldEmit(.autoCaretMismatch), "Distinct refusal reasons have independent budgets")
+        XCTAssertTrue(seen.shouldEmit(.nativePreparationNavigationUncertain))
+        XCTAssertFalse(seen.shouldEmit(.nativePreparationNavigationUncertain))
+        XCTAssertTrue(seen.shouldEmit(.autoEditPosted))
+        now += 5_000_000_000
+        XCTAssertTrue(seen.shouldEmit(.nativePreparationNavigationUncertain))
+        XCTAssertFalse(seen.shouldEmit(.autoEditPosted), "Successful high-frequency stages remain once per session")
+    }
+
+    func testRefusalThrottleDoesNotReemitAfterClockMovesBackward() {
+        var now: UInt64 = 9_000_000_000
+        let seen = RuntimeDiagnostics.SeenEvents(now: { now })
+        XCTAssertTrue(seen.shouldEmit(.autoSourceUnconfirmed))
+        now = 1_000_000_000
+        XCTAssertFalse(seen.shouldEmit(.autoSourceUnconfirmed))
+        now = 14_000_000_000
+        XCTAssertTrue(seen.shouldEmit(.autoSourceUnconfirmed))
+    }
+
     func testFailureIdentifiersAreClosedAndDisabledProducesNoOutput() {
         let reasons = RuntimeDiagnosticFailureReason.allCases
         XCTAssertFalse(reasons.isEmpty)
