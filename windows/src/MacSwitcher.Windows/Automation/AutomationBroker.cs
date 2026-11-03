@@ -892,8 +892,8 @@ namespace MacSwitcher.Windows.Automation
                     selectBudget, out ignored) == IntPtr.Zero)
                 {
                     var code = Marshal.GetLastWin32Error();
-                    TryRestoreNativeSelection(expected, expectedLayout, deadline, beforeStart, beforeEnd);
-                    // A timed-out message can still execute later, so this remains unknown.
+                    // A timed-out first selection may execute later. Do not send a second
+                    // selection command whose ordering against it cannot be proved.
                     return NativeResult(BrokerWire.PreparationOutcome(true, false, true),
                         BrokerPhase.NativeSetSelection,
                         BrokerStage.NativeMessage, code);

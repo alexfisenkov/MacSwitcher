@@ -75,6 +75,7 @@ namespace MacSwitcher.Windows.Runtime
         private PhysicalInput? latestObservation;
         private int manualWorkInFlight;
         private int fixtureManualCode;
+        private int fixtureShiftCode;
         private int fixtureNativeCode;
         private int fixtureNativeBrokerOutcome = -1;
         private int fixtureNativeBrokerStage = -1;
@@ -105,6 +106,7 @@ namespace MacSwitcher.Windows.Runtime
         public bool HasRecoveryOriginals { get { return recovery.Count > 0; } }
         internal bool FixtureHookReady { get { return hook.Ready; } }
         internal int FixtureManualCode { get { return Volatile.Read(ref fixtureManualCode); } }
+        internal int FixtureShiftCode { get { return Volatile.Read(ref fixtureShiftCode); } }
         internal int FixtureNativeCode { get { return Volatile.Read(ref fixtureNativeCode); } }
         internal int FixtureNativeBrokerOutcome { get { return Volatile.Read(ref fixtureNativeBrokerOutcome); } }
         internal int FixtureNativeBrokerStage { get { return Volatile.Read(ref fixtureNativeBrokerStage); } }
@@ -296,11 +298,13 @@ namespace MacSwitcher.Windows.Runtime
             FieldSnapshot? origin = null;
             long eventGeneration;
             AppSettings current;
+            bool shiftEvent = IsShift(input.VirtualKey);
+            if (shiftEvent) Interlocked.Exchange(ref fixtureShiftCode, 1);
             lock (stateGate)
             {
-                if (!started) return;
+                if (!started) { if (shiftEvent) Interlocked.Exchange(ref fixtureShiftCode, 2); return; }
                 current = settings;
-                if (!current.Enabled) return;
+                if (!current.Enabled) { if (shiftEvent) Interlocked.Exchange(ref fixtureShiftCode, 2); return; }
                 if (input.Focus != null)
                 {
                     lastExternalFocus = input.Focus;
@@ -310,14 +314,20 @@ namespace MacSwitcher.Windows.Runtime
                 {
                     if (input.Focus != null && KeyboardLayoutSource.Language(input.Focus.Layout) == pendingSource)
                         pendingSource = null;
-                    else { ResetSession(); return; }
+                    else
+                    {
+                        if (shiftEvent) Interlocked.Exchange(ref fixtureShiftCode, 11);
+                        ResetSession(); return;
+                    }
                 }
                 if (input.Kind == PhysicalInputKind.Overflow || input.Kind == PhysicalInputKind.Mouse || input.Focus == null)
-                { ResetSession(); return; }
-                if (IsExcluded(input.Focus.ProcessId, current)) { ResetSession(); return; }
+                { if (shiftEvent) Interlocked.Exchange(ref fixtureShiftCode, 3); ResetSession(); return; }
+                if (IsExcluded(input.Focus.ProcessId, current))
+                { if (shiftEvent) Interlocked.Exchange(ref fixtureShiftCode, 4); ResetSession(); return; }
                 bool higher;
                 if (NativeSafety.TryTargetHigherIntegrity(input.Focus.ProcessId, out higher) && higher)
                 {
+                    if (shiftEvent) Interlocked.Exchange(ref fixtureShiftCode, 5);
                     ResetSession();
                     if (reportedHigherPid != input.Focus.ProcessId)
                     {
@@ -333,13 +343,17 @@ namespace MacSwitcher.Windows.Runtime
                     var side = Side(input);
                     if (input.Kind == PhysicalInputKind.KeyDown)
                     {
-                        if (!NativeSafety.CommandModifiersUp()) { gesture.Interrupt(); return; }
-                        if (side == ShiftSide.Left ? leftShiftDown : rightShiftDown) { gesture.Interrupt(); return; }
-                        if (leftShiftDown || rightShiftDown) { gesture.Interrupt(); leftShiftDown = rightShiftDown = true; return; }
+                        if (!NativeSafety.CommandModifiersUp())
+                        { Interlocked.Exchange(ref fixtureShiftCode, 7); gesture.Interrupt(); return; }
+                        if (side == ShiftSide.Left ? leftShiftDown : rightShiftDown)
+                        { Interlocked.Exchange(ref fixtureShiftCode, 8); gesture.Interrupt(); return; }
+                        if (leftShiftDown || rightShiftDown)
+                        { Interlocked.Exchange(ref fixtureShiftCode, 8); gesture.Interrupt(); leftShiftDown = rightShiftDown = true; return; }
                         if (side == ShiftSide.Left) leftShiftDown = true; else rightShiftDown = true;
                         var source = KeyboardLayoutSource.Language(input.Focus.Layout);
                         if (source == null)
                         {
+                            Interlocked.Exchange(ref fixtureShiftCode, 6);
                             gesture.Interrupt();
                             if (reportedUnsupportedLayout != input.Focus.Layout)
                             {
@@ -351,12 +365,14 @@ namespace MacSwitcher.Windows.Runtime
                         reportedUnsupportedLayout = IntPtr.Zero;
                         if (gestureField == null) gestureField = CachedFor(input.Focus, input.Revision);
                         gesture.Press(side, input.Timestamp, new LayoutDirection(source, source == "ru" ? "en" : "ru"));
+                        Interlocked.Exchange(ref fixtureShiftCode, 9);
                     }
                     else if (input.Kind == PhysicalInputKind.KeyUp)
                     {
                         if (!NativeSafety.CommandModifiersUp()) gesture.Interrupt();
                         if (side == ShiftSide.Left) leftShiftDown = false; else rightShiftDown = false;
                         action = gesture.Release(side, input.Timestamp);
+                        if (action == null) Interlocked.Exchange(ref fixtureShiftCode, 10);
                         origin = gestureField;
                         if (action?.Kind == ShiftActionKind.Convert) gestureField = null;
                     }
@@ -391,6 +407,7 @@ namespace MacSwitcher.Windows.Runtime
                 if (saved.Kind == ShiftActionKind.SwitchLayout)
                 {
                     bool switched = KeyboardLayoutSource.RequestAndConfirm(focus, saved.Direction.TargetId);
+                    Interlocked.Exchange(ref fixtureShiftCode, switched ? 20 : 21);
                     lock (stateGate)
                     {
                         sessionField = null;
@@ -403,6 +420,7 @@ namespace MacSwitcher.Windows.Runtime
                 }
                 else if (saved.Kind == ShiftActionKind.Convert)
                 {
+                    Interlocked.Exchange(ref fixtureShiftCode, 30);
                     Interlocked.Exchange(ref fixtureManualCode, 0);
                     Interlocked.Increment(ref manualWorkInFlight);
                     try

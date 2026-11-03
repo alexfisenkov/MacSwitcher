@@ -32,6 +32,7 @@ internal static class Program
     private static int integrationApplied, integrationUndone, integrationTextLength = -1;
     private static bool integrationExpectedText;
     private static int integrationManualCode;
+    private static int integrationShiftCode;
     private static int integrationNativeCode, integrationNativeBrokerOutcome = -1;
     private static int integrationNativeBrokerStage = -1, integrationNativeBudgetMilliseconds = -1;
     private static int integrationNativeBrokerPhase = -1;
@@ -340,6 +341,7 @@ internal static class Program
             ",\"integrationTextLength\":" + integrationTextLength +
             ",\"integrationExpectedText\":" + (integrationExpectedText ? "true" : "false") +
             ",\"integrationManualCode\":" + integrationManualCode +
+            ",\"integrationShiftCode\":" + integrationShiftCode +
             ",\"integrationNativeCode\":" + integrationNativeCode +
             ",\"integrationNativeBrokerOutcome\":" + integrationNativeBrokerOutcome +
             ",\"integrationNativeBrokerStage\":" + integrationNativeBrokerStage +
@@ -425,11 +427,23 @@ internal static class Program
             integrationProbe = "manual_word_layout";
             if (result.Layout != "ru") return "FAIL";
             checks++;
-            integrationProbe = "manual_undo";
-            if (session.Command("TAP_R").Layout != "en") return "FAIL";
+            integrationProbe = "manual_undo_single_shift";
+            var undoFirstTap = session.Command("TAP_R");
+            integrationLayout = undoFirstTap.Layout;
+            if (undoFirstTap.Layout != "en") return "FAIL";
+            integrationProbe = "manual_undo_text";
             session.Command("TAP_L");
             result = session.Command("WAIT");
-            if (plain.Text != "ghbdtn" || result.Undone < 1 || result.Layout != "en") return "FAIL";
+            integrationLayout = result.Layout;
+            integrationApplied = result.Applied;
+            integrationUndone = result.Undone;
+            integrationTextLength = plain.Text.Length;
+            integrationExpectedText = plain.Text == "ghbdtn";
+            if (!integrationExpectedText) return "FAIL";
+            integrationProbe = "manual_undo_receipt";
+            if (result.Undone < 1) return "FAIL";
+            integrationProbe = "manual_undo_layout";
+            if (result.Layout != "en") return "FAIL";
             checks++;
             integrationProbe = "manual_redo";
             session.Command("TAP_L"); session.Command("TAP_R");
@@ -537,7 +551,7 @@ internal static class Program
         public bool Recovery;
         public int ManualCode;
         public int NativeCode, NativeBrokerOutcome, NativeBrokerStage, NativeBudgetMilliseconds,
-            NativeBrokerPhase, NativeRpcMilliseconds;
+            NativeBrokerPhase, NativeRpcMilliseconds, ShiftCode;
     }
 
     private sealed class FixtureSession : IDisposable
@@ -571,13 +585,14 @@ internal static class Program
             if (line == null || !line.StartsWith("OK|", StringComparison.Ordinal))
                 throw new InvalidOperationException();
             var pieces = line.Split('|');
-            if (pieces.Length != 12) throw new InvalidOperationException();
+            if (pieces.Length != 13) throw new InvalidOperationException();
             if (command == "WAIT") integrationWaitStatus = "SETTLED";
             var reply = new FixtureReply { Applied = int.Parse(pieces[1]), Undone = int.Parse(pieces[2]),
                 Layout = pieces[3], Recovery = pieces[4] == "1", ManualCode = int.Parse(pieces[5]),
                 NativeCode = int.Parse(pieces[6]), NativeBrokerOutcome = int.Parse(pieces[7]),
                 NativeBrokerStage = int.Parse(pieces[8]), NativeBudgetMilliseconds = int.Parse(pieces[9]),
-                NativeBrokerPhase = int.Parse(pieces[10]), NativeRpcMilliseconds = int.Parse(pieces[11]) };
+                NativeBrokerPhase = int.Parse(pieces[10]), NativeRpcMilliseconds = int.Parse(pieces[11]),
+                ShiftCode = int.Parse(pieces[12]) };
             integrationManualCode = reply.ManualCode;
             integrationNativeCode = reply.NativeCode;
             integrationNativeBrokerOutcome = reply.NativeBrokerOutcome;
@@ -585,6 +600,7 @@ internal static class Program
             integrationNativeBudgetMilliseconds = reply.NativeBudgetMilliseconds;
             integrationNativeBrokerPhase = reply.NativeBrokerPhase;
             integrationNativeRpcMilliseconds = reply.NativeRpcMilliseconds;
+            integrationShiftCode = reply.ShiftCode;
             return reply;
         }
 
