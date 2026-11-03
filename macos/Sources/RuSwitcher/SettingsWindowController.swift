@@ -204,9 +204,13 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
 
     // MARK: - General Tab
 
+    private final class TopAlignedDocumentView: NSView {
+        override var isFlipped: Bool { true }
+    }
+
     /// Длинные формы прокручиваются в пределах вкладки. Компактные разделы остаются
     /// прижатыми к верху, а размер окна не меняется при навигации.
-    private func topAligned(_ content: NSView) -> NSView {
+    func topAligned(_ content: NSView) -> NSView {
         let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 460, height: 600))
         scrollView.autoresizingMask = [.width, .height]
         scrollView.hasVerticalScroller = true
@@ -215,10 +219,16 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
         scrollView.hasHorizontalScroller = true
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
-        content.autoresizingMask = [.minYMargin]
-        scrollView.documentView = content
-        let topOffset = max(0, content.frame.height - scrollView.contentSize.height)
-        scrollView.contentView.scroll(to: NSPoint(x: 0, y: topOffset))
+        let document = TopAlignedDocumentView(
+            frame: NSRect(x: 0, y: 0, width: content.frame.width, height: content.frame.height)
+        )
+        // Pane contents use unflipped, bottom-origin coordinates. Keep their frames
+        // unchanged inside a flipped document so short forms begin at the viewport top.
+        content.autoresizingMask = []
+        content.frame.origin = .zero
+        document.addSubview(content)
+        scrollView.documentView = document
+        scrollView.contentView.scroll(to: .zero)
         scrollView.reflectScrolledClipView(scrollView.contentView)
         return scrollView
     }

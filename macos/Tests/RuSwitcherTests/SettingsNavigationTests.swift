@@ -75,6 +75,84 @@ final class SettingsNavigationTests: XCTestCase {
     }
 
     @MainActor
+    func testShortPaneContentStaysAtTopForDifferentViewportHeights() throws {
+        let previousActivationPolicy = NSApplication.shared.activationPolicy()
+        NSApplication.shared.setActivationPolicy(.prohibited)
+        defer { NSApplication.shared.setActivationPolicy(previousActivationPolicy) }
+
+        let controller = SettingsWindowController()
+        for viewportHeight: CGFloat in [600, 680] {
+            let pane = NSView(frame: NSRect(x: 0, y: 0, width: 460, height: 200))
+            let control = NSButton(frame: NSRect(x: 20, y: 150, width: 200, height: 22))
+            pane.addSubview(control)
+
+            let scrollView = try XCTUnwrap(controller.topAligned(pane) as? NSScrollView)
+            scrollView.frame = NSRect(x: 0, y: 0, width: 460, height: viewportHeight)
+            scrollView.layoutSubtreeIfNeeded()
+
+            XCTAssertNotNil(scrollView.documentView)
+            let clipView = scrollView.contentView
+            let visible = clipView.bounds
+            let controlRect = control.convert(control.bounds, to: clipView)
+            let topGap = clipView.isFlipped
+                ? controlRect.minY - visible.minY
+                : visible.maxY - controlRect.maxY
+            XCTAssertLessThanOrEqual(topGap, 30, "viewport=\(viewportHeight), gap=\(topGap)")
+        }
+    }
+
+    @MainActor
+    func testShortPaneDoesNotScrollIntoEmptyDocumentAfterViewportShrinks() throws {
+        let previousActivationPolicy = NSApplication.shared.activationPolicy()
+        NSApplication.shared.setActivationPolicy(.prohibited)
+        defer { NSApplication.shared.setActivationPolicy(previousActivationPolicy) }
+
+        let pane = NSView(frame: NSRect(x: 0, y: 0, width: 460, height: 200))
+        let firstControl = NSButton(frame: NSRect(x: 20, y: 150, width: 200, height: 22))
+        pane.addSubview(firstControl)
+        let scrollView = try XCTUnwrap(SettingsWindowController().topAligned(pane) as? NSScrollView)
+        scrollView.frame.size.height = 320
+        scrollView.layoutSubtreeIfNeeded()
+
+        let clipView = scrollView.contentView
+        let proposedBounds = NSRect(origin: NSPoint(x: 0, y: 10_000), size: clipView.bounds.size)
+        let constrainedBounds = clipView.constrainBoundsRect(proposedBounds)
+        clipView.scroll(to: constrainedBounds.origin)
+        scrollView.reflectScrolledClipView(clipView)
+
+        XCTAssertEqual(clipView.bounds.minY, 0, accuracy: 0.5)
+        let controlRect = firstControl.convert(firstControl.bounds, to: clipView)
+        let topGap = clipView.isFlipped
+            ? controlRect.minY - clipView.bounds.minY
+            : clipView.bounds.maxY - controlRect.maxY
+        XCTAssertLessThanOrEqual(topGap, 30)
+    }
+
+    @MainActor
+    func testLastControlInLongPaneRemainsReachableAfterViewportShrinks() throws {
+        let previousActivationPolicy = NSApplication.shared.activationPolicy()
+        NSApplication.shared.setActivationPolicy(.prohibited)
+        defer { NSApplication.shared.setActivationPolicy(previousActivationPolicy) }
+
+        let pane = NSView(frame: NSRect(x: 0, y: 0, width: 460, height: 900))
+        let lastControl = NSButton(frame: NSRect(x: 20, y: 10, width: 200, height: 22))
+        pane.addSubview(lastControl)
+        let scrollView = try XCTUnwrap(SettingsWindowController().topAligned(pane) as? NSScrollView)
+        scrollView.frame.size.height = 320
+        scrollView.layoutSubtreeIfNeeded()
+
+        let clipView = scrollView.contentView
+        let proposedBounds = NSRect(origin: NSPoint(x: 0, y: 10_000), size: clipView.bounds.size)
+        let constrainedBounds = clipView.constrainBoundsRect(proposedBounds)
+        clipView.scroll(to: constrainedBounds.origin)
+        scrollView.reflectScrolledClipView(clipView)
+
+        let lastControlRect = lastControl.convert(lastControl.bounds, to: clipView)
+        XCTAssertTrue(lastControlRect.intersects(clipView.bounds))
+        XCTAssertLessThanOrEqual(clipView.bounds.maxY, 900.5)
+    }
+
+    @MainActor
     private func descendants(of view: NSView) -> [NSView] {
         [view] + view.subviews.flatMap { descendants(of: $0) }
     }
