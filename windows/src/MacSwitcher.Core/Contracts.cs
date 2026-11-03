@@ -8,6 +8,7 @@ public sealed class AppSettings
 {
     public bool Enabled { get; set; } = true;
     public bool AutomaticCorrection { get; set; } = true;
+    public bool RememberCorrections { get; set; } = true;
     public bool RussianPriority { get; set; } = true;
     public bool StartWithWindows { get; set; }
     public bool SmartSelection { get; set; }

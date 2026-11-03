@@ -66,8 +66,9 @@ namespace MacSwitcher.Windows
                     var showSettings = args.Length == 1 || !File.Exists(Path.Combine(storeDirectory, "settings.json"));
                     var store = new ConfigurationStore(storeDirectory);
                     store.Load();
+                    showSettings = showSettings || store.LearningExplanationPending;
                     var dataDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "data");
-                    using (var runtime = new WindowsSwitcherRuntime(store.Settings, store.Personal, dataDirectory))
+                    using (var runtime = new WindowsSwitcherRuntime(store.Settings, store.Personal, dataDirectory, store.Adaptive.Learning))
                     using (var context = new SwitcherContext(runtime, store, showSettings))
                     {
                         var listening = true;

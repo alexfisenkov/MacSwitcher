@@ -198,6 +198,32 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
     }
 
     @MainActor
+    func testAdaptiveWordAppliesWithStaleReportedLayoutInBothDirections() throws {
+        let pair = try layoutIDs()
+        let wordPair = AdaptiveWordPair(ru: "фис", en: "abc")
+        let forward = AdaptiveRule(pair: wordPair, preferred: "ru", confirmations: 2,
+            confirmedAt: Date(), lastOccurrenceID: UUID())
+        let first = Field(pid: 2071, text: "")
+        let rig = Rig(fields: [first], englishID: pair.en, russianID: pair.ru)
+        rig.coordinator.adaptiveRulesProvider = { [forward] in [forward] }
+        rig.sourceID = pair.ru
+        rig.deliver("abc ", source: pair.ru)
+        rig.settle(expected: .applied)
+        XCTAssertEqual(first.text, "фис ")
+        XCTAssertEqual(rig.sourceID, pair.ru)
+
+        let reverse = AdaptiveRule(pair: wordPair, preferred: "en", confirmations: 2,
+            confirmedAt: Date(), lastOccurrenceID: UUID())
+        let second = Field(pid: 2072, text: "")
+        let reverseRig = Rig(fields: [second], englishID: pair.en, russianID: pair.ru)
+        reverseRig.coordinator.adaptiveRulesProvider = { [reverse] in [reverse] }
+        reverseRig.deliver("фис ", source: pair.en)
+        reverseRig.settle(expected: .applied)
+        XCTAssertEqual(second.text, "abc ")
+        XCTAssertEqual(reverseRig.sourceID, pair.en)
+    }
+
+    @MainActor
     func testEvaluationCompletionDistinguishesNoProposalSuppressionApplicationAndCancellation() throws {
         let pair = try layoutIDs()
         let field = Field(pid: 2040, text: "")
@@ -370,6 +396,12 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         XCTAssertEqual(field.text, "прив")
         let notice = try XCTUnwrap(rig.notices.last)
 
+        var adaptiveEvent: (UUID, String, String)?
+        rig.coordinator.onAdaptiveAutomaticUndo = { id, original, replacement, _, _ in
+            XCTAssertNil(rig.activeLease, "Learning event must follow lease release")
+            adaptiveEvent = (id, original, replacement)
+        }
+
         var undoResult: CorrectionUndoResult?
         rig.coordinator.undoCorrection(id: notice.id) { undoResult = $0 }
         guard case .confirmed? = undoResult else {
@@ -378,6 +410,9 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         }
         XCTAssertEqual(field.text, "ghbd")
         XCTAssertEqual(rig.sourceID, pair.en)
+        XCTAssertEqual(adaptiveEvent?.0, notice.id)
+        XCTAssertEqual(adaptiveEvent?.1, "прив")
+        XCTAssertEqual(adaptiveEvent?.2, "ghbd")
 
         rig.deliver("tn")
         rig.settle(expected: .applied)
@@ -396,6 +431,9 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         let notice = try XCTUnwrap(rig.notices.last)
         rig.sourceOutcome = .refused
 
+        var adaptiveEventCount = 0
+        rig.coordinator.onAdaptiveAutomaticUndo = { _, _, _, _, _ in adaptiveEventCount += 1 }
+
         var result: CorrectionUndoResult?
         rig.coordinator.undoCorrection(id: notice.id) { result = $0 }
         guard case .sourceNotConfirmed(let target)? = result else {
@@ -404,6 +442,7 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         }
         XCTAssertEqual(target, pair.en)
         XCTAssertEqual(field.text, "ghbd")
+        XCTAssertEqual(adaptiveEventCount, 0)
         XCTAssertEqual(field.queuedText, 2)
         XCTAssertFalse(rig.converter.hasUnconfirmedAXEdit(in: field.focus()),
             "A failed source selection is not an unknown text write")

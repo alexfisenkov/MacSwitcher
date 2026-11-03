@@ -30,7 +30,7 @@ Run `dotnet` commands from `windows/` so `global.json` selects the pinned SDK. T
 
 The per-user setup and portable ZIP are unsigned because this project has no Windows Authenticode certificate. Windows may display its normal publisher warning. Do not disable SmartScreen or other Windows protections to install the app. The installer checks for .NET Framework 4.6.2 and opens Microsoft's download page if the requirement is missing.
 
-Personal settings and lexicon files live under `%LOCALAPPDATA%\MacSwitcherWindows`. Personal entries are stored locally and are never synchronized or learned from typing. Recovery originals are kept in memory until explicitly exported by the user.
+Personal settings and lexicon files live under `%LOCALAPPDATA%\MacSwitcherWindows`. The alpha.2 candidate adds a separate `adaptive-rules.json`: two independent confirmed word choices activate a local preference; undo/redo does not add confirmations. Learning is enabled by default with a first-run explanation and can be disabled, reviewed, deleted or reset in Settings. Manual personal entries remain separate. No phrase or keystroke history is stored or synchronized. Recovery originals are kept in memory until explicitly exported by the user. See [the common contract](../docs/local-learning.md).
 
 ## Окна администратора
 

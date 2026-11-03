@@ -126,9 +126,13 @@ public sealed class PredictionLexicon : IDisposable
     {
         var code = LanguageCode(language);
         return !disposed && ((code == "ru" ? protectedRu : protectedEn).Contains(Normalize(word)) ||
-            personal.IsWord(word, code) || (full.TryGetValue(code, out var index) && (index.Lookup(Normalize(word))?.flags & 2) != 0));
+            (personal is AdaptivePersonalLexicon overlay ? overlay.IsExplicitWord(word,code) : personal.IsWord(word,code)) ||
+            (full.TryGetValue(code, out var index) && (index.Lookup(Normalize(word))?.flags & 2) != 0));
     }
     public bool IsPersonalWord(string word, string language) => !disposed && personal.IsWord(word, language);
+    public bool IsExplicitPersonalWord(string word,string language) => !disposed && personal is AdaptivePersonalLexicon overlay && overlay.IsExplicitWord(word,language);
+    public string? PreferredConversion(string word,string language) => !disposed && personal is IAdaptiveLexicon adaptive ? adaptive.PreferredConversion(word,language) : null;
+    public bool IsPreferredPrefix(string word,string language) => !disposed && personal is IAdaptiveLexicon adaptive && adaptive.IsPreferredPrefix(word,language);
     public bool IsPhraseException(string original, string sourceLanguage) => !disposed && personal.IsPhraseException(original, sourceLanguage);
     public PrefixEvidence PrefixEvidence(string prefix, string language) => !disposed && triggers.TryGetValue(LanguageCode(language), out var index) ? index.Prefix(Normalize(prefix)) : default;
     public static string Normalize(string word) => (word ?? "").ToLowerInvariant().Normalize(NormalizationForm.FormC);

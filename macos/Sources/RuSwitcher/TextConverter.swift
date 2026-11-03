@@ -359,6 +359,12 @@ final class TextConverter {
     }
     /// Exact layout of the inserted result, also after undo; callers must not toggle active source.
     var lastResultLayoutID: String? { predictionLayouts?.target ?? lastLayoutContext?.targetLayoutID }
+    /// Only consumed after a confirmed manual transaction, never from a key callback.
+    var lastConfirmedManualWordPair: (original: String, replacement: String)? {
+        guard confirmedNativeField != nil, !lastOriginal.isEmpty,
+              !lastConverted.isEmpty else { return nil }
+        return (lastOriginal, lastConverted)
+    }
     var hasReconversionState: Bool { hasUnconfirmedAXEdit || !lastConverted.isEmpty || lastConvertedCount > 0 }
 
     /// The only automatic edit entry point. It cannot fall back to clipboard,

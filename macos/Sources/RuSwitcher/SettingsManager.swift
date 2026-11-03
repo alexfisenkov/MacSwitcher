@@ -55,6 +55,7 @@ final class SettingsManager: @unchecked Sendable {
         static let deniedAppsRemoved = "com.ruswitcher.deniedAppsRemoved"
         static let deniedWords = "com.ruswitcher.deniedWords"
         static let alwaysConvertWords = "com.ruswitcher.alwaysConvertWords"
+        static let adaptiveLearning = "com.macswitcher.adaptiveLearning"
     }
 
     init(defaults: UserDefaults, combinedShiftDefault: Bool = Bundle.main.object(forInfoDictionaryKey: "LocalCombinedShiftDefault") as? Bool ?? true,
@@ -65,6 +66,12 @@ final class SettingsManager: @unchecked Sendable {
     }
 
     // MARK: - Properties
+
+    /// Visible local word learning; new users start enabled and can turn it off at any time.
+    var adaptiveLearningEnabled: Bool {
+        get { defaults.object(forKey: Keys.adaptiveLearning) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Keys.adaptiveLearning) }
+    }
 
     var autoSwitchEnabled: Bool {
         get { defaults.object(forKey: Keys.autoSwitch) as? Bool ?? true }

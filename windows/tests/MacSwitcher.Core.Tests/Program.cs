@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.Json;
+using System.Runtime.Serialization.Json;
 using MacSwitcher.Core;
 
 static class Test
@@ -29,7 +30,7 @@ static class Test
             return;
         }
         var root=FindRoot();
-        Gesture(); Map(); Personal(); FixturePolicy(); BinaryFixtureCorruption(); ForcedWords(); SignedUpdates();
+        Gesture(); Map(); Personal(); AdaptivePolicy(); FixturePolicy(); BinaryFixtureCorruption(); ForcedWords(); SignedUpdates();
         var data=Path.Combine(root,"windows","data");
         Check(File.Exists(Path.Combine(data,"dictionary-manifest.json")),"generated dictionary required");
         using(var lex=PredictionLexicon.Load(data,new PersonalLexicon()))
@@ -73,6 +74,106 @@ static class Test
         var snapshot=lex.ExportSnapshot();var second=new PersonalLexicon();second.ReplaceSnapshot(snapshot);
         Check(second.IsWord("chatgpt","en")&&second.IsPhraseException("ghbdtn","en"),"snapshot replace");
         second.RemoveWord("ChatGPT","en");Check(!second.IsWord("chatgpt","en"),"word removal");
+    }
+    static void AdaptivePolicy()
+    {
+        var learning=new AdaptiveLearning();
+        learning.SetEnabled(true);
+        var now=DateTime.UtcNow;
+        string id(int value)=>value.ToString("x32");
+        AdaptiveEvent manual(int value,AdaptiveAction action=AdaptiveAction.Applied,string from="ghbdtn",string to="привет",bool confirmed=true)=>new AdaptiveEvent(id(value),from,to,AdaptiveOrigin.Manual,action,confirmed);
+        void accept(AdaptiveEvent change)
+        { Check(learning.TryApply(change,now,out var next),"adaptive accepted"); learning.Commit(change,next); }
+        accept(manual(1)); Equal(learning.Snapshot()[0].Count,1,"first candidate");
+        Check(!learning.TryApply(manual(1),now,out _),"same occurrence ignored");
+        Equal(learning.PreferredConversion("ghbdtn","en"),null,"candidate no conversion");
+        accept(manual(2)); Equal(learning.Snapshot()[0].Count,2,"second independent active");
+        Equal(learning.PreferredConversion("ghbdtn","en"),"привет","active conversion");
+        Check(learning.IsPreferredPrefix("при","ru"),"preferred prefix hold");
+        accept(manual(2,AdaptiveAction.Undone)); Equal(learning.Snapshot()[0].Count,1,"manual undo revokes");
+        Check(!learning.TryApply(manual(2),now,out _),"redo cannot vote");
+        var older=new AdaptiveLearning(); older.SetEnabled(true);
+        foreach(var eventItem in new[]{manual(31),manual(32)})
+        { Check(older.TryApply(eventItem,now,out var next),"independent older vote"); older.Commit(eventItem,next); }
+        var oldUndo=manual(31,AdaptiveAction.Undone);
+        Check(older.TryApply(oldUndo,now,out var olderNext),"older occurrence undo"); older.Commit(oldUndo,olderNext);
+        Equal(older.Snapshot()[0].Count,1,"older vote revoked");
+        Check(!older.TryApply(manual(31),now,out _),"older redo cannot vote");
+        older.Reset();
+        Check(!older.TryApply(manual(32),now,out _),"reset tombstones prior occurrence");
+        accept(manual(3)); Equal(learning.Snapshot()[0].Count,2,"new occurrence activates");
+        accept(manual(4,from:"привет",to:"ghbdtn"));
+        Equal(learning.Snapshot()[0].PreferredLanguage,"en","opposite direction");
+        Equal(learning.Snapshot()[0].Count,1,"opposite starts at one");
+        Check(!learning.TryApply(manual(5,confirmed:false),now,out _),"unconfirmed source ignored");
+        var auto=new AdaptiveEvent(id(6),"ghbdtn","привет",AdaptiveOrigin.Automatic,AdaptiveAction.Applied,true);
+        Check(!learning.TryApply(auto,now,out _),"automatic apply ignored");
+        var undo=new AdaptiveEvent(id(6),"ghbdtn","привет",AdaptiveOrigin.Automatic,AdaptiveAction.Undone,true);
+        accept(undo); Equal(learning.Snapshot()[0].PreferredLanguage,"en","auto undo prefers original");
+        Equal(learning.Snapshot()[0].Count,2,"auto undo second confirmation");
+        Check(!learning.TryApply(undo,now,out _),"repeat auto undo ignored");
+        accept(auto); Equal(learning.Snapshot()[0].Count,1,"auto redo revokes");
+        learning.SetEnabled(false);
+        Equal(learning.PreferredConversion("привет","ru"),null,"off lookup stops");
+        Check(!learning.TryApply(manual(7),now,out _),"off recording stops");
+        learning.SetEnabled(true);
+        Check(!AdaptiveLearning.TryPair("foo@example.com","ащщQучфьздуюсщь",out _,out _),"email rejected");
+        Check(!AdaptiveLearning.TryPair("abc123","фис123",out _,out _),"digits rejected");
+        Check(!AdaptiveLearning.TryPair("hello world","руддщ цщкдв",out _,out _),"phrase rejected");
+        Check(AdaptiveLearning.TryPair("j,sxyj","обычно",out _,out _),"mapped comma accepted");
+        Check(AdaptiveLearning.TryPair("to`","ещё",out _,out _),"mapped yo accepted");
+        Check(AdaptiveLearning.TryPair("to\\","ещё",out _,out _),"mapped yo backslash accepted");
+        Check(!AdaptiveLearning.TryPair("file.a",LayoutMap.Convert("file.a","en"),out _,out _),"file extension rejected");
+        Check(!AdaptiveLearning.TryPair("a.b",LayoutMap.Convert("a.b","en"),out _,out _),"dotted short name rejected");
+        Check(!AdaptiveLearning.TryPair("C:\\file",LayoutMap.Convert("C:\\file","en"),out _,out _),"drive path rejected");
+        Check(!AdaptiveLearning.TryPair("file/path",LayoutMap.Convert("file/path","en"),out _,out _),"slash path rejected");
+        Check(!AdaptiveLearning.TryPair("foo[]",LayoutMap.Convert("foo[]","en"),out _,out _),"code brackets rejected");
+        using(var stream=new MemoryStream())
+        {
+            var serializer=new DataContractJsonSerializer(typeof(AdaptiveRule[]));
+            serializer.WriteObject(stream,learning.Snapshot()); stream.Position=0;
+            var reread=(AdaptiveRule[])serializer.ReadObject(stream)!;
+            AdaptiveLearning.Validate(reread);
+            Equal(reread[0].LastConfirmedUtc.Kind,DateTimeKind.Utc,"adaptive date roundtrip UTC");
+        }
+        var active=new AdaptiveLearning();
+        active.Replace(new[]{new AdaptiveRule{English="ghbdtn",Russian="привет",PreferredLanguage="ru",
+            Count=2,LastConfirmedUtc=DateTime.UtcNow,LastOccurrenceId=id(50)}});
+        active.SetEnabled(true);
+        var staleGeneration=active.Generation;
+        active.Delete("ghbdtn","привет");
+        Check(!active.TryApply(new AdaptiveEvent(id(51),"ghbdtn","привет",AdaptiveOrigin.Manual,
+            AdaptiveAction.Applied,true,staleGeneration),now,out _),"delete cancels queued callback");
+        active.Replace(new[]{new AdaptiveRule{English="ghbdtn",Russian="привет",PreferredLanguage="ru",
+            Count=2,LastConfirmedUtc=DateTime.UtcNow,LastOccurrenceId=id(50)}});
+        var explicitWords=new PersonalLexicon();
+        using(var lex=PredictionLexicon.FromFixture(new Dictionary<string,Dictionary<string,int>>{
+            ["en"]=new(),["ru"]=new()},personal:new AdaptivePersonalLexicon(explicitWords,active)))
+        {
+            var engine=new PredictionEngine(lex);
+            Equal(engine.Evaluate("ghbdtn","en",false)?.ReplacementSuffix,null,"learned conversion waits for boundary");
+            Equal(engine.Evaluate("ghbdtn","en",true)?.ReplacementSuffix,"привет","learned boundary mapping");
+            Equal(engine.Evaluate("ghbdtn","ru",true)?.ReplacementSuffix,"привет","learned mapping despite current RU layout");
+            Equal(engine.Evaluate("ghbdtn","ru",true)?.TargetLanguage,"ru","mismatch mapping target RU");
+            Equal(engine.Evaluate("ghbdtn","ru",true,alwaysConvertWords:new[]{"привет"})?.Reason,"forcedWord","mismatch explicit force wins");
+            Equal(engine.Evaluate("ghbdtn","ru",true,alwaysConvertWords:new[]{"привет"})?.TargetLanguage,"ru","mismatch force target RU");
+            Equal(engine.Evaluate("привет","en",true,alwaysConvertWords:new[]{"ghbdtn"})?.ReplacementSuffix,"ghbdtn","reverse mismatch explicit force");
+            Equal(engine.Evaluate("привет","en",true,alwaysConvertWords:new[]{"ghbdtn"})?.TargetLanguage,"en","reverse mismatch force target EN");
+            Equal(engine.Evaluate("GhBdTn","ru",true,alwaysConvertWords:new[]{"привет"})?.ReplacementSuffix,null,"mismatch force mixedcase guard");
+            Equal(engine.Evaluate("file.a","ru",true,alwaysConvertWords:new[]{LayoutMap.Convert("file.a","en")})?.ReplacementSuffix,null,"mismatch force extension guard");
+            Equal(engine.Evaluate("C:\\file","ru",true,alwaysConvertWords:new[]{LayoutMap.Convert("C:\\file","en")})?.ReplacementSuffix,null,"mismatch force path guard");
+            Equal(engine.Evaluate("GHBDTN","en",true)?.ReplacementSuffix,null,"learned allcaps guard");
+            Equal(engine.Evaluate("GhBdTn","en",true)?.ReplacementSuffix,null,"learned mixedcase guard");
+            Equal(engine.Evaluate("GHBDTN","ru",true)?.ReplacementSuffix,null,"mismatch allcaps guard");
+            Equal(engine.Evaluate("ghbdtn.exe","en",true)?.ReplacementSuffix,null,"learned extension guard");
+            Equal(engine.Evaluate("при","ru",false)?.ReplacementSuffix,null,"preferred prefix held");
+            explicitWords.AddWord("ghbdtn","en");
+            Equal(engine.Evaluate("ghbdtn","en",true)?.ReplacementSuffix,null,"manual word overrides learned");
+            explicitWords.RemoveWord("ghbdtn","en");
+            Equal(engine.Evaluate("привет","ru",true,alwaysConvertWords:new[]{"ghbdtn"})?.ReplacementSuffix,"ghbdtn","forced word overrides learned");
+            active.SetEnabled(false);
+            Equal(engine.Evaluate("ghbdtn","en",true)?.ReplacementSuffix,null,"off removes learned mapping");
+        }
     }
     static void FixturePolicy()
     {

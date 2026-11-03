@@ -22,6 +22,8 @@ public sealed class ConfigurationStore
 
     public AppSettings Settings { get; private set; } = new AppSettings();
     public PersonalLexicon Personal { get; } = new PersonalLexicon();
+    public AdaptiveRulesStore Adaptive { get; }
+    public bool LearningExplanationPending { get; private set; }
     public bool CanSaveSettings => settingsWritable;
     public bool CanSavePersonal => personalWritable;
     public string SettingsProblem { get; private set; } = "";
@@ -32,11 +34,14 @@ public sealed class ConfigurationStore
         this.directory = directory ?? throw new ArgumentNullException(nameof(directory));
         settingsPath = Path.Combine(directory, "settings.json");
         personalPath = Path.Combine(directory, "personal.json");
+        Adaptive = new AdaptiveRulesStore(directory);
     }
 
     public void Load()
     {
-        Settings = LoadFile(settingsPath, new SettingsDocument(), out var sWritable, out var sProblem);
+        var settingsDocument = LoadFile(settingsPath, new SettingsDocument(), out var sWritable, out var sProblem);
+        Settings = settingsDocument;
+        LearningExplanationPending = sWritable && settingsDocument.RememberCorrections == null;
         settingsWritable = sWritable;
         SettingsProblem = sProblem;
         try { Settings.Validate(); }
@@ -62,6 +67,7 @@ public sealed class ConfigurationStore
             Settings.Enabled = false;
             Settings.AutomaticCorrection = false;
         }
+        Adaptive.Load(Settings.RememberCorrections);
     }
 
     public void SaveSettings(AppSettings settings)
@@ -87,6 +93,8 @@ public sealed class ConfigurationStore
             throw;
         }
         Settings = Copy(settings);
+        Adaptive.SetEnabled(Settings.RememberCorrections);
+        LearningExplanationPending = false;
     }
 
     public void AddWord(string value, string language) => ChangePersonal(copy => copy.AddWord(value, language));
@@ -139,6 +147,7 @@ public sealed class ConfigurationStore
             personalWritable = true;
             PersonalProblem = "";
         }
+        preserved.AddRange(Adaptive.RecoverUnreadable(Settings.RememberCorrections));
         return preserved.ToArray();
     }
 
@@ -290,6 +299,7 @@ public sealed class ConfigurationStore
     {
         Enabled = value.Enabled,
         AutomaticCorrection = value.AutomaticCorrection,
+        RememberCorrections = value.RememberCorrections,
         RussianPriority = value.RussianPriority,
         StartWithWindows = value.StartWithWindows,
         DoubleShiftMilliseconds = value.DoubleShiftMilliseconds,
@@ -319,6 +329,7 @@ public sealed class ConfigurationStore
         [DataMember(Order = 7)] public string[] ExcludedApplications { get; set; } = Array.Empty<string>();
         [DataMember(Order = 8)] public string[] AlwaysConvertWords { get; set; } = Array.Empty<string>();
         [DataMember(Order = 9)] public bool SmartSelection { get; set; }
+        [DataMember(Order = 10, EmitDefaultValue = false)] public bool? RememberCorrections { get; set; }
         public SettingsDocument() { }
         public SettingsDocument(AppSettings value)
         {
@@ -327,8 +338,9 @@ public sealed class ConfigurationStore
             ExcludedApplications = value.ExcludedApplications.ToArray();
             AlwaysConvertWords = value.AlwaysConvertWords.ToArray();
             SmartSelection = value.SmartSelection;
+            RememberCorrections = value.RememberCorrections;
         }
-        public static implicit operator AppSettings(SettingsDocument value) => new AppSettings { Enabled = value.Enabled, AutomaticCorrection = value.AutomaticCorrection, RussianPriority = value.RussianPriority, StartWithWindows = value.StartWithWindows, DoubleShiftMilliseconds = value.DoubleShiftMilliseconds, ExcludedApplications = value.ExcludedApplications, AlwaysConvertWords = value.AlwaysConvertWords ?? Array.Empty<string>(), SmartSelection = value.SmartSelection };
+        public static implicit operator AppSettings(SettingsDocument value) => new AppSettings { Enabled = value.Enabled, AutomaticCorrection = value.AutomaticCorrection, RussianPriority = value.RussianPriority, StartWithWindows = value.StartWithWindows, DoubleShiftMilliseconds = value.DoubleShiftMilliseconds, ExcludedApplications = value.ExcludedApplications, AlwaysConvertWords = value.AlwaysConvertWords ?? Array.Empty<string>(), SmartSelection = value.SmartSelection, RememberCorrections = value.RememberCorrections ?? true };
     }
 
     [DataContract]

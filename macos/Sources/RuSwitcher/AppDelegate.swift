@@ -28,10 +28,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var diagnosticRepro: DiagnosticReproController?
     private var nativeSelectionAwaitGate = NativeSelectionAwaitGate()
     private var pendingNativeSelection: Task<Void, Never>?
+    private let adaptiveQueue = DispatchQueue(label: "com.macswitcher.adaptive-rules", qos: .utility)
+    private var manualLearningProvenance = AdaptiveManualProvenance()
+    private var automaticUndoLearningProvenance = AdaptiveAutomaticUndoProvenance()
     private static let recoveryCopyItemTag = 71003
     private static let sourceRecoveryItemTag = 71004
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let introShown = UserDefaults.standard.bool(forKey: "com.macswitcher.adaptiveLearningIntroShown")
+        AdaptiveRuleStore.shared.setEnabled(AdaptiveIntroPolicy.mayReadOrRecord(
+            preferenceEnabled: SettingsManager.shared.adaptiveLearningEnabled,
+            explanationShown: introShown))
         setupStatusItem()
         setupSettingsCallbacks()
         syncLoginItem()
@@ -42,6 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         runPermissionWizard()
         showWhatsNewIfNeeded(hasRunBefore: ranBefore)
         showBetaWhatsNewIfNeeded()   // отдельная витрина для бет (текст из бета-фида)
+        showAdaptiveIntroIfNeeded()
         UpdateChecker.checkOnLaunch()
         // Скрытая иконка: reopen-событие приходит только УЖЕ работающему приложению.
         // Свежий РУЧНОЙ запуск со скрытой иконкой без этого блока «тих» (ни иконки, ни
@@ -491,6 +499,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.predictionCoordinator.invalidate()
         }
         predictionCoordinator.onApplied = { [weak self] original in
+            self?.manualLearningProvenance.invalidate()
+            self?.automaticUndoLearningProvenance.invalidate()
             self?.diagnosticRepro?.noteAutomaticApplication()
             self?.updateStatusIcon()
         }
@@ -500,6 +510,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         predictionCoordinator.onConfirmedAutomaticUndo = { [weak self] notice in
             self?.offerExceptionAfterConfirmedUndo(notice)
         }
+        predictionCoordinator.onAdaptiveAutomaticUndo = { [weak self] id, original, replacement, focus, generation in
+            self?.manualLearningProvenance.invalidate()
+            self?.automaticUndoLearningProvenance.confirmedUndo(id: id,
+                original: original, replacement: replacement, focus: focus)
+            self?.enqueueAdaptive(.automaticUndoConfirmed(id: id,
+                original: original, replacement: replacement), generation: generation)
+        }
+        predictionCoordinator.adaptiveRulesProvider = { AdaptiveRuleStore.shared.rules() }
+        predictionCoordinator.adaptiveGenerationProvider = { AdaptiveRuleStore.shared.currentGeneration }
         predictionCoordinator.onUnconfirmedEdit = { [weak self] in
             self?.showUnknownEditNotice()
         }
@@ -765,7 +784,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .some(.confirmed):
             updateStatusIcon()
             if let receipt = result.confirmedAutomaticUndo {
+                manualLearningProvenance.invalidate()
                 predictionCoordinator.completeDoubleShiftAutomaticUndo(receipt)
+            } else if case .manual = automaticUndo {
+                if let pair = textConverter.lastConfirmedManualWordPair,
+                   let focus = request.focus {
+                    if request.reconvert,
+                       let retraction = automaticUndoLearningProvenance.confirmedRedo(
+                            original: pair.original, replacement: pair.replacement,
+                            focus: focus) {
+                        manualLearningProvenance.invalidate()
+                        enqueueAdaptive(retraction)
+                    } else {
+                        if !request.reconvert { automaticUndoLearningProvenance.invalidate() }
+                        if let evidence = manualLearningProvenance.confirmed(
+                            original: pair.original, replacement: pair.replacement,
+                            focus: focus, reconvert: request.reconvert) {
+                            enqueueAdaptive(evidence)
+                        }
+                    }
+                } else {
+                    manualLearningProvenance.invalidate()
+                    automaticUndoLearningProvenance.invalidate()
+                }
+            }
+        }
+    }
+
+    private func enqueueAdaptive(_ evidence: AdaptiveEvidence, generation: UInt64? = nil) {
+        let generation = generation ?? AdaptiveRuleStore.shared.currentGeneration
+        adaptiveQueue.async {
+            _ = try? AdaptiveRuleStore.shared.record(evidence, generation: generation)
+        }
+    }
+
+    private func showAdaptiveIntroIfNeeded() {
+        let key = "com.macswitcher.adaptiveLearningIntroShown"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self, !UserDefaults.standard.bool(forKey: key) else { return }
+            let shown = self.showFeedback(title: "Локальное обучение MacSwitcher",
+                body: "После двух независимых исправлений одного слова выбор запоминается только на этом Mac. В настройках → Обучение можно отключить функцию и удалить правила. История набора не сохраняется.",
+                kind: .adaptiveIntro, actionTitle: "Настройки", onAction: { [weak self] in
+                    self?.settingsController.showWindow()
+                })
+            if shown {
+                UserDefaults.standard.set(true, forKey: key)
+                AdaptiveRuleStore.shared.setEnabled(SettingsManager.shared.adaptiveLearningEnabled)
             }
         }
     }

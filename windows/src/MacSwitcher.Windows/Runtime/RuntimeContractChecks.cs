@@ -4,6 +4,11 @@ using MacSwitcher.Windows.Automation;
 using MacSwitcher.Core;
 using System.IO;
 using System.Text;
+using System.Linq;
+using System.Diagnostics;
+using System.Threading.Tasks;
+using System.Threading;
+using MacSwitcher.Windows.Storage;
 
 namespace MacSwitcher.Windows.Runtime
 {
@@ -105,7 +110,107 @@ namespace MacSwitcher.Windows.Runtime
             aroundWrap.Press(ShiftSide.Right, PhysicalHookHost.ExtendEventTime(10, wrap + 20), direction);
             if (aroundWrap.Release(ShiftSide.Right, PhysicalHookHost.ExtendEventTime(30, wrap + 50))?.Kind
                 != ShiftActionKind.Convert) return 16;
+            if (!AdaptiveStoreFixture()) return 23;
             return 0;
+        }
+        private static bool AdaptiveStoreFixture()
+        {
+            var directory=Path.Combine(Path.GetTempPath(),"MacSwitcher-adaptive-fixture-"+Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            try
+            {
+                var settingsDirectory=Path.Combine(directory,"settings-case");
+                Directory.CreateDirectory(settingsDirectory);
+                var settingsFile=Path.Combine(settingsDirectory,"settings.json");
+                var legacySettings="{\"Schema\":1,\"Enabled\":true,\"AutomaticCorrection\":true,"+
+                    "\"RussianPriority\":true,\"StartWithWindows\":false,\"DoubleShiftMilliseconds\":180,"+
+                    "\"ExcludedApplications\":[],\"AlwaysConvertWords\":[],\"SmartSelection\":false";
+                File.WriteAllText(settingsFile,legacySettings+"}");
+                var migrated=new ConfigurationStore(settingsDirectory); migrated.Load();
+                if(!migrated.Settings.RememberCorrections || !migrated.LearningExplanationPending) return false;
+                File.WriteAllText(settingsFile,legacySettings+",\"RememberCorrections\":false}");
+                var optedOut=new ConfigurationStore(settingsDirectory); optedOut.Load();
+                if(optedOut.Settings.RememberCorrections || optedOut.Adaptive.Learning.Enabled ||
+                    optedOut.LearningExplanationPending) return false;
+                var store=new AdaptiveRulesStore(directory); store.Load(true);
+                var first=new AdaptiveEvent(Guid.NewGuid().ToString("N"),"ghbdtn ","привет ",
+                    AdaptiveOrigin.Manual,AdaptiveAction.Applied,true);
+                store.Submit(first);
+                if(!SpinWait.SpinUntil(()=>store.Snapshot().Length==1,5000)) return false;
+                var file=Path.Combine(directory,"adaptive-rules.json");
+                if(!File.Exists(file)||store.Snapshot()[0].Count!=1) return false;
+                using(var entered=new ManualResetEventSlim(false))
+                using(var release=new ManualResetEventSlim(false))
+                {
+                    var blocked=new AdaptiveRulesStore(directory,()=>{entered.Set(); release.Wait(5000);});
+                    blocked.Load(true);
+                    blocked.Submit(new AdaptiveEvent(Guid.NewGuid().ToString("N"),"ghbdtn","привет",
+                        AdaptiveOrigin.Manual,AdaptiveAction.Applied,true));
+                    if(!entered.Wait(5000)) return false;
+                    var watch=Stopwatch.StartNew();
+                    blocked.Submit(new AdaptiveEvent(Guid.NewGuid().ToString("N"),"привет","ghbdtn",
+                        AdaptiveOrigin.Manual,AdaptiveAction.Applied,true));
+                    watch.Stop(); release.Set();
+                    if(watch.ElapsedMilliseconds>80 || !SpinWait.SpinUntil(()=>
+                        blocked.Snapshot().Length==1 && blocked.Snapshot()[0].PreferredLanguage=="en",5000)) return false;
+                    if(blocked.Snapshot()[0].Count!=1) return false;
+                }
+                var restarted=new AdaptiveRulesStore(directory); restarted.Load(true);
+                if(restarted.Snapshot().Length!=1||restarted.Snapshot()[0].Count!=1 ||
+                    restarted.Snapshot()[0].PreferredLanguage!="en") return false;
+                var cleanupFault=new AdaptiveRulesStore(directory,null,()=>throw new IOException("fixture cleanup failure"));
+                cleanupFault.Load(true);
+                cleanupFault.Submit(new AdaptiveEvent(Guid.NewGuid().ToString("N"),"привет","ghbdtn",
+                    AdaptiveOrigin.Manual,AdaptiveAction.Applied,true));
+                if(!SpinWait.SpinUntil(()=>cleanupFault.Snapshot().Length==1 &&
+                    cleanupFault.Snapshot()[0].Count==2,5000) || !cleanupFault.CanWrite ||
+                    cleanupFault.CleanupProblem.Length==0) return false;
+                cleanupFault.Delete("ghbdtn","привет");
+                if(cleanupFault.Snapshot().Length!=0 || cleanupFault.CleanupProblem.Length==0) return false;
+                cleanupFault.Reset();
+                if(cleanupFault.Snapshot().Length!=0 || cleanupFault.CleanupProblem.Length==0) return false;
+                restarted.Load(true); // Startup retries only exact .tmp-/.rollback- names.
+                if(restarted.Snapshot().Length!=0 || restarted.CleanupProblem.Length!=0) return false;
+                using(var enteredOff=new ManualResetEventSlim(false))
+                using(var releaseOff=new ManualResetEventSlim(false))
+                {
+                    var blockedOff=new AdaptiveRulesStore(directory,()=>{enteredOff.Set(); releaseOff.Wait(5000);});
+                    blockedOff.Load(true);
+                    blockedOff.Submit(new AdaptiveEvent(Guid.NewGuid().ToString("N"),"ghbdtn","привет",
+                        AdaptiveOrigin.Manual,AdaptiveAction.Applied,true));
+                    if(!enteredOff.Wait(5000)) { releaseOff.Set(); return false; }
+                    blockedOff.Submit(new AdaptiveEvent(Guid.NewGuid().ToString("N"),"ghbdtn","привет",
+                        AdaptiveOrigin.Manual,AdaptiveAction.Applied,true));
+                    var offTask=Task.Run(()=>blockedOff.SetEnabled(false));
+                    if(!SpinWait.SpinUntil(()=>!blockedOff.FixtureAccepting,1000))
+                    { releaseOff.Set(); return false; }
+                    releaseOff.Set();
+                    if(!offTask.Wait(5000) || !SpinWait.SpinUntil(()=>blockedOff.FixtureIdle,5000) ||
+                        blockedOff.Snapshot().Length!=1 || blockedOff.Snapshot()[0].Count!=1) return false;
+                }
+                restarted.Load(true);
+                if(restarted.Snapshot().Length!=1 || restarted.Snapshot()[0].Count!=1) return false;
+                restarted.Reset();
+                if(restarted.Snapshot().Length!=0) return false;
+                var writeFault=new AdaptiveRulesStore(directory,()=>throw new IOException("fixture disk failure"));
+                writeFault.Load(true);
+                writeFault.Submit(new AdaptiveEvent(Guid.NewGuid().ToString("N"),"ghbdtn","привет",
+                    AdaptiveOrigin.Manual,AdaptiveAction.Applied,true));
+                if(!SpinWait.SpinUntil(()=>!writeFault.CanWrite,5000) ||
+                    writeFault.Snapshot().Length!=0) return false;
+                restarted.Load(true);
+                if(restarted.Snapshot().Length!=0) return false;
+                var bytes=Encoding.UTF8.GetBytes("{\"Schema\":99,\"Rules\":[]}");
+                File.WriteAllBytes(file,bytes);
+                var future=new AdaptiveRulesStore(directory); future.Load(true);
+                if(future.CanWrite||future.Learning.Enabled||future.Snapshot().Length!=0||
+                    !File.ReadAllBytes(file).SequenceEqual(bytes)) return false;
+                File.WriteAllBytes(file,new byte[512*1024+1]);
+                var oversized=new AdaptiveRulesStore(directory); oversized.Load(true);
+                return !oversized.CanWrite && !oversized.Learning.Enabled &&
+                    new FileInfo(file).Length==512*1024+1;
+            }
+            finally { try { Directory.Delete(directory,true); } catch { } }
         }
     }
 }

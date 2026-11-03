@@ -55,6 +55,7 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate {
         tabView.addTabViewItem(createAdvancedTab())     // «Расширенные» — сразу после «Основных»
         tabView.addTabViewItem(createExceptionsTab())
         tabView.addTabViewItem(createPersonalDictionaryTab())
+        tabView.addTabViewItem(createAdaptiveRulesTab())
         tabView.addTabViewItem(createAboutTab())
         tabView.delegate = self
 
@@ -599,6 +600,15 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate {
         let item = NSTabViewItem()
         item.label = L10n.languageCode == "ru" ? "Словарь" : "Dictionary"
         let view = PersonalDictionaryView(frame: NSRect(x: 0, y: 0, width: 460, height: 480))
+        view.onChanged = { [weak self] in self?.onPredictionPreferencesChanged?() }
+        item.view = topAligned(view)
+        return item
+    }
+
+    private func createAdaptiveRulesTab() -> NSTabViewItem {
+        let item = NSTabViewItem()
+        item.label = L10n.languageCode == "ru" ? "Обучение" : "Learning"
+        let view = AdaptiveRulesView(frame: NSRect(x: 0, y: 0, width: 460, height: 480))
         view.onChanged = { [weak self] in self?.onPredictionPreferencesChanged?() }
         item.view = topAligned(view)
         return item

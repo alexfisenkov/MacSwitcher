@@ -35,6 +35,35 @@ public sealed class PredictionEngine
         if (source != "en" && source != "ru" || string.IsNullOrEmpty(suffix) || suffix.Length > 512 || suffix.Any(c => c == '\r' || c == '\n' || c == '\t') || lexicon.IsPhraseException(suffix, source)) return null;
         var words = Regex.Matches(suffix, @"\S+").Cast<Match>().ToArray(); if (words.Length == 0) return null;
         var current = words[words.Length-1].Value; var target = source == "en" ? "ru" : "en";
+        var actualSource=current.Any(LayoutMap.IsCyrillic) && !current.Any(LayoutMap.IsLatin) ? "ru" :
+            current.Any(LayoutMap.IsLatin) && !current.Any(LayoutMap.IsCyrillic) ? "en" : source;
+        var boundary=atBoundary || char.IsWhiteSpace(suffix[suffix.Length-1]);
+        if (!boundary && SafeAdaptiveShape(current,current) &&
+            lexicon.IsPreferredPrefix(current,actualSource)) return null;
+        if (boundary && actualSource!=source)
+        {
+            var split=StripPunctuation(current);
+            if (lexicon.IsPhraseException(current,actualSource)) return null;
+            var mapped=LayoutMap.Convert(split.core,actualSource);
+            var forced=alwaysConvertWords!=null && alwaysConvertWords.Select(PredictionLexicon.Normalize).Contains(PredictionLexicon.Normalize(mapped));
+            if (forced && Lexical(mapped) && SafeAdaptiveWord(current,split.core,mapped))
+            {
+                var wordMatch=words[words.Length-1];
+                return new PredictionProposal(suffix,suffix.Substring(0,wordMatch.Index)+mapped+split.suffix+
+                    suffix.Substring(wordMatch.Index+wordMatch.Length),actualSource=="en"?"ru":"en","forcedWord");
+            }
+            var learned=forced || !SafeAdaptiveShape(current,split.core) ? null :
+                lexicon.PreferredConversion(split.core,actualSource);
+            if (learned!=null && SafeAdaptiveWord(current,split.core,learned) &&
+                !lexicon.IsProtectedTerm(split.core,actualSource) &&
+                !lexicon.IsPersonalWord(split.core,actualSource))
+            {
+                var wordMatch=words[words.Length-1];
+                return new PredictionProposal(suffix,suffix.Substring(0,wordMatch.Index)+learned+split.suffix+
+                    suffix.Substring(wordMatch.Index+wordMatch.Length),actualSource=="en"?"ru":"en","adaptiveWord");
+            }
+            if (lexicon.IsPersonalWord(split.core,actualSource)) return null;
+        }
         var cues = precedingWords.Concat(words.Take(words.Length-1).Select(x => x.Value)).TakeLastCompat(3).ToArray();
         var hasDomain = cues.Any(x => DomainContext.Contains(ContextKey(x)));
         var hasPeople = cues.Length > 0 && PeopleModifiers.Contains(ContextKey(cues[cues.Length-1]));
@@ -82,9 +111,17 @@ public sealed class PredictionEngine
         var protectedHostname = HasHostnameShape(core);
         var exactDot = source == "en" && !hasDomain && candidates.Any(c => Lexical(c.Core) && (!protectedHostname || hasPeople && c.Core.ToLowerInvariant() == "люди") &&
             (lexicon.Frequency(c.Core,"ru") >= 50000 || russianPriority && !protectedHostname && !protectedEnglishContext && core.Contains(".,") && lexicon.Frequency(c.Core,"ru") >= 10000 || lexicon.IsProtectedTerm(c.Core,"ru")));
+        if (atBoundary && forced == null && !lexicon.IsExplicitPersonalWord(core,source) &&
+            SafeAdaptiveShape(word,core))
+        {
+            var learned=lexicon.PreferredConversion(core,source);
+            if (learned!=null && !lexicon.IsProtectedTerm(core,source) &&
+                SafeAdaptiveWord(word,core,learned)) return learned+suffix;
+        }
         if (ProtectedToken(word,knownTarget || forced != null,forced != null,exactDot)) return null;
         if (forced != null) return forced.Core+forced.Suffix;
-        if (lexicon.IsProtectedTerm(core,source) || word.Length < 2 || lexicon.Frequency(word,source)>0 || lexicon.Frequency(core,source)>0) return null;
+        if (lexicon.IsProtectedTerm(core,source) || lexicon.IsPersonalWord(core,source) ||
+            word.Length < 2 || lexicon.Frequency(word,source)>0 || lexicon.Frequency(core,source)>0) return null;
         if (atBoundary)
         {
             foreach (var c in candidates) if (c.Core.Length >= 3 && Lexical(c.Core) && lexicon.IsPersonalWord(c.Core,target)) return c.Core+c.Suffix;
@@ -140,6 +177,17 @@ public sealed class PredictionEngine
         var latin = letters.Any(LayoutMap.IsLatin); var cyr = letters.Any(LayoutMap.IsCyrillic); if (latin && cyr) return true;
         var dot = word.IndexOf('.'); if (latin && !allowMappedInteriorDot && dot >= 0 && word.Skip(dot+1).Any(char.IsLetter)) return true;
         return false;
+    }
+    private static bool SafeAdaptiveWord(string fullWord,string core,string learned)
+    {
+        return SafeAdaptiveShape(fullWord,core) &&
+            AdaptiveLearning.TryPair(core,learned,out _,out _);
+    }
+    private static bool SafeAdaptiveShape(string fullWord,string core)
+    {
+        if (fullWord.IndexOf('\\')>=0 &&
+            (fullWord.Count(c=>c=='\\')!=1 || core.Length==0 || core[core.Length-1]!='\\')) return false;
+        return !ProtectedToken(fullWord.Replace('\\','`'));
     }
     private static bool HasHostnameShape(string word)
     {

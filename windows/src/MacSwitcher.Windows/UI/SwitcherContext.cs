@@ -82,7 +82,7 @@ public sealed class SwitcherContext : ApplicationContext
 
         if (showSettings)
         {
-            ShowFirstRun();
+            if (store.LearningExplanationPending) ShowFirstRun();
             ShowSettings();
         }
     }
@@ -105,10 +105,17 @@ public sealed class SwitcherContext : ApplicationContext
     private void OnCorrectionApplied(CorrectionNotice notice)
     {
         // Text content is deliberately not shown, saved, or logged.
+        store.Adaptive.Submit(new AdaptiveEvent(notice.OccurrenceId,notice.Original,notice.Replacement,
+            notice.Origin,notice.Action,notice.SourceConfirmed,notice.LearningGeneration));
         Dispatch(() => SetStatus("Текст исправлен."));
     }
 
-    private void OnCorrectionUndone(CorrectionNotice notice) => Dispatch(() => SetStatus("Последнее исправление отменено."));
+    private void OnCorrectionUndone(CorrectionNotice notice)
+    {
+        store.Adaptive.Submit(new AdaptiveEvent(notice.OccurrenceId,notice.Original,notice.Replacement,
+            notice.Origin,notice.Action,notice.SourceConfirmed,notice.LearningGeneration));
+        Dispatch(() => SetStatus("Последнее исправление отменено."));
+    }
 
     private void SetStatus(string message)
     {
@@ -173,8 +180,9 @@ public sealed class SwitcherContext : ApplicationContext
 
     private void ShowFirstRun()
     {
-        MessageBox.Show("MacSwitcher работает в области уведомлений. Один Shift меняет раскладку, два быстрых нажатия Shift исправляют последнее слово или выделение. Для обычных приложений не нужны права администратора. Текст не отправляется и не сохраняется автоматически. Откройте меню значка, чтобы настроить работу.",
+        MessageBox.Show("MacSwitcher работает в области уведомлений. Один Shift меняет раскладку, два быстрых нажатия Shift исправляют последнее слово или выделение.\n\nЗапоминание исправлений включено: после двух независимых подтверждений одного слова MacSwitcher сохранит только пару слов и предпочитаемый вариант в локальном файле. Полный текст и клавиши не сохраняются. Это можно выключить и удалить правила в настройках.",
             "Добро пожаловать в MacSwitcher", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        try { store.SaveSettings(Clone(store.Settings)); } catch { /* The explanation repeats if settings cannot be saved. */ }
     }
 
     private void ShowSettings()
@@ -347,6 +355,7 @@ public sealed class SwitcherContext : ApplicationContext
     {
         Enabled = value.Enabled,
         AutomaticCorrection = value.AutomaticCorrection,
+        RememberCorrections = value.RememberCorrections,
         RussianPriority = value.RussianPriority,
         StartWithWindows = value.StartWithWindows,
         DoubleShiftMilliseconds = value.DoubleShiftMilliseconds,

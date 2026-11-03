@@ -25,8 +25,15 @@ namespace MacSwitcher.Windows.Runtime
         public string Original { get; private set; }
         public string Replacement { get; private set; }
         public string SourceLanguage { get; private set; }
-        public CorrectionNotice(string original, string replacement, string sourceLanguage)
-        { Original = original; Replacement = replacement; SourceLanguage = sourceLanguage; }
+        public string OccurrenceId { get; private set; }
+        public AdaptiveOrigin Origin { get; private set; }
+        public AdaptiveAction Action { get; private set; }
+        public bool SourceConfirmed { get; private set; }
+        public long? LearningGeneration { get; internal set; }
+        public CorrectionNotice(string original, string replacement, string sourceLanguage,
+            string occurrenceId, AdaptiveOrigin origin, AdaptiveAction action, bool sourceConfirmed)
+        { Original = original; Replacement = replacement; SourceLanguage = sourceLanguage;
+          OccurrenceId=occurrenceId; Origin=origin; Action=action; SourceConfirmed=sourceConfirmed; }
     }
 
     internal sealed class CorrectionReceipt
@@ -37,6 +44,9 @@ namespace MacSwitcher.Windows.Runtime
         internal bool NativeRange;
         internal int RangeStart;
         internal bool Undone;
+        internal string OccurrenceId = Guid.NewGuid().ToString("N");
+        internal AdaptiveOrigin Origin;
+        internal bool SourceConfirmed;
     }
 
     internal sealed class PredictionContext
@@ -60,7 +70,11 @@ namespace MacSwitcher.Windows.Runtime
     {
         private readonly object stateGate = new object();
         private readonly object editGate = new object();
+        private readonly object noticeGate = new object();
+        private readonly Queue<CorrectionNotice> notices = new Queue<CorrectionNotice>();
+        private bool drainingNotices;
         private readonly IPersonalLexicon personal;
+        private readonly AdaptiveLearning? learned;
         private readonly PhysicalHookHost hook;
         private readonly AutomationBrokerClient broker = new AutomationBrokerClient();
         private readonly RecoveryOriginals recovery = new RecoveryOriginals();
@@ -105,20 +119,56 @@ namespace MacSwitcher.Windows.Runtime
         public event Action<CorrectionNotice>? CorrectionApplied;
         public event Action<CorrectionNotice>? CorrectionUndone;
 
-        public WindowsSwitcherRuntime(AppSettings settings, IPersonalLexicon personal, string dataDirectory)
-            : this(settings, personal, dataDirectory, false) { }
+        private void EnqueueNotice(CorrectionNotice notice)
+        {
+            notice.LearningGeneration=learned?.Generation;
+            lock(noticeGate)
+            {
+                notices.Enqueue(notice);
+                if(drainingNotices) return;
+                drainingNotices=true;
+            }
+            _=Task.Run(() =>
+            {
+                while(true)
+                {
+                    CorrectionNotice current;
+                    lock(noticeGate)
+                    {
+                        if(notices.Count==0) { drainingNotices=false; return; }
+                        current=notices.Dequeue();
+                    }
+                    // The edit fence and broker lease are over before learning sees the notice.
+                    lock(editGate)
+                    {
+                        try
+                        {
+                            if(current.Action==AdaptiveAction.Undone) CorrectionUndone?.Invoke(current);
+                            else CorrectionApplied?.Invoke(current);
+                        }
+                        catch { }
+                    }
+                }
+            });
+        }
+
+        public WindowsSwitcherRuntime(AppSettings settings, IPersonalLexicon personal, string dataDirectory,
+            AdaptiveLearning? learned = null)
+            : this(settings, personal, dataDirectory, false, learned) { }
 
         internal WindowsSwitcherRuntime(AppSettings settings, IPersonalLexicon personal,
-            string dataDirectory, bool syntheticFixtureOnly)
+            string dataDirectory, bool syntheticFixtureOnly, AdaptiveLearning? learned = null)
         {
             hook = new PhysicalHookHost(syntheticFixtureOnly);
             this.settings = settings ?? throw new ArgumentNullException(nameof(settings));
             this.settings.Validate();
-            this.personal = personal ?? throw new ArgumentNullException(nameof(personal));
+            this.learned=learned;
+            this.personal = learned == null ? personal ?? throw new ArgumentNullException(nameof(personal))
+                : new AdaptivePersonalLexicon(personal ?? throw new ArgumentNullException(nameof(personal)),learned);
             gesture = new ShiftGesture(settings.DoubleShiftMilliseconds);
             try
             {
-                lexicon = PredictionLexicon.Load(dataDirectory, personal);
+                lexicon = PredictionLexicon.Load(dataDirectory, this.personal);
                 prediction = new PredictionEngine(lexicon);
             }
             catch { /* Gesture and explicit selection conversion remain available only with validated data. */ }
@@ -746,10 +796,11 @@ namespace MacSwitcher.Windows.Runtime
                     Interlocked.Exchange(ref fixtureAutoCode,
                         TryNativeRangeEdit(input.Focus, field, field.Value.Length - context.Suffix.Length,
                             field.Value.Length, proposal.ReplacementSuffix, input.Revision, generation,
-                            context.Suffix, source, proposal.TargetLanguage) ? 20 : 21);
+                            context.Suffix, source, proposal.TargetLanguage, origin: AdaptiveOrigin.Automatic) ? 20 : 21);
                 else Interlocked.Exchange(ref fixtureAutoCode,
                     TryFullValueEdit(input.Focus, field, replacement, input.Revision, generation,
-                        context.Suffix, proposal.ReplacementSuffix, source, proposal.TargetLanguage) ? 22 : 23);
+                        context.Suffix, proposal.ReplacementSuffix, source, proposal.TargetLanguage,
+                        origin: AdaptiveOrigin.Automatic) ? 22 : 23);
             }
             else
             {
@@ -966,21 +1017,23 @@ namespace MacSwitcher.Windows.Runtime
             if (!changed) return false;
             lock (stateGate)
             {
+                var toggleSourceConfirmed=receipt?.SourceConfirmed ?? false;
                 var confirmedField = receipt?.Field;
                 if (confirmedField != null && prior.Field.SameIdentity(confirmedField))
                     prior.Field = confirmedField;
+                prior.SourceConfirmed = prior.SourceConfirmed && toggleSourceConfirmed;
                 prior.Undone = undo;
                 receipt = prior;
             }
-            if (undo) { try { CorrectionUndone?.Invoke(new CorrectionNotice(prior.ReplacementPhrase, prior.OriginalPhrase, prior.SourceLanguage)); } catch { } }
-            else { try { CorrectionApplied?.Invoke(new CorrectionNotice(prior.OriginalPhrase, prior.ReplacementPhrase, prior.SourceLanguage)); } catch { } }
+            EnqueueNotice(new CorrectionNotice(prior.OriginalPhrase, prior.ReplacementPhrase, prior.SourceLanguage,
+                prior.OccurrenceId,prior.Origin,undo?AdaptiveAction.Undone:AdaptiveAction.Applied,prior.SourceConfirmed));
             return true;
         }
 
         private bool TryFullValueEdit(NativeFocusSnapshot? focus, FieldSnapshot field, string newValue, long revision,
             long generation,
             string oldPhrase, string newPhrase, string source, string? targetLanguage = null,
-            bool announce = true, bool allowRecovery = false)
+            bool announce = true, bool allowRecovery = false, AdaptiveOrigin origin = AdaptiveOrigin.Manual)
         {
             Interlocked.Exchange(ref fixtureFullBrokerOutcome, -1);
             Interlocked.Exchange(ref fixtureFullBrokerPhase, -1);
@@ -1038,7 +1091,8 @@ namespace MacSwitcher.Windows.Runtime
                             receipt = new CorrectionReceipt { Field = write.Field, Original = field.Value,
                                 Replacement = newValue, SourceLanguage = source,
                                 ResultLanguage = targetLanguage ?? source, OriginalPhrase = oldPhrase,
-                                ReplacementPhrase = newPhrase, Undone = false };
+                                ReplacementPhrase = newPhrase, Undone = false, Origin=origin,
+                                SourceConfirmed=sourceConfirmed };
                             sessionField = write.Field;
                             cachedField = write.Field;
                             cachedAtTicks = (long)Win32.GetTickCount64();
@@ -1048,7 +1102,8 @@ namespace MacSwitcher.Windows.Runtime
                             lastSource = sourceConfirmed ? targetLanguage ?? source : null;
                             pendingSource = sourceConfirmed ? null : targetLanguage;
                         }
-                        if (announce) try { CorrectionApplied?.Invoke(new CorrectionNotice(oldPhrase, newPhrase, source)); } catch { }
+                        if (announce) EnqueueNotice(new CorrectionNotice(oldPhrase, newPhrase, source,
+                            receipt!.OccurrenceId,origin,AdaptiveAction.Applied,sourceConfirmed));
                         if (!sourceConfirmed) Publish("Текст исправлен; смена раскладки не подтверждена.", false);
                         return true;
                     }
@@ -1064,7 +1119,8 @@ namespace MacSwitcher.Windows.Runtime
 
         private bool TryNativeRangeEdit(NativeFocusSnapshot? focus, FieldSnapshot field, int start, int end,
             string replacement, long revision, long generation, string oldPhrase,
-            string source, string targetLanguage, bool announce = true, bool allowRecovery = false)
+            string source, string targetLanguage, bool announce = true, bool allowRecovery = false,
+            AdaptiveOrigin origin = AdaptiveOrigin.Manual)
         {
             Interlocked.Exchange(ref fixtureNativeCode, 1);
             Interlocked.Exchange(ref fixtureNativeBrokerOutcome, -1);
@@ -1136,7 +1192,8 @@ namespace MacSwitcher.Windows.Runtime
                             receipt = new CorrectionReceipt { Field = write.Field, Original = field.Value,
                                 Replacement = expected, OriginalPhrase = oldPhrase,
                                 ReplacementPhrase = replacement, SourceLanguage = source,
-                                ResultLanguage = targetLanguage, NativeRange = true, RangeStart = start };
+                                ResultLanguage = targetLanguage, NativeRange = true, RangeStart = start,
+                                Origin=origin,SourceConfirmed=sourceConfirmed };
                             sessionField = write.Field.SelectionEnd == write.Field.Value.Length ? write.Field : null;
                             cachedField = write.Field;
                             cachedAtTicks = (long)Win32.GetTickCount64();
@@ -1146,7 +1203,8 @@ namespace MacSwitcher.Windows.Runtime
                             lastSource = sourceConfirmed ? targetLanguage : null;
                             pendingSource = sourceConfirmed ? null : targetLanguage;
                         }
-                        if (announce) try { CorrectionApplied?.Invoke(new CorrectionNotice(oldPhrase, replacement, source)); } catch { }
+                        if (announce) EnqueueNotice(new CorrectionNotice(oldPhrase, replacement, source,
+                            receipt!.OccurrenceId,origin,AdaptiveAction.Applied,sourceConfirmed));
                         if (!sourceConfirmed) Publish("Текст исправлен; смена раскладки не подтверждена.", false);
                         Interlocked.Exchange(ref fixtureNativeCode, 20);
                         return true;

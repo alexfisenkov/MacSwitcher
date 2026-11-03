@@ -9,7 +9,7 @@ import AppKit
 @MainActor
 final class SecureInputNotice {
     enum Kind: Hashable {
-        case secureInput, manualFailure, unknownEdit, sourceFailure, undoRefusal, saveFailure
+        case secureInput, manualFailure, unknownEdit, sourceFailure, undoRefusal, saveFailure, adaptiveIntro
     }
 
     private let panel: NSPanel

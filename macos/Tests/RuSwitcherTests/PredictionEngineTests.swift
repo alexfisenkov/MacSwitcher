@@ -17,6 +17,48 @@ final class PredictionEngineTests: XCTestCase {
 
     private func engine() -> PredictionEngine { PredictionEngine(lexicon: fixture()) }
 
+    func testAdaptiveBoundaryAndPreferredPrefix() {
+        let custom = AdaptiveRule(pair: AdaptiveWordPair(ru: "фис", en: "abc"),
+            preferred: "ru", confirmations: 2, confirmedAt: Date(), lastOccurrenceID: UUID())
+        let candidate = AdaptiveRule(pair: custom.pair, preferred: "ru", confirmations: 1,
+            confirmedAt: Date(), lastOccurrenceID: UUID())
+        XCTAssertNil(engine().evaluate(suffix: "abc", sourceLanguage: "en",
+            adaptiveRules: [custom]))
+        XCTAssertEqual(engine().evaluate(suffix: "abc ", sourceLanguage: "en", atBoundary: true,
+            adaptiveRules: [custom])?.replacementSuffix, "фис ")
+        XCTAssertEqual(engine().evaluate(suffix: "abc ", sourceLanguage: "ru", atBoundary: true,
+            adaptiveRules: [custom])?.replacementSuffix, "фис ")
+        XCTAssertEqual(engine().evaluate(suffix: "abc ", sourceLanguage: "ru", atBoundary: true,
+            adaptiveRules: [custom])?.targetLanguage, "ru")
+        XCTAssertNil(engine().evaluate(suffix: "abc ", sourceLanguage: "en", atBoundary: true,
+            adaptiveRules: [candidate]))
+        XCTAssertNil(engine().evaluate(suffix: "abc ", sourceLanguage: "ru", atBoundary: true,
+            adaptiveRules: [candidate]))
+        XCTAssertNil(engine().evaluate(suffix: "ABC ", sourceLanguage: "ru", atBoundary: true,
+            adaptiveRules: [custom]))
+        XCTAssertNil(engine().evaluate(suffix: "abc/path ", sourceLanguage: "ru", atBoundary: true,
+            adaptiveRules: [custom]))
+        let protected = PredictionEngine(lexicon: PredictionLexicon(wordsByLanguage: [:],
+            protectedTermsByLanguage: ["en": ["abc"]]))
+        XCTAssertNil(protected.evaluate(suffix: "abc ", sourceLanguage: "ru", atBoundary: true,
+            adaptiveRules: [custom]))
+        let reverse = AdaptiveRule(pair: custom.pair, preferred: "en", confirmations: 2,
+            confirmedAt: Date(), lastOccurrenceID: UUID())
+        XCTAssertEqual(engine().evaluate(suffix: "фис ", sourceLanguage: "en", atBoundary: true,
+            adaptiveRules: [reverse])?.replacementSuffix, "abc ")
+        XCTAssertEqual(engine().evaluate(suffix: "фис ", sourceLanguage: "en", atBoundary: true,
+            adaptiveRules: [reverse])?.targetLanguage, "en")
+        let preferredEnglish = AdaptiveRule(pair: AdaptiveWordPair(ru: "привет", en: "ghbdtn"),
+            preferred: "en", confirmations: 2, confirmedAt: Date(), lastOccurrenceID: UUID())
+        XCTAssertNil(engine().evaluate(suffix: "ghbd", sourceLanguage: "en",
+            adaptiveRules: [preferredEnglish]))
+        XCTAssertNil(engine().evaluate(suffix: "ghbdtn ", sourceLanguage: "en", atBoundary: true,
+            adaptiveRules: [preferredEnglish]))
+        XCTAssertEqual(engine().evaluate(suffix: "ghbdtn ", sourceLanguage: "en", atBoundary: true,
+            alwaysConvertWords: ["привет"], adaptiveRules: [preferredEnglish])?.replacementSuffix,
+            "привет ")
+    }
+
     func testRussianPriorityImmediatelyCorrectsCommonSingleLetterWords() {
         let examples: [(String, String)] = [
             ("f", "а"), ("b", "и"), ("d", "в"), ("r", "к"),

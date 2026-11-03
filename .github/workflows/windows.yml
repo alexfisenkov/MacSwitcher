@@ -48,6 +48,7 @@ jobs:
           $infoVersion = "$($version.version)+build.$($version.build)"
           dotnet build src/MacSwitcher.Windows/MacSwitcher.Windows.csproj -c Release "/p:FileVersion=$fileVersion" "/p:InformationalVersion=$infoVersion"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "version=$($version.version)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Run Windows UI Automation fixture
         shell: pwsh
@@ -78,7 +79,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: MacSwitcher-Windows-0.1.0-alpha.1
+          name: MacSwitcher-Windows-${{ steps.build_app.outputs.version || 'unknown' }}
           path: |
             windows/artifacts/*.exe
             windows/artifacts/*.zip

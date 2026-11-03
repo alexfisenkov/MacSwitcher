@@ -2,11 +2,14 @@ param([Parameter(Mandatory=$true)][string]$SetupPath)
 $ErrorActionPreference = 'Stop'
 $localData = Join-Path $env:LOCALAPPDATA 'MacSwitcherWindows'
 $sentinel = Join-Path $localData 'ci-preservation-sentinel.txt'
+$adaptivePath = Join-Path $localData 'adaptive-rules.json'
 $artifacts = Join-Path $PSScriptRoot '..\artifacts'
 New-Item -ItemType Directory -Force -Path $artifacts | Out-Null
 if (Test-Path $localData) { throw 'Installer preservation test requires a clean runner without existing MacSwitcherWindows user data.' }
 New-Item -ItemType Directory -Force -Path $localData | Out-Null
 Set-Content -Path $sentinel -Value 'keep-user-data' -NoNewline
+Set-Content -Path $adaptivePath -Value '{"Schema":1,"Rules":[]}' -NoNewline
+$adaptiveHash = (Get-FileHash $adaptivePath -Algorithm SHA256).Hash
 
 function Install-Package {
   $process = Start-Process -FilePath $SetupPath -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-' -Wait -PassThru
@@ -55,9 +58,11 @@ $registryReceipt = [ordered]@{
 }
 $registryReceipt | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 (Join-Path $artifacts 'install-registry-receipt.json')
 if (-not (Test-Path $sentinel)) { throw 'User data disappeared on first install.' }
+if ((Get-FileHash $adaptivePath -Algorithm SHA256).Hash -ne $adaptiveHash) { throw 'Adaptive rules changed on first install.' }
 
 $reinstallExitCode = Install-Package
 if (-not (Test-Path $sentinel)) { throw 'User data disappeared on reinstall.' }
+if ((Get-FileHash $adaptivePath -Algorithm SHA256).Hash -ne $adaptiveHash) { throw 'Adaptive rules changed on reinstall.' }
 $entry = Find-UninstallEntry
 if (-not $entry) { throw 'Uninstall registration disappeared after reinstall.' }
 $installLocation = $entry.InstallLocation
@@ -74,6 +79,7 @@ if (-not (Test-Path $uninstaller)) { throw "Uninstaller not found: $uninstaller"
 $uninstallProcess = Start-Process -FilePath $uninstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-' -Wait -PassThru
 if ($uninstallProcess.ExitCode -ne 0) { throw "Uninstaller failed with exit code $($uninstallProcess.ExitCode)" }
 if (-not (Test-Path $sentinel)) { throw 'User data disappeared on uninstall.' }
+if ((Get-FileHash $adaptivePath -Algorithm SHA256).Hash -ne $adaptiveHash) { throw 'Adaptive rules changed on uninstall.' }
 $setupHash = (Get-FileHash $SetupPath -Algorithm SHA256).Hash.ToLowerInvariant()
 Remove-Item $localData -Recurse -Force
 $receipt = [ordered]@{
@@ -93,6 +99,7 @@ $receipt = [ordered]@{
   userDataPreservedOnInstall = $true
   userDataPreservedOnReinstall = $true
   userDataPreservedOnUninstall = $true
+  adaptiveRulesPreserved = $true
   userDataRemovedAfterReceipt = $true
 }
 $receiptPath = Join-Path $artifacts 'installer-receipt.json'

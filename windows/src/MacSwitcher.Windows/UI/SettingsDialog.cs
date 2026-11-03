@@ -13,6 +13,10 @@ internal sealed class SettingsDialog : Form
     private readonly ConfigurationStore store;
     private readonly CheckBox enabled = new CheckBox { Text = "Включить обработку Shift", AutoSize = true };
     private readonly CheckBox automatic = new CheckBox { Text = "Исправлять раскладку автоматически", AutoSize = true };
+    private readonly CheckBox remember = new CheckBox { Text = "Запоминать мои исправления на этом компьютере", AutoSize = true };
+    private readonly ListBox learnedRules = new ListBox { Dock = DockStyle.Fill, IntegralHeight = false };
+    private readonly Button deleteLearned = new Button { Text="Удалить выбранное правило",AutoSize=true };
+    private readonly Button resetLearned = new Button { Text="Удалить все выученные правила…",AutoSize=true };
     private readonly CheckBox russianPriority = new CheckBox { Text = "При неоднозначном слове предпочитать русский", AutoSize = true };
     private readonly CheckBox smartSelection = new CheckBox { Text = "Сохранять правильные слова в выделении", AutoSize = true };
     private readonly CheckBox startup = new CheckBox { Text = "Запускать вместе с Windows (только для этого пользователя)", AutoSize = true };
@@ -29,7 +33,7 @@ internal sealed class SettingsDialog : Form
     private readonly Button exportButton = new Button { Text = "Экспорт…", AutoSize = true };
     private readonly Button recoverButton = new Button { Text = "Сохранить проблемный файл в копию…", AutoSize = true, Visible = false };
     private readonly Button saveButton = new Button { Text = "Сохранить", DialogResult = DialogResult.None, AutoSize = true };
-    private readonly Label storeState = new Label { AutoSize = true, ForeColor = Color.DarkSlateGray, MaximumSize = new Size(365, 48) };
+    private readonly Label storeState = new Label { AutoSize = true, ForeColor = Color.DarkSlateGray, MaximumSize = new Size(365, 72) };
     private bool discardPendingChanges;
 
     public SettingsDialog(ConfigurationStore store)
@@ -47,6 +51,7 @@ internal sealed class SettingsDialog : Form
         var generalPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Padding = new Padding(14), AutoScroll = true };
         generalPanel.Controls.Add(enabled);
         generalPanel.Controls.Add(automatic);
+        generalPanel.Controls.Add(remember);
         generalPanel.Controls.Add(russianPriority);
         generalPanel.Controls.Add(smartSelection);
         generalPanel.Controls.Add(startup);
@@ -116,6 +121,20 @@ internal sealed class SettingsDialog : Form
         tabs.TabPages.Add(general);
         tabs.TabPages.Add(personal);
         tabs.TabPages.Add(forcedPage);
+        var learningPage = new TabPage("Выученные слова");
+        var learningPanel = new TableLayoutPanel { Dock=DockStyle.Fill,ColumnCount=1,RowCount=3,Padding=new Padding(8) };
+        learningPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        learningPanel.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+        learningPanel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        learningPanel.Controls.Add(new Label { Text="После двух независимых исправлений одного слова сохраняется только пара RU/EN и предпочитаемый вариант. Данные остаются на этом компьютере. Отмена выбора снимает голос; обратный выбор снимает правило. Полный текст и клавиши не сохраняются.",AutoSize=true,MaximumSize=new Size(525,0) },0,0);
+        learningPanel.Controls.Add(learnedRules,0,1);
+        var learningButtons=new FlowLayoutPanel { Dock=DockStyle.Fill,AutoSize=true };
+        deleteLearned.Click+=(_,_)=>DeleteLearned();
+        resetLearned.Click+=(_,_)=>ResetLearned();
+        learningButtons.Controls.Add(deleteLearned); learningButtons.Controls.Add(resetLearned);
+        learningPanel.Controls.Add(learningButtons,0,2);
+        learningPage.Controls.Add(learningPanel);
+        tabs.TabPages.Add(learningPage);
         var bottom = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 110, Padding = new Padding(8), FlowDirection = FlowDirection.RightToLeft };
         saveButton.Click += (_, _) => Save();
         recoverButton.Click += (_, _) => RecoverUnreadableFiles();
@@ -138,6 +157,7 @@ internal sealed class SettingsDialog : Form
 
         enabled.Checked = store.Settings.Enabled;
         automatic.Checked = store.Settings.AutomaticCorrection;
+        remember.Checked = store.Settings.RememberCorrections;
         russianPriority.Checked = store.Settings.RussianPriority;
         smartSelection.Checked = store.Settings.SmartSelection;
         startup.Checked = store.Settings.StartWithWindows;
@@ -146,12 +166,14 @@ internal sealed class SettingsDialog : Form
         saveButton.Enabled = store.CanSaveSettings;
         addButton.Enabled = removeButton.Enabled = importButton.Enabled = store.CanSavePersonal;
         exportButton.Enabled = store.CanSavePersonal;
-        recoverButton.Visible = !String.IsNullOrWhiteSpace(store.SettingsProblem) || !String.IsNullOrWhiteSpace(store.PersonalProblem);
+        deleteLearned.Enabled=resetLearned.Enabled=store.Adaptive.CanWrite;
+        recoverButton.Visible = !String.IsNullOrWhiteSpace(store.SettingsProblem) || !String.IsNullOrWhiteSpace(store.PersonalProblem) || !String.IsNullOrWhiteSpace(store.Adaptive.Problem);
         language.SelectedIndexChanged += (_, _) => RefreshEntries();
         entryType.SelectedIndexChanged += (_, _) => RefreshEntries();
-        storeState.Text = String.Join("  ", new[] { store.SettingsProblem, store.PersonalProblem }.Where(x => !String.IsNullOrWhiteSpace(x)));
+        storeState.Text = String.Join("  ", new[] { store.SettingsProblem, store.PersonalProblem,store.Adaptive.Problem,store.Adaptive.CleanupProblem }.Where(x => !String.IsNullOrWhiteSpace(x)));
         if (String.IsNullOrWhiteSpace(storeState.Text)) storeState.Text = "Личный словарь сохраняется сразу.";
         RefreshEntries();
+        RefreshLearned();
     }
 
     private void Save()
@@ -169,6 +191,7 @@ internal sealed class SettingsDialog : Form
             {
                 Enabled = enabled.Checked,
                 AutomaticCorrection = automatic.Checked,
+                RememberCorrections = remember.Checked,
                 RussianPriority = russianPriority.Checked,
                 SmartSelection = smartSelection.Checked,
                 StartWithWindows = startup.Checked,
@@ -190,6 +213,7 @@ internal sealed class SettingsDialog : Form
     {
         var current = store.Settings;
         return enabled.Checked != current.Enabled || automatic.Checked != current.AutomaticCorrection ||
+            remember.Checked != current.RememberCorrections ||
             russianPriority.Checked != current.RussianPriority || smartSelection.Checked != current.SmartSelection ||
             startup.Checked != current.StartWithWindows || Decimal.ToInt32(interval.Value) != current.DoubleShiftMilliseconds ||
             !forcedWords.Items.Cast<string>().SequenceEqual(current.AlwaysConvertWords, StringComparer.Ordinal);
@@ -270,6 +294,7 @@ internal sealed class SettingsDialog : Form
             var preserved = store.RecoverUnreadableFiles();
             enabled.Checked = store.Settings.Enabled;
             automatic.Checked = store.Settings.AutomaticCorrection;
+            remember.Checked = store.Settings.RememberCorrections;
             russianPriority.Checked = store.Settings.RussianPriority;
             smartSelection.Checked = store.Settings.SmartSelection;
             startup.Checked = store.Settings.StartWithWindows;
@@ -278,10 +303,12 @@ internal sealed class SettingsDialog : Form
             forcedWords.Items.AddRange(store.Settings.AlwaysConvertWords.Cast<object>().ToArray());
             saveButton.Enabled = store.CanSaveSettings;
             addButton.Enabled = removeButton.Enabled = importButton.Enabled = store.CanSavePersonal;
-        exportButton.Enabled = store.CanSavePersonal;
-            recoverButton.Visible = !String.IsNullOrWhiteSpace(store.SettingsProblem) || !String.IsNullOrWhiteSpace(store.PersonalProblem);
+            exportButton.Enabled = store.CanSavePersonal;
+            deleteLearned.Enabled=resetLearned.Enabled=store.Adaptive.CanWrite;
+            recoverButton.Visible = !String.IsNullOrWhiteSpace(store.SettingsProblem) || !String.IsNullOrWhiteSpace(store.PersonalProblem) || !String.IsNullOrWhiteSpace(store.Adaptive.Problem);
             storeState.Text = "Резервные копии сохранены: " + String.Join(", ", preserved.Select(Path.GetFileName));
             RefreshEntries();
+            RefreshLearned();
             MessageBox.Show("Проблемные файлы перемещены в резервные копии. Теперь можно импортировать личный словарь или создать новые записи.", "Локальные данные восстановлены", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (Exception) { MessageBox.Show("Не удалось завершить восстановление. Исходные данные остаются на диске; проверьте доступ к папке приложения и повторите попытку.", "Восстановление данных", MessageBoxButtons.OK, MessageBoxIcon.Error); }
@@ -300,4 +327,39 @@ internal sealed class SettingsDialog : Form
     }
 
     private string LanguageCode() => language.SelectedIndex == 0 ? "ru" : "en";
+
+    private sealed class LearnedRow
+    {
+        public AdaptiveRule Rule { get; }
+        public LearnedRow(AdaptiveRule rule) { Rule=rule; }
+        public override string ToString() => Rule.English+" ⇄ "+Rule.Russian+"   ·   "+
+            (Rule.PreferredLanguage=="ru"?Rule.Russian:Rule.English)+"   ·   "+Rule.Count+"/2 "+
+            (Rule.Count==2?"активно":"кандидат");
+    }
+    private void RefreshLearned()
+    {
+        learnedRules.Items.Clear();
+        learnedRules.Items.AddRange(store.Adaptive.Snapshot().OrderBy(x=>x.English,StringComparer.Ordinal)
+            .Select(x=>(object)new LearnedRow(x)).ToArray());
+    }
+    private void DeleteLearned()
+    {
+        if(learnedRules.SelectedItem is not LearnedRow row) return;
+        try { store.Adaptive.Delete(row.Rule.English,row.Rule.Russian); RefreshLearned(); ShowCleanupStatus(); }
+        catch { MessageBox.Show(store.Adaptive.Problem.Length>0?store.Adaptive.Problem:"Правило не удалено. Проверьте доступ к локальному файлу.","Выученные слова",MessageBoxButtons.OK,MessageBoxIcon.Warning); }
+    }
+    private void ResetLearned()
+    {
+        if(MessageBox.Show("Удалить все выученные правила? Ручной словарь сохранится.","Сброс обучения",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes) return;
+        try { store.Adaptive.Reset(); RefreshLearned(); ShowCleanupStatus(); }
+        catch { MessageBox.Show(store.Adaptive.Problem.Length>0?store.Adaptive.Problem:"Правила не удалены. Проверьте доступ к локальному файлу.","Выученные слова",MessageBoxButtons.OK,MessageBoxIcon.Warning); }
+    }
+    private void ShowCleanupStatus()
+    {
+        storeState.Text=store.Adaptive.CleanupProblem.Length>0?store.Adaptive.CleanupProblem:
+            "Выученные правила и временные копии проверены.";
+        if(store.Adaptive.CleanupProblem.Length>0)
+            MessageBox.Show(store.Adaptive.CleanupProblem,"Удаление правил завершено не полностью",
+                MessageBoxButtons.OK,MessageBoxIcon.Warning);
+    }
 }
