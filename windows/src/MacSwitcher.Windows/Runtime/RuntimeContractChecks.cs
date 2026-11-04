@@ -111,7 +111,88 @@ namespace MacSwitcher.Windows.Runtime
             if (aroundWrap.Release(ShiftSide.Right, PhysicalHookHost.ExtendEventTime(30, wrap + 50))?.Kind
                 != ShiftActionKind.Convert) return 16;
             if (!AdaptiveStoreFixture()) return 23;
+            if (!UndoFrontierFixture()) return 24;
+            if (!UndoFrontierResetFixture()) return 25;
             return 0;
+        }
+        private static bool UndoFrontierResetFixture()
+        {
+            var bound = new FieldSnapshot { Value = "MacSwitcher f", SelectionStart = 13, SelectionEnd = 13 };
+            var frontier = new ConfirmedUndoFrontier(bound.Value);
+            FieldSnapshot? field = bound;
+            ConfirmedUndoFrontier? state = frontier;
+            var keep = WindowsSwitcherRuntime.PreserveUndoFrontierForInput(0x41,true,true);
+            WindowsSwitcherRuntime.ResetUndoFrontier(ref field,ref state,keep);
+            if (!keep || !ReferenceEquals(field,bound) || !ReferenceEquals(state,frontier)) return false;
+            bool MustClear(int key, bool shift, bool commands)
+            {
+                field = bound; state = frontier;
+                keep = WindowsSwitcherRuntime.PreserveUndoFrontierForInput(key,shift,commands);
+                WindowsSwitcherRuntime.ResetUndoFrontier(ref field,ref state,keep);
+                return !keep && field == null && state == null;
+            }
+            return MustClear(0x25,true,true) && MustClear(0x41,true,false) &&
+                MustClear(0x41,false,true);
+        }
+        private static bool UndoFrontierFixture()
+        {
+            foreach (var native in new[] { true, false })
+            {
+                var bound = new FieldSnapshot { Foreground = new IntPtr(1), Focus = new IntPtr(2),
+                    ProcessId = 3, ThreadId = 4, RuntimeId = new[] { 5 },
+                    Value = "MacSwitcher f", SelectionStart = 13, SelectionEnd = 13,
+                    NativeRangeWriter = native };
+                var frontier = new ConfirmedUndoFrontier(bound.Value);
+                var current = new FieldSnapshot { Foreground = bound.Foreground, Focus = bound.Focus,
+                    ProcessId = bound.ProcessId, ThreadId = bound.ThreadId, RuntimeId = new[] { 5 },
+                    Value = "MacSwitcher f ", SelectionStart = 14, SelectionEnd = 14,
+                    NativeRangeWriter = native };
+                if (!WindowsSwitcherRuntime.TryUndoPredictionText(current,bound,frontier,out var text) ||
+                    text != null) return false;
+                current.Value = "MacSwitcher f yt ";
+                current.SelectionStart = current.SelectionEnd = current.Value.Length;
+                if (!WindowsSwitcherRuntime.TryUndoPredictionText(current,bound,frontier,out text) ||
+                    text != "yt ") return false;
+                foreach (var spaces in new[] { 2, 3, 8 })
+                {
+                    current.Value = "MacSwitcher f" + new string(' ',spaces) + "yt ";
+                    current.SelectionStart = current.SelectionEnd = current.Value.Length;
+                    if (!WindowsSwitcherRuntime.TryUndoPredictionText(current,bound,frontier,out text) ||
+                        text != "yt " ||
+                        WindowsSwitcherRuntime.BuildPredictionContext(text)?.Suffix != "yt " ||
+                        current.Value.Substring(0,current.Value.Length-text.Length)+"не " !=
+                            "MacSwitcher f"+new string(' ',spaces)+"не ") return false;
+                }
+                current.Value = "MacSwitcher f f";
+                current.SelectionStart = current.SelectionEnd = current.Value.Length;
+                if (!WindowsSwitcherRuntime.TryUndoPredictionText(current,bound,frontier,out text) ||
+                    text != "f") return false;
+                current.SelectionStart--;
+                if (WindowsSwitcherRuntime.TryUndoPredictionText(current,bound,frontier,out _)) return false;
+                current.SelectionStart = current.SelectionEnd;
+                current.Value = "MacSwitcher g yt ";
+                current.SelectionStart = current.SelectionEnd = current.Value.Length;
+                if (WindowsSwitcherRuntime.TryUndoPredictionText(current,bound,frontier,out _)) return false;
+                current.Value = "MacSwitcher f yt ";
+                current.SelectionStart = current.SelectionEnd = current.Value.Length;
+                current.RuntimeId = new[] { 6 };
+                if (WindowsSwitcherRuntime.TryUndoPredictionText(current,bound,frontier,out _)) return false;
+                var closed = new ConfirmedUndoFrontier("MacSwitcher yt ");
+                current.RuntimeId = new[] { 5 };
+                current.Value = "MacSwitcher yt ghbdtn";
+                current.SelectionStart = current.SelectionEnd = current.Value.Length;
+                if (!WindowsSwitcherRuntime.TryUndoPredictionText(current,bound,closed,out text) ||
+                    text != "ghbdtn") return false;
+                foreach (var extra in new[] { 1, 2, 7 })
+                {
+                    current.Value = "MacSwitcher yt " + new string(' ',extra) + "ghbdtn";
+                    current.SelectionStart = current.SelectionEnd = current.Value.Length;
+                    if (!WindowsSwitcherRuntime.TryUndoPredictionText(current,bound,closed,out text) ||
+                        text != "ghbdtn" ||
+                        WindowsSwitcherRuntime.BuildPredictionContext(text)?.Suffix != "ghbdtn") return false;
+                }
+            }
+            return true;
         }
         private static bool AdaptiveStoreFixture()
         {

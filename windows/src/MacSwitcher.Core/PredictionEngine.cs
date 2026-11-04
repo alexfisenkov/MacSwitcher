@@ -206,9 +206,26 @@ public sealed class PredictionEngine
         var text=value.ToLowerInvariant(); var start=0; while(start<text.Length && char.IsPunctuation(text[start]))start++;
         var end=text.Length; while(end>start && char.IsPunctuation(text[end-1]))end--; return text.Substring(start,end-start);
     }
-    private bool ProtectsEnglishContext(string[] words) => words.TakeLastCompat(3).Any(word => {
-        var key=ContextKey(word); return word.Skip(1).Any(char.IsUpper) || TechnicalCues.Contains(key) || lexicon.IsProtectedTerm(key,"en") || lexicon.Frequency(key,"en")>=5000;
-    });
+    private bool ProtectsEnglishContext(string[] words)
+    {
+        var recent=words.TakeLastCompat(3).ToArray();
+        if(recent.Any(word => TechnicalCues.Contains(ContextKey(word)))) return true;
+        var lastRussian=Array.FindLastIndex(recent, word => IsCyrillicContextCue(ContextKey(word)));
+        var ordinaryEnglish=0;
+        for(var i=0;i<recent.Length;i++)
+        {
+            var word=recent[i]; var key=ContextKey(word);
+            if(i<=lastRussian) continue;
+            if(IsNeutralEntityContext(word,key)) continue;
+            if(word.Skip(1).Any(char.IsUpper)) return true;
+            if(lexicon.IsProtectedTerm(key,"en") || lexicon.Frequency(key,"en")>=5000) ordinaryEnglish++;
+        }
+        return ordinaryEnglish >= (lastRussian < 0 ? 1 : 2);
+    }
+    private static bool IsCyrillicContextCue(string key) => key.Length > 0 &&
+        key.All(c => c >= '\u0400' && c <= '\u04FF');
+    private bool IsNeutralEntityContext(string word,string key) => lexicon.IsContextNeutralEntity(key,"en") &&
+        (word.Any(char.IsUpper) || lexicon.Frequency(key,"en")<5000);
     private string? ContextualReplacement(string previous,string[] preceding)
     {
         if (previous != previous.ToLowerInvariant() || !ContextWords.TryGetValue(previous,out var expected) || lexicon.IsProtectedTerm(previous,"en") || ProtectsEnglishContext(preceding)) return null;
@@ -221,7 +238,9 @@ public sealed class PredictionEngine
         var exactYo=(current=="to\\" || current=="to`") && mapped=="ещё";
         var immediate=current.Length==1 && ImmediateLetters.Contains(mapped);
         var paired=current=="yt" && previous=="f" && mapped=="не";
-        if (!(PriorityWords.Contains(mapped) || immediate) || !(current=="ye" || exactYo || immediate || paired || atBoundary) || ProtectsEnglishContext(preceding)) return null;
+        var earlyAfterEntity=current=="yt" && preceding.TakeLastCompat(3).Any(word =>
+            IsNeutralEntityContext(word,ContextKey(word)));
+        if (!(PriorityWords.Contains(mapped) || immediate) || !(current=="ye" || exactYo || immediate || paired || earlyAfterEntity || atBoundary) || ProtectsEnglishContext(preceding)) return null;
         return mapped;
     }
 }

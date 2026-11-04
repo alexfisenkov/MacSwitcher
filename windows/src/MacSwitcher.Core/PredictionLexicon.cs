@@ -23,28 +23,37 @@ public sealed class PredictionLexicon : IDisposable
     private readonly Dictionary<string, BinaryLexicon> full;
     private readonly HashSet<string> protectedRu;
     private readonly HashSet<string> protectedEn;
+    private readonly HashSet<string> contextNeutralRu;
+    private readonly HashSet<string> contextNeutralEn;
     private readonly IPersonalLexicon personal;
     private bool disposed;
     private PredictionLexicon(Dictionary<string, TriggerIndex> triggers, Dictionary<string, BinaryLexicon> full,
-        HashSet<string> protectedRu, HashSet<string> protectedEn, IPersonalLexicon personal)
-    { this.triggers = triggers; this.full = full; this.protectedRu = protectedRu; this.protectedEn = protectedEn; this.personal = personal; }
+        HashSet<string> protectedRu, HashSet<string> protectedEn, HashSet<string> contextNeutralRu,
+        HashSet<string> contextNeutralEn, IPersonalLexicon personal)
+    { this.triggers = triggers; this.full = full; this.protectedRu = protectedRu; this.protectedEn = protectedEn;
+      this.contextNeutralRu = contextNeutralRu; this.contextNeutralEn = contextNeutralEn; this.personal = personal; }
 
     public static PredictionLexicon FromFixture(Dictionary<string, Dictionary<string,int>> triggerWords,
         Dictionary<string, Dictionary<string,int>>? fullWords = null,
         Dictionary<string, HashSet<string>>? spellingWords = null,
         Dictionary<string, HashSet<string>>? protectedTerms = null,
-        IPersonalLexicon? personal = null)
+        IPersonalLexicon? personal = null,
+        Dictionary<string, HashSet<string>>? contextNeutralTerms = null)
     {
         // A fixture uses the same exact-query semantics and is never a production fallback.
         var binary = new Dictionary<string, BinaryLexicon>();
         foreach (var lang in new[] { "ru", "en" }) binary[lang] = BinaryLexicon.Fixture(
             fullWords != null && fullWords.TryGetValue(lang, out var fw) ? fw : new Dictionary<string,int>(),
             spellingWords != null && spellingWords.TryGetValue(lang, out var sw) ? sw : new HashSet<string>());
+        var neutralRu = NormalizeSet(contextNeutralTerms != null && contextNeutralTerms.TryGetValue("ru", out var nr) ? nr : Array.Empty<string>());
+        var neutralEn = NormalizeSet(contextNeutralTerms != null && contextNeutralTerms.TryGetValue("en", out var ne) ? ne : Array.Empty<string>());
+        var termsRu = NormalizeSet(protectedTerms != null && protectedTerms.TryGetValue("ru", out var pr) ? pr : Array.Empty<string>());
+        var termsEn = NormalizeSet(protectedTerms != null && protectedTerms.TryGetValue("en", out var pe) ? pe : Array.Empty<string>());
+        termsRu.UnionWith(neutralRu); termsEn.UnionWith(neutralEn);
         return new PredictionLexicon(new Dictionary<string, TriggerIndex> {
             ["ru"] = new TriggerIndex(triggerWords.TryGetValue("ru", out var ru) ? ru : new Dictionary<string,int>()),
             ["en"] = new TriggerIndex(triggerWords.TryGetValue("en", out var en) ? en : new Dictionary<string,int>()) }, binary,
-            NormalizeSet(protectedTerms != null && protectedTerms.TryGetValue("ru", out var pr) ? pr : Array.Empty<string>()),
-            NormalizeSet(protectedTerms != null && protectedTerms.TryGetValue("en", out var pe) ? pe : Array.Empty<string>()),
+            termsRu, termsEn, neutralRu, neutralEn,
             personal ?? new PersonalLexicon());
     }
     private static HashSet<string> NormalizeSet(IEnumerable<string> words) => new HashSet<string>(words.Select(Normalize), StringComparer.Ordinal);
@@ -65,11 +74,11 @@ public sealed class PredictionLexicon : IDisposable
         {
             binaries["ru"] = new BinaryLexicon(Path.Combine(dataDirectory, "ru.lex"));
             binaries["en"] = new BinaryLexicon(Path.Combine(dataDirectory, "en.lex"));
-            var terms = ReadTerms(Path.Combine(dataDirectory, "protected-terms.tsv"));
+            var terms = ReadTerms(Path.Combine(dataDirectory, "protected-terms.tsv"), out var neutralTerms);
             return new PredictionLexicon(new Dictionary<string, TriggerIndex> {
                 ["ru"] = new TriggerIndex(ReadTsv(Path.Combine(dataDirectory, "ru.tsv"))),
                 ["en"] = new TriggerIndex(ReadTsv(Path.Combine(dataDirectory, "en.tsv"))) }, binaries,
-                terms["ru"], terms["en"], personal);
+                terms["ru"], terms["en"], neutralTerms["ru"], neutralTerms["en"], personal);
         }
         catch { foreach (var file in binaries.Values) file.Dispose(); throw; }
     }
@@ -102,15 +111,18 @@ public sealed class PredictionLexicon : IDisposable
         if (result.Count == 0) throw new InvalidDataException("Empty trigger list");
         return result;
     }
-    private static Dictionary<string,HashSet<string>> ReadTerms(string path)
+    private static Dictionary<string,HashSet<string>> ReadTerms(string path, out Dictionary<string,HashSet<string>> neutralTerms)
     {
         var result = new Dictionary<string,HashSet<string>> { ["ru"] = new HashSet<string>(StringComparer.Ordinal), ["en"] = new HashSet<string>(StringComparer.Ordinal) };
+        neutralTerms = new Dictionary<string,HashSet<string>> { ["ru"] = new HashSet<string>(StringComparer.Ordinal), ["en"] = new HashSet<string>(StringComparer.Ordinal) };
         foreach (var line in File.ReadLines(path, new UTF8Encoding(false, true)))
         {
             var parts = line.Split('\t');
             if (parts.Length != 3 || !result.ContainsKey(parts[0]) || parts[1].Length == 0 || parts[1].Length > 160 ||
                 !(new[] { "brand", "name", "abbreviation", "word", "place" }).Contains(parts[2])) throw new InvalidDataException("Invalid protected term");
-            result[parts[0]].Add(Normalize(parts[1]));
+            var key = Normalize(parts[1]);
+            result[parts[0]].Add(key);
+            if (parts[2] == "brand" || parts[2] == "name" || parts[2] == "place") neutralTerms[parts[0]].Add(key);
         }
         return result;
     }
@@ -129,6 +141,8 @@ public sealed class PredictionLexicon : IDisposable
             (personal is AdaptivePersonalLexicon overlay ? overlay.IsExplicitWord(word,code) : personal.IsWord(word,code)) ||
             (full.TryGetValue(code, out var index) && (index.Lookup(Normalize(word))?.flags & 2) != 0));
     }
+    public bool IsContextNeutralEntity(string word, string language) => !disposed &&
+        (LanguageCode(language) == "ru" ? contextNeutralRu : contextNeutralEn).Contains(Normalize(word));
     public bool IsPersonalWord(string word, string language) => !disposed && personal.IsWord(word, language);
     public bool IsExplicitPersonalWord(string word,string language) => !disposed && personal is AdaptivePersonalLexicon overlay && overlay.IsExplicitWord(word,language);
     public string? PreferredConversion(string word,string language) => !disposed && personal is IAdaptiveLexicon adaptive ? adaptive.PreferredConversion(word,language) : null;

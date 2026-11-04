@@ -79,11 +79,26 @@ final class PredictionEngineTests: XCTestCase {
                                        russianPriority: true)?.replacementSuffix, "а не")
     }
 
-    func testRussianPriorityKeepsBrandAndEnglishContextProtected() {
-        for preceding in ["MacSwitcher", "hello", "press"] {
+    func testRussianPriorityKeepsUnknownCamelCaseAndEnglishContextProtected() {
+        for preceding in ["iWidget", "hello", "press"] {
             XCTAssertNil(engine().evaluate(suffix: "f", sourceLanguage: "en",
                                            precedingWords: [preceding], russianPriority: true), preceding)
         }
+    }
+
+    func testFixtureNeutralEntityDoesNotWeakenWordAndAbbreviationProtection() {
+        let lexicon = PredictionLexicon(wordsByLanguage: ["ru": ["а": 8_000_000],
+            "en": ["hello": 900_000]], protectedTermsByLanguage: ["en": ["token", "api"]],
+            neutralContextEntitiesByLanguage: ["en": ["iPhone"]])
+        let engine = PredictionEngine(lexicon: lexicon)
+        XCTAssertEqual(engine.evaluate(suffix: "f", sourceLanguage: "en",
+            precedingWords: ["iPhone"], russianPriority: true)?.replacementSuffix, "а")
+        for context in ["token", "API", "hello", "press", "iWidget"] {
+            XCTAssertNil(engine.evaluate(suffix: "f", sourceLanguage: "en",
+                precedingWords: [context], russianPriority: true), context)
+        }
+        XCTAssertNil(engine.evaluate(suffix: "iPhone ", sourceLanguage: "en",
+            atBoundary: true, russianPriority: true))
     }
 
     func testCorrectsBeforeSpaceForStrongCompletedWord() throws {

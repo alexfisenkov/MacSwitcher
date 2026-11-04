@@ -3,6 +3,60 @@ import XCTest
 @testable import RuSwitcher
 
 final class PredictionRuntimeTests: XCTestCase {
+    @MainActor
+    func testFocusedIdentityProbeMakesOneOneMillisecondFocusedElementReadOnly() {
+        let focused = AXUIElementCreateSystemWide()
+        var timeoutValues: [Float] = []
+        var requestedAttributes: [CFString] = []
+        let found = FocusedFieldIdentityProbe.capture(processID: 123,
+            setMessagingTimeout: { _, timeout in
+                timeoutValues.append(timeout)
+                return AXError.success
+            }, copyAttribute: { _, attribute in
+                requestedAttributes.append(attribute)
+                return (AXError.success, focused)
+            })
+        XCTAssertTrue(CFEqual(found, focused))
+        XCTAssertEqual(timeoutValues, [0.001])
+        XCTAssertEqual(requestedAttributes.count, 1)
+        XCTAssertTrue(requestedAttributes.first.map {
+            CFEqual($0, kAXFocusedUIElementAttribute as CFString)
+        } ?? false)
+    }
+
+    @MainActor
+    func testFocusedIdentityProbeUnavailableResultDoesNotRetry() {
+        var reads = 0
+        let found = FocusedFieldIdentityProbe.capture(processID: 123,
+            setMessagingTimeout: { _, timeout in
+                XCTAssertEqual(timeout, 0.001)
+                return AXError.success
+            }, copyAttribute: { _, attribute in
+                XCTAssertTrue(CFEqual(attribute, kAXFocusedUIElementAttribute as CFString))
+                reads += 1
+                return (AXError.cannotComplete, nil)
+            })
+        XCTAssertNil(found)
+        XCTAssertEqual(reads, 1)
+    }
+
+    func testConfirmedUndoStartsNewSessionWithoutReevaluatingCurrentToken() throws {
+        var buffer = PredictionInputBuffer()
+        buffer.append("MacSwitcher f", processID: 123)
+        let oldSession = buffer.sessionID
+        buffer.beginAfterConfirmedUndo(processID: 123, atBoundary: false)
+        XCTAssertNotEqual(buffer.sessionID, oldSession)
+        XCTAssertEqual(buffer.processID, 123)
+        buffer.append("oo", processID: 123)
+        XCTAssertNil(buffer.snapshot(sourceLayoutID: "en", inputRevision: 1, generation: 1))
+        buffer.append(" ", processID: 123)
+        XCTAssertNil(buffer.snapshot(sourceLayoutID: "en", inputRevision: 2, generation: 1))
+        buffer.append("ghbdtn", processID: 123)
+        let next = try XCTUnwrap(buffer.snapshot(sourceLayoutID: "en", inputRevision: 3, generation: 1))
+        XCTAssertEqual(next.suffix, "ghbdtn")
+        XCTAssertTrue(next.precedingWords.isEmpty)
+    }
+
     func testContextRetainsAmbiguousTokenAcrossSourceChangeAndLiteralSpaces() throws {
         var buffer = PredictionInputBuffer()
         buffer.append("я думаю f", processID: 123)

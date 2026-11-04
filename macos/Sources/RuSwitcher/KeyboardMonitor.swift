@@ -284,8 +284,12 @@ final class KeyboardMonitor: @unchecked Sendable {
     /// Call after an explicit source choice and a fresh observed TIS read.
     @discardableResult
     func recordExplicitInputSourceSelection(targetID: String, observedSourceID: String) -> Bool {
-        sourceTransitions.confirmExplicitSelection(targetID: targetID, observedSourceID: observedSourceID,
+        let resolved = sourceTransitions.confirmExplicitSelection(targetID: targetID, observedSourceID: observedSourceID,
             at: DispatchTime.now().uptimeNanoseconds)
+        if !targetID.isEmpty, targetID == observedSourceID, !sourceTransitions.hasPending {
+            _ = preserveConfirmedUndoHoldAcrossSource(observedSourceID)
+        }
+        return resolved
     }
     fileprivate func inputSourceNeedsRefresh(eventTimestamp: UInt64) -> Bool {
         sourceTransitions.needsRefresh(eventTimestamp: eventTimestamp)
@@ -524,10 +528,17 @@ final class KeyboardMonitor: @unchecked Sendable {
                 return
             }
         }
+        if predictionBuffer.isWaitingForConfirmedUndoBoundary,
+           predictionSourceLayoutID != sourceLayoutID,
+           preserveConfirmedUndoHoldAcrossSource(sourceLayoutID) {
+            RuntimeDiagnostics.record(.sourceNotificationPreserved)
+            return
+        }
         // TIS delivers source-change notifications after the source is already
         // selectable. Fast typing may have started under that source before its
         // acknowledgement arrives; it must not cancel that new pending snapshot.
-        guard !sourceLayoutID.isEmpty, !predictionBuffer.text.isEmpty,
+        guard !sourceLayoutID.isEmpty,
+              (!predictionBuffer.text.isEmpty || predictionBuffer.isWaitingForBoundary),
               predictionSourceLayoutID == sourceLayoutID else {
             RuntimeDiagnostics.record(.sourceNotificationInvalidated)
             resetPredictionContext()
@@ -553,6 +564,18 @@ final class KeyboardMonitor: @unchecked Sendable {
         lineSourceID = nil
     }
 
+    /// A fresh observed source may change while the user's undone word remains
+    /// open. Preserve only that confirmed hold; ordinary prediction still resets.
+    private func preserveConfirmedUndoHoldAcrossSource(_ sourceID: String) -> Bool {
+        guard !sourceID.isEmpty, !sourceTransitions.hasPending,
+              predictionBuffer.isWaitingForConfirmedUndoBoundary else { return false }
+        guard predictionSourceLayoutID != sourceID else { return true }
+        predictionSourceLayoutID = sourceID
+        MainActor.assumeIsolated { onConfirmedUndoHoldSourceChanged?(sourceID) }
+        invalidatePrediction()
+        return true
+    }
+
     private func invalidatePrediction() {
         predictionGeneration &+= 1
         MainActor.assumeIsolated { onPredictionInvalidated?() }
@@ -561,6 +584,22 @@ final class KeyboardMonitor: @unchecked Sendable {
     func resetPredictionContext() {
         predictionBuffer.reset()
         predictionSourceLayoutID = nil
+        invalidatePrediction()
+    }
+
+    /// The coordinator may hold a confirmed undo's exact field until the next
+    /// word boundary. Ordinary input returns immediately without an AX read.
+    var beforePredictionText: (@MainActor (Int32, String, String) -> Bool)?
+    var onConfirmedUndoHoldSourceChanged: (@MainActor (String) -> Void)?
+    var predictionIsWaitingForUndoBoundary: Bool { predictionBuffer.isWaitingForConfirmedUndoBoundary }
+
+    /// Called only after native text, source and field are confirmed for an
+    /// automatic undo. Physical word buffers and the input fence are untouched.
+    func beginPredictionWordAfterConfirmedUndo(processID: Int32, sourceLayoutID: String,
+                                               atBoundary: Bool) {
+        guard processID > 0, !sourceLayoutID.isEmpty else { return }
+        predictionBuffer.beginAfterConfirmedUndo(processID: processID, atBoundary: atBoundary)
+        predictionSourceLayoutID = sourceLayoutID
         invalidatePrediction()
     }
 
@@ -594,6 +633,17 @@ final class KeyboardMonitor: @unchecked Sendable {
     /// ordering regressions exercise the monitor's real buffering and callbacks.
     func recordPredictionText(_ text: String, processID: Int32, sourceLayoutID: String) {
         guard !sourceLayoutID.isEmpty else { resetPredictionContext(); return }
+        // The rendered event can precede its TIS notification. Its observed
+        // source is enough to keep only a confirmed undo's open-word hold.
+        if predictionBuffer.isWaitingForConfirmedUndoBoundary,
+           predictionBuffer.processID == processID,
+           predictionSourceLayoutID != sourceLayoutID {
+            _ = preserveConfirmedUndoHoldAcrossSource(sourceLayoutID)
+        }
+        if let beforePredictionText,
+           !MainActor.assumeIsolated({ beforePredictionText(processID, sourceLayoutID, text) }) {
+            return
+        }
         // The first character can beat the system notification too. Do not
         // attach it to text from a different, manually selected source.
         if let previous = predictionSourceLayoutID, previous != sourceLayoutID {

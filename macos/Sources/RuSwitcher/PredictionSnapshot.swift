@@ -31,10 +31,24 @@ struct PredictionInputBuffer: Sendable {
     private(set) var cumulativeUTF16Offset = 0
     private var eventUTF16Length = 0
     private var discardTokenUntilBoundary = false
+    private var confirmedUndoContinuation = false
+    var isWaitingForBoundary: Bool { discardTokenUntilBoundary && processID != nil }
+    var isWaitingForConfirmedUndoBoundary: Bool { confirmedUndoContinuation && isWaitingForBoundary }
 
     mutating func reset() {
         text = ""; processID = nil; sessionID &+= 1; cumulativeUTF16Offset = 0; eventUTF16Length = 0
         discardTokenUntilBoundary = false
+        confirmedUndoContinuation = false
+    }
+
+    /// A confirmed undo is an explicit word choice. Ignore its remaining
+    /// characters until a separator, then score the next word in a fresh session.
+    mutating func beginAfterConfirmedUndo(processID: Int32, atBoundary: Bool) {
+        reset()
+        guard processID > 0 else { return }
+        self.processID = processID
+        discardTokenUntilBoundary = !atBoundary
+        confirmedUndoContinuation = !atBoundary
     }
 
     private mutating func trimToBudget() {
@@ -63,6 +77,7 @@ struct PredictionInputBuffer: Sendable {
         if discardTokenUntilBoundary {
             guard let boundary = characters.firstIndex(where: \.isWhitespace) else { return }
             discardTokenUntilBoundary = false
+            confirmedUndoContinuation = false
             text = String(characters[boundary...])
         } else {
             text.append(characters)

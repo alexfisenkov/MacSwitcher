@@ -95,6 +95,8 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         var notices: [ConfirmedCorrectionNotice] = []
         var unknownNotices = 0
         var onApplication: (() -> Void)?
+        var captureAvailable = true
+        var captureFocusCount = 0
 
         lazy var converter = ProductionCombinedShiftEditingTests.converter(for: fields,
             automaticRoute: { _, _, _ in .nativeVerified })
@@ -105,7 +107,10 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
             route: { _, _, _ in .nativeVerified }, deniedApp: { _ in false },
             autoSwitchEnabled: { true }, autoConvertEnabled: { true }, remoteDeferred: { false },
             secureInputActive: { [unowned self] in currentField.secure },
-            captureFocus: { [unowned self] pid in pid == currentField.pid ? currentField.focus() : nil },
+            captureFocus: { [unowned self] pid in
+                captureFocusCount += 1
+                return captureAvailable && pid == currentField.pid ? currentField.focus() : nil
+            },
             focusIsCurrent: { [unowned self] focus in
                 currentField.pid == focus.processID && currentField.valid
                     && CFEqual(currentField.element, focus.element)
@@ -153,7 +158,8 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
             return value
         }()
 
-        init(fields: [Field], englishID: String, russianID: String) {
+        init(fields: [Field], englishID: String, russianID: String,
+             lexicon suppliedLexicon: PredictionLexicon? = nil) {
             self.fields = fields
             self.englishID = englishID
             self.russianID = russianID
@@ -164,7 +170,7 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
                        "такое": 500_000, "а": 8_000_000],
                 "en": ["hello": 900_000, "press": 500_000, "f": 20_000]
             ])
-            engine = PredictionEngine(lexicon: lexicon)
+            engine = PredictionEngine(lexicon: suppliedLexicon ?? lexicon)
         }
 
         func deliver(_ text: String, to field: Field? = nil, source: String? = nil) {
@@ -222,6 +228,271 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
     }
 
     @MainActor
+    func testRussianPriorityAfterConfirmedManualBrandAppliesShortWordAndSelectsRussian() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2092, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru,
+            lexicon: try PredictionLexicon.bundled())
+        rig.coordinator.russianPriorityProvider = { true }
+        rig.sourceID = pair.ru
+        rig.deliver("Ьфс", source: pair.ru)
+        rig.settle(expected: .noProposal)
+        let focus = field.focus()
+        let before = field.observation
+        field.text = "MacSwitcher"
+        field.caret = 11
+        field.selection = 0
+        let confirmed = TextConverter.ConfirmedNativeField(focus: focus, original: "Ьфс",
+            replacement: "MacSwitcher", before: before, after: field.observation)
+        rig.monitor.adoptConfirmedManualField(confirmed, resultLayoutID: pair.en)
+        rig.sourceID = pair.en
+        rig.deliver(" ")
+        rig.deliver("f")
+        rig.settle(expected: .applied)
+        XCTAssertEqual(field.text, "MacSwitcher а")
+        XCTAssertEqual(rig.sourceID, pair.ru)
+        XCTAssertEqual(rig.applied.last, "f")
+    }
+
+    @MainActor
+    func testConfirmedUndoHoldIsBoundToFieldWhenSamePIDAndSourceMoves() throws {
+        let pair = try layoutIDs()
+        let a = Field(pid: 2093, text: "")
+        let b = Field(pid: 2093, text: "", element: AXUIElementCreateSystemWide())
+        XCTAssertFalse(CFEqual(a.element, b.element))
+        let rig = Rig(fields: [a, b], englishID: pair.en, russianID: pair.ru)
+        rig.coordinator.russianPriorityProvider = { true }
+        rig.deliver("f")
+        rig.settle(expected: .applied)
+        let notice = try XCTUnwrap(rig.notices.last)
+        rig.coordinator.undoCorrection(id: notice.id) { result in
+            guard case .confirmed = result else { XCTFail("Undo must be confirmed"); return }
+        }
+        XCTAssertEqual(a.text, "f")
+        XCTAssertEqual(rig.sourceID, pair.en)
+
+        rig.currentField = b // Same process and layout; no monitor reset is injected.
+        rig.deliver("f")
+        rig.settle(expected: .applied)
+        XCTAssertEqual(a.text, "f")
+        XCTAssertEqual(b.text, "а")
+        XCTAssertEqual(rig.sourceID, pair.ru)
+    }
+
+    @MainActor
+    func testConfirmedUndoHoldKeepsSameFieldContinuationAndUnavailableFocusSafe() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2094, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        rig.coordinator.russianPriorityProvider = { true }
+        rig.deliver("f")
+        rig.settle(expected: .applied)
+        let notice = try XCTUnwrap(rig.notices.last)
+        rig.coordinator.undoCorrection(id: notice.id) { result in
+            guard case .confirmed = result else { XCTFail("Undo must be confirmed"); return }
+        }
+        let settled = rig.probe.latestSubmitted
+        rig.captureAvailable = false
+        rig.deliver("o")
+        XCTAssertEqual(rig.probe.latestSubmitted, settled)
+        XCTAssertEqual(field.text, "fo")
+        XCTAssertEqual(rig.sourceID, pair.en)
+        rig.captureAvailable = true
+        rig.deliver("o")
+        XCTAssertEqual(rig.probe.latestSubmitted, settled)
+        XCTAssertEqual(field.text, "foo")
+        rig.deliver(" ")
+        XCTAssertEqual(field.text, "foo ")
+        rig.deliver("f")
+        rig.settle(expected: .applied)
+        XCTAssertEqual(field.text, "foo а")
+    }
+
+    @MainActor
+    func testConfirmedUndoHoldReleasesFocusAfterWordBoundary() throws {
+        let pair = try layoutIDs()
+        let a = Field(pid: 2095, text: "")
+        let b = Field(pid: 2095, text: "", element: AXUIElementCreateSystemWide())
+        let rig = Rig(fields: [a, b], englishID: pair.en, russianID: pair.ru)
+        rig.coordinator.russianPriorityProvider = { true }
+        rig.deliver("f")
+        rig.settle(expected: .applied)
+        let notice = try XCTUnwrap(rig.notices.last)
+        rig.coordinator.undoCorrection(id: notice.id) { result in
+            guard case .confirmed = result else { XCTFail("Undo must be confirmed"); return }
+        }
+        rig.deliver(" ")
+        let capturesAfterBoundary = rig.captureFocusCount
+        rig.currentField = b
+        rig.deliver("f")
+        rig.settle(expected: .applied)
+        XCTAssertEqual(rig.captureFocusCount, capturesAfterBoundary + 1,
+            "Ordinary next-word capture must not probe the old undo field")
+        XCTAssertEqual(a.text, "f ")
+        XCTAssertEqual(b.text, "а")
+    }
+
+    @MainActor
+    func testConfirmedUndoHoldSurvivesObservedLayoutFlipUntilSeparator() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2096, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        rig.coordinator.russianPriorityProvider = { true }
+        rig.deliver("f")
+        rig.settle(expected: .applied)
+        let notice = try XCTUnwrap(rig.notices.last)
+        rig.coordinator.undoCorrection(id: notice.id) { result in
+            guard case .confirmed = result else { XCTFail("Undo must be confirmed"); return }
+        }
+        let settled = rig.probe.latestSubmitted
+
+        rig.sourceID = pair.ru
+        rig.monitor.resetLineBuffer(sourceLayoutID: pair.ru)
+        rig.deliver("о", source: pair.ru)
+        XCTAssertEqual(rig.probe.latestSubmitted, settled)
+        XCTAssertEqual(field.text, "fо")
+        rig.deliver(" ", source: pair.ru)
+        XCTAssertEqual(rig.probe.latestSubmitted, settled)
+        rig.sourceID = pair.en
+        rig.monitor.resetLineBuffer(sourceLayoutID: pair.en)
+        rig.deliver("ghbd", source: pair.en)
+        rig.settle(expected: .applied)
+        XCTAssertEqual(field.text, "fо прив")
+        XCTAssertEqual(rig.sourceID, pair.ru)
+    }
+
+    @MainActor
+    func testConfirmedUndoHoldSurvivesNewSourceGlyphBeforeTISNotification() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2097, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        rig.coordinator.russianPriorityProvider = { true }
+        rig.deliver("f")
+        rig.settle(expected: .applied)
+        let notice = try XCTUnwrap(rig.notices.last)
+        rig.coordinator.undoCorrection(id: notice.id) { result in
+            guard case .confirmed = result else { XCTFail("Undo must be confirmed"); return }
+        }
+        let settled = rig.probe.latestSubmitted
+
+        rig.sourceID = pair.ru
+        rig.deliver("о", source: pair.ru) // Actual rendered source arrives before its TIS notification.
+        XCTAssertEqual(rig.probe.latestSubmitted, settled)
+        XCTAssertEqual(field.text, "fо")
+        rig.monitor.resetLineBuffer(sourceLayoutID: pair.ru)
+        rig.deliver(" ", source: pair.ru)
+        XCTAssertEqual(rig.probe.latestSubmitted, settled)
+        rig.sourceID = pair.en
+        rig.monitor.resetLineBuffer(sourceLayoutID: pair.en)
+        rig.deliver("ghbd", source: pair.en)
+        rig.settle(expected: .applied)
+        XCTAssertEqual(field.text, "fо прив")
+    }
+
+    @MainActor
+    func testUnavailableFocusOnUndoWordSeparatorLetsNextWordStartFresh() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2098, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        rig.coordinator.russianPriorityProvider = { true }
+        rig.deliver("f")
+        rig.settle(expected: .applied)
+        let notice = try XCTUnwrap(rig.notices.last)
+        rig.coordinator.undoCorrection(id: notice.id) { result in
+            guard case .confirmed = result else { XCTFail("Undo must be confirmed"); return }
+        }
+        let settled = rig.probe.latestSubmitted
+        rig.captureAvailable = false
+        rig.deliver(" ") // Physical whitespace reaches the field while AX is unavailable.
+        XCTAssertEqual(field.text, "f ")
+        XCTAssertEqual(rig.probe.latestSubmitted, settled)
+        rig.captureAvailable = true
+        rig.deliver("ghbd")
+        rig.settle(expected: .applied)
+        XCTAssertEqual(field.text, "f прив")
+        XCTAssertEqual(rig.sourceID, pair.ru)
+    }
+
+    @MainActor
+    func testUnavailableFocusOnMixedPacketDoesNotScorePartialNextWord() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2099, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        rig.coordinator.russianPriorityProvider = { true }
+        rig.deliver("f")
+        rig.settle(expected: .applied)
+        let notice = try XCTUnwrap(rig.notices.last)
+        rig.coordinator.undoCorrection(id: notice.id) { result in
+            guard case .confirmed = result else { XCTFail("Undo must be confirmed"); return }
+        }
+        let settled = rig.probe.latestSubmitted
+        rig.captureAvailable = false
+        rig.deliver(" ghbd")
+        XCTAssertEqual(rig.probe.latestSubmitted, settled)
+        rig.captureAvailable = true
+        rig.deliver("tn")
+        XCTAssertEqual(rig.probe.latestSubmitted, settled)
+        XCTAssertEqual(field.text, "f ghbdtn")
+        XCTAssertEqual(rig.sourceID, pair.en)
+    }
+
+    @MainActor
+    func testUnavailableFocusOnPacketEndingInSpaceClosesUndoHold() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2100, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        rig.coordinator.russianPriorityProvider = { true }
+        rig.deliver("f")
+        rig.settle(expected: .applied)
+        let notice = try XCTUnwrap(rig.notices.last)
+        rig.coordinator.undoCorrection(id: notice.id) { result in
+            guard case .confirmed = result else { XCTFail("Undo must be confirmed"); return }
+        }
+        let settled = rig.probe.latestSubmitted
+        rig.captureAvailable = false
+        rig.deliver("oo ") // Unknown AX identity, but packet ends at a word boundary.
+        XCTAssertEqual(rig.probe.latestSubmitted, settled)
+        XCTAssertEqual(field.text, "foo ")
+        rig.captureAvailable = true
+        rig.deliver("ghbd")
+        rig.settle(expected: .applied)
+        XCTAssertEqual(field.text, "foo прив")
+        XCTAssertEqual(rig.sourceID, pair.ru)
+    }
+
+    @MainActor
+    func testHeldContinuationUsesIdentityProbeWithoutFullCaptureOrLease() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2101, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        var identityReads = 0
+        rig.platform.focusedIdentity = { [unowned rig] pid in
+            identityReads += 1
+            return identityReads == 1 && pid == rig.currentField.pid ? rig.currentField.element : nil
+        }
+        rig.coordinator.russianPriorityProvider = { true }
+        rig.deliver("f")
+        rig.settle(expected: .applied)
+        let notice = try XCTUnwrap(rig.notices.last)
+        rig.coordinator.undoCorrection(id: notice.id) { result in
+            guard case .confirmed = result else { XCTFail("Undo must be confirmed"); return }
+        }
+        let fullCaptures = rig.captureFocusCount
+        let leases = rig.beginLeaseAttempts
+        let settled = rig.probe.latestSubmitted
+        rig.deliver("o") // Same field: only the identity seam is used.
+        XCTAssertEqual(identityReads, 1)
+        XCTAssertEqual(rig.captureFocusCount, fullCaptures)
+        rig.deliver("o") // Simulated unavailable/slow AX result.
+        XCTAssertEqual(identityReads, 2)
+        XCTAssertEqual(rig.captureFocusCount, fullCaptures)
+        XCTAssertEqual(rig.beginLeaseAttempts, leases)
+        XCTAssertEqual(rig.probe.latestSubmitted, settled)
+        XCTAssertEqual(field.text, "foo")
+        XCTAssertEqual(rig.sourceID, pair.en)
+    }
+
+    @MainActor
     func testLostFocusAnchorRecoversAfterWordBoundary() throws {
         let pair = try layoutIDs()
         let field = Field(pid: 2091, text: "")
@@ -267,7 +538,7 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
     }
 
     @MainActor
-    func testEvaluationCompletionDistinguishesNoProposalSuppressionApplicationAndCancellation() throws {
+    func testEvaluationCompletionDistinguishesNoProposalApplicationAndCancellationAfterUndo() throws {
         let pair = try layoutIDs()
         let field = Field(pid: 2040, text: "")
         let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
@@ -290,8 +561,8 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         field.text = ""; field.caret = 0; field.selection = 0
         rig.monitor.resetPredictionContext()
         rig.deliver("ghbd")
-        rig.settle(expected: .suppressed)
-        XCTAssertEqual(field.text, "ghbd")
+        rig.settle(expected: .applied)
+        XCTAssertEqual(field.text, "прив")
 
         field.text = ""; field.caret = 0; field.selection = 0
         rig.monitor.resetPredictionContext()
@@ -300,7 +571,7 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         rig.coordinator.invalidate()
         rig.settle(expected: .cancelledBeforeEvaluation)
         XCTAssertEqual(field.text, "ghbd")
-        XCTAssertEqual(field.queuedText, 2) // One forward and one undo, no cancelled write.
+        XCTAssertEqual(field.queuedText, 3) // Two forward edits and one undo, no cancelled write.
     }
 
     @MainActor
@@ -429,7 +700,7 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
     }
 
     @MainActor
-    func testToastUndoReseedsConfirmedOriginalForContinuedTyping() throws {
+    func testToastUndoKeepsConfirmedOriginalUntilNextWordBoundary() throws {
         let pair = try layoutIDs()
         let field = Field(pid: 2031, text: "")
         let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
@@ -458,8 +729,8 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         XCTAssertEqual(adaptiveEvent?.2, "ghbd")
 
         rig.deliver("tn")
-        rig.settle(expected: .applied)
-        XCTAssertEqual(field.text, "привет")
+        XCTAssertEqual(field.text, "ghbdtn")
+        XCTAssertEqual(rig.sourceID, pair.en)
     }
 
     @MainActor
@@ -493,7 +764,7 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
     }
 
     @MainActor
-    func testDifferentProposalDoesNotConsumeOneShotUndoSuppression() throws {
+    func testToastUndoSkipsCurrentTokenThenAllowsFreshProposal() throws {
         let pair = try layoutIDs()
         let field = Field(pid: 2032, text: "")
         let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
@@ -506,18 +777,12 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         }
         XCTAssertEqual(field.text, "ghbd")
 
-        rig.deliver("tn") // ghbdtn -> привет is a different automatic proposal.
-        rig.settle(expected: .applied)
-        XCTAssertEqual(field.text, "привет")
-
-        field.text = ""
-        field.caret = 0
-        field.selection = 0
-        rig.sourceID = pair.en
-        rig.monitor.resetPredictionContext()
+        rig.deliver("tn")
+        XCTAssertEqual(field.text, "ghbdtn")
+        rig.deliver(" ")
         rig.deliver("ghbd")
-        rig.settle(expected: .suppressed)
-        XCTAssertEqual(field.text, "ghbd", "The original one-shot proposal must still be suppressed")
+        rig.settle(expected: .applied)
+        XCTAssertEqual(field.text, "ghbdtn прив")
     }
 
     @MainActor

@@ -30,7 +30,7 @@ static class Test
             return;
         }
         var root=FindRoot();
-        Gesture(); Map(); Personal(); AdaptivePolicy(); FixturePolicy(); BinaryFixtureCorruption(); ForcedWords(); SignedUpdates();
+        Gesture(); Map(); Personal(); AdaptivePolicy(); FixturePolicy(); BrandFixturePolicy(); UndoFrontierPolicy(); BinaryFixtureCorruption(); ForcedWords(); SignedUpdates();
         var data=Path.Combine(root,"windows","data");
         Check(File.Exists(Path.Combine(data,"dictionary-manifest.json")),"generated dictionary required");
         using(var lex=PredictionLexicon.Load(data,new PersonalLexicon()))
@@ -40,6 +40,7 @@ static class Test
             Equal(lex.FullFrequency("notawordzzzz","en"),0,"known absent full frequency");
             Gold(Path.Combine(data,"prediction-benchmark.json"),lex);
             RealSelectionAndPriority(lex);
+            BrandContextPolicy(lex);
         }
         Corruption(data);
         Console.WriteLine("PASS assertions="+assertions+" gold=495");
@@ -278,6 +279,142 @@ static class Test
         Equal(SelectionConverter.Convert("ghbdtn MacSwitcher",lex,true,"en"),"привет MacSwitcher","real selection brand");
         Equal(SelectionConverter.Convert("MacSwitcher levf. xnj-nj nfrjt",lex,true,"en"),"MacSwitcher думаю что-то такое","real selection phrase");
         Equal(SelectionConverter.Convert("nfr b j,sxyj",lex,true,"en",true),"nfr и обычно","real selection priority");
+    }
+
+    static void BrandContextPolicy(PredictionLexicon lex)
+    {
+        var engine=new PredictionEngine(lex);
+        foreach(var brand in new[]{"MacSwitcher","ChatGPT","Figma","iPhone","Apple"})
+        {
+            Check(lex.IsContextNeutralEntity(brand,"en"),brand+" bundled category");
+            Equal(engine.Evaluate(brand,"en",true,russianPriority:true)?.ReplacementSuffix,null,brand+" itself");
+            Equal(engine.Evaluate("f","en",false,new[]{brand},true)?.ReplacementSuffix,"а",brand+" early a");
+            Equal(engine.Evaluate("ye","en",false,new[]{brand},true)?.ReplacementSuffix,"ну",brand+" early nu");
+            Equal(engine.Evaluate("yt","en",true,new[]{brand},true)?.ReplacementSuffix,"не",brand+" boundary ne");
+            Equal(engine.Evaluate("yt","en",false,new[]{brand},true)?.ReplacementSuffix,"не",brand+" early ne");
+            Equal(engine.Evaluate("b","en",true,new[]{brand},true)?.ReplacementSuffix,"и",brand+" boundary i");
+            Equal(engine.Evaluate("f yt","en",true,new[]{brand},true)?.ReplacementSuffix,"а не",brand+" pair preceding");
+            Equal(engine.Evaluate(brand+" f yt","en",true,russianPriority:true)?.ReplacementSuffix,brand+" а не",brand+" pair suffix");
+            Equal(engine.Evaluate("f","en",false,new[]{brand+","},true)?.ReplacementSuffix,"а",brand+" punctuation");
+            Equal(engine.Evaluate(brand+", f","en",false,russianPriority:true)?.ReplacementSuffix,brand+", а",brand+" punctuation suffix");
+        }
+        foreach(var ordinary in new[]{"long","red","reason"})
+        {
+            Check(lex.IsContextNeutralEntity(ordinary,"en"),ordinary+" bundled neutral homograph");
+            Check(lex.Frequency(ordinary,"en")>=5000,ordinary+" frequent English homograph");
+            Equal(engine.Evaluate("f","en",false,new[]{ordinary},true)?.ReplacementSuffix,null,
+                ordinary+" lowercase English context protects f");
+            Equal(engine.Evaluate(ordinary+" f","en",false,russianPriority:true)?.ReplacementSuffix,null,
+                ordinary+" lowercase suffix context protects f");
+        }
+        Equal(engine.Evaluate("f","en",false,new[]{"Apple"},true)?.ReplacementSuffix,"а",
+            "rendered proper brand remains neutral");
+        Equal(engine.Evaluate("f","en",false,new[]{"apple"},true)?.ReplacementSuffix,null,
+            "lowercase frequent apple is English evidence");
+        Equal(engine.Evaluate("f","en",false,new[]{"использую","apple"},true)?.ReplacementSuffix,"а",
+            "one lowercase English insertion after Russian still allows priority");
+        foreach(var ordinary in new[]{"red","long"})
+        {
+            Equal(engine.Evaluate("yt","en",false,new[]{"привет",ordinary},true)?.ReplacementSuffix,null,
+                ordinary+" lowercase homograph does not trigger early yt");
+            Equal(engine.Evaluate("yt","en",true,new[]{"привет",ordinary},true)?.ReplacementSuffix,"не",
+                ordinary+" boundary yt after Russian still converts");
+            Equal(engine.Evaluate("yt","en",false,new[]{ordinary},true)?.ReplacementSuffix,null,
+                ordinary+" standalone English yt preserved");
+        }
+        Equal(engine.Evaluate("yt","en",false,new[]{"Apple"},true)?.ReplacementSuffix,"не",
+            "proper Apple still triggers early yt");
+    }
+
+    static void BrandFixturePolicy()
+    {
+        using var lex=PredictionLexicon.FromFixture(new Dictionary<string,Dictionary<string,int>> {
+            ["ru"]=new() { ["русский"]=10000 },
+            ["en"]=new() { ["hello"]=10000,["world"]=10000,["iphone"]=10000,["other"]=10000 }
+        },protectedTerms:new Dictionary<string,HashSet<string>> {
+            ["en"]=new() { "iPhone","Moscow","Alice","keyboard","API","support" }
+        },contextNeutralTerms:new Dictionary<string,HashSet<string>> {
+            ["en"]=new() { "iPhone","Moscow","Alice" }
+        });
+        var engine=new PredictionEngine(lex);
+        foreach(var name in new[]{"iPhone","Moscow","Alice"})
+        {
+            Check(lex.IsContextNeutralEntity(name,"en"),name+" category retained");
+            Check(lex.IsProtectedTerm(name,"en"),name+" still protected");
+            Equal(engine.Evaluate("f","en",false,new[]{name},true)?.ReplacementSuffix,"а",name+" neutral context");
+            Equal(engine.Evaluate("yt","en",false,new[]{name},true)?.ReplacementSuffix,"не",name+" early ne by priority");
+        }
+        Check(!lex.IsContextNeutralEntity("keyboard","en"),"word category is not neutral");
+        Check(!lex.IsContextNeutralEntity("API","en"),"abbreviation category is not neutral");
+        Equal(engine.Evaluate("f","en",false,new[]{"keyboard"},true)?.ReplacementSuffix,null,"word protects English context");
+        Equal(engine.Evaluate("f","en",false,new[]{"API"},true)?.ReplacementSuffix,null,"abbreviation protects English context");
+        Equal(engine.Evaluate("f","en",false,new[]{"MadeUpName"},true)?.ReplacementSuffix,null,"unknown mixed case cautious");
+        Equal(engine.Evaluate("f","en",false,new[]{"hello"},true)?.ReplacementSuffix,null,"ordinary English without Russian context");
+        Equal(engine.Evaluate("f","en",false,new[]{"hello","русский"},true)?.ReplacementSuffix,"а","recent Russian resets older English");
+        Equal(engine.Evaluate("f","en",false,new[]{"fooBar","привет"},true)?.ReplacementSuffix,"а","Russian cue resets unknown earlier mixed case");
+        Equal(engine.Evaluate("f","en",false,new[]{"hello","ПРИВЕТ"},true)?.ReplacementSuffix,"а","uppercase Cyrillic resets English");
+        Equal(engine.Evaluate("f","en",false,new[]{"русский","hello"},true)?.ReplacementSuffix,"а","one English word after Russian");
+        Equal(engine.Evaluate("f","en",false,new[]{"привет","support"},true)?.ReplacementSuffix,"а","one protected English word after Russian");
+        Equal(engine.Evaluate("f","en",false,new[]{"привет","support","other"},true)?.ReplacementSuffix,null,"protected plus frequent English words protect phrase");
+        Equal(engine.Evaluate("f","en",false,new[]{"привет","SupportProtectedWord"},true)?.ReplacementSuffix,null,"unknown mixed case after Russian remains cautious");
+        Equal(engine.Evaluate("f","en",false,new[]{"русский","hello","world"},true)?.ReplacementSuffix,null,"two English words after Russian");
+        Equal(engine.Evaluate("русский hello f","en",false,russianPriority:true)?.ReplacementSuffix,"русский hello а","suffix words same context policy");
+        Equal(engine.Evaluate("русский hello world f","en",false,russianPriority:true)?.ReplacementSuffix,null,"suffix English phrase protected");
+        Equal(engine.Evaluate("f","en",false,new[]{"русский","press"},true)?.ReplacementSuffix,null,"technical cue survives Russian reset");
+        Equal(engine.Evaluate("f","en",false,new[]{"iPhone"},false)?.ReplacementSuffix,null,"priority off");
+        var personal=new PersonalLexicon(); personal.AddWord("f","en");
+        using var explicitLex=PredictionLexicon.FromFixture(new Dictionary<string,Dictionary<string,int>> {
+            ["ru"]=new(),["en"]=new()
+        },personal:personal,protectedTerms:new Dictionary<string,HashSet<string>> { ["en"]=new() { "iPhone" } },
+            contextNeutralTerms:new Dictionary<string,HashSet<string>> { ["en"]=new() { "iPhone" } });
+        Equal(new PredictionEngine(explicitLex).Evaluate("f","en",false,new[]{"iPhone"},true)?.ReplacementSuffix,null,"explicit personal word wins");
+        using var neutralWord=PredictionLexicon.FromFixture(new Dictionary<string,Dictionary<string,int>> {
+            ["ru"]=new() { ["привет"]=100000 },["en"]=new()
+        },contextNeutralTerms:new Dictionary<string,HashSet<string>> { ["en"]=new() { "ghbdtn" } });
+        Check(neutralWord.IsProtectedTerm("ghbdtn","en"),"neutral fixture word itself protected");
+        Equal(new PredictionEngine(neutralWord).Evaluate("ghbdtn","en",true,russianPriority:true)?.ReplacementSuffix,
+            null,"neutral fixture word remains unchanged");
+        Equal(new PredictionEngine(neutralWord).Evaluate("f","en",false,new[]{"ghbdtn"},true)?.ReplacementSuffix,
+            "а","neutral fixture following word gets Russian priority");
+    }
+
+    static void UndoFrontierPolicy()
+    {
+        var frontier=new ConfirmedUndoFrontier("MacSwitcher f");
+        void Expect(string value,bool valid,string? text,string name)
+        {
+            Equal(frontier.TryCurrentText(value,out var actual),valid,name+" prefix");
+            Equal(actual,text,name+" prediction text");
+        }
+        Expect("MacSwitcher f",true,null,"confirmed undo current word");
+        Expect("MacSwitcher fx",true,null,"continuation not retried");
+        Expect("MacSwitcher f ",true,null,"first closing space not retried");
+        Expect("MacSwitcher fx ",true,null,"continued word closing space not retried");
+        Expect("MacSwitcher f yt ",true,"yt ","next Russian word excludes kept f");
+        foreach(var spaces in new[]{3,2,8})
+        {
+            Expect("MacSwitcher f"+new string(' ',spaces)+"yt ",true,"yt ",
+                "next word after "+spaces+" separators");
+            Expect("MacSwitcher f"+new string(' ',spaces),true,null,
+                "only "+spaces+" separators after current word");
+        }
+        Expect("MacSwitcher f f",true,"f","fresh identical f is eligible");
+        Expect("MacSwitcher g yt ",false,null,"changed original prefix invalidates frontier");
+        var closed=new ConfirmedUndoFrontier("MacSwitcher f ");
+        Check(closed.TryCurrentText("MacSwitcher f f",out var fresh) && fresh=="f",
+            "undo of already closed word allows fresh f");
+        foreach(var extra in new[]{1,2,7})
+        {
+            Check(closed.TryCurrentText("MacSwitcher f "+new string(' ',extra)+"yt ",out fresh) &&
+                fresh=="yt ","already closed undo with "+extra+" extra separators");
+        }
+        using var lex=PredictionLexicon.FromFixture(new Dictionary<string,Dictionary<string,int>> {
+            ["ru"]=new(),["en"]=new()
+        });
+        Check(frontier.TryCurrentText("MacSwitcher f yt ",out var next) && next=="yt ",
+            "frontier separates next word");
+        Equal(new PredictionEngine(lex).Evaluate(next!,"en",true,russianPriority:true)?.ReplacementSuffix,
+            "не ","old kept f cannot be context repaired");
     }
 
     static void BinaryFixtureCorruption()

@@ -6,6 +6,64 @@ final class PredictionSourceNotificationTests: XCTestCase {
     private let russian = "com.apple.keylayout.Russian"
 
     @MainActor
+    func testObservedSourceFlipKeepsConfirmedUndoContinuationUntilSeparator() throws {
+        let monitor = KeyboardMonitor()
+        var snapshots: [PredictionSnapshot] = []
+        monitor.onPredictionInput = { snapshots.append($0) }
+        monitor.beginPredictionWordAfterConfirmedUndo(processID: 123,
+            sourceLayoutID: english, atBoundary: false)
+        let heldSession = monitor.predictionSessionID
+
+        monitor.resetLineBuffer(sourceLayoutID: russian) // Fresh observed TIS source.
+        XCTAssertEqual(monitor.predictionSessionID, heldSession)
+        monitor.recordPredictionText("о", processID: 123, sourceLayoutID: russian)
+        XCTAssertTrue(snapshots.isEmpty)
+        monitor.recordPredictionText(" ", processID: 123, sourceLayoutID: russian)
+        XCTAssertTrue(snapshots.isEmpty)
+        monitor.recordPredictionText("привет", processID: 123, sourceLayoutID: russian)
+        XCTAssertEqual(try XCTUnwrap(snapshots.last).suffix, "привет")
+    }
+
+    @MainActor
+    func testExplicitConfirmedSourceChoiceKeepsUndoHoldButUnconfirmedChoiceDoesNotClearPending() {
+        let monitor = KeyboardMonitor()
+        var snapshots: [PredictionSnapshot] = []
+        monitor.onPredictionInput = { snapshots.append($0) }
+        monitor.beginPredictionWordAfterConfirmedUndo(processID: 123,
+            sourceLayoutID: english, atBoundary: false)
+        let session = monitor.predictionSessionID
+
+        XCTAssertFalse(monitor.recordExplicitInputSourceSelection(
+            targetID: russian, observedSourceID: russian)) // No pending request; TIS read still confirms this choice.
+        XCTAssertEqual(monitor.predictionSessionID, session)
+        monitor.recordPredictionText("о", processID: 123, sourceLayoutID: russian)
+        XCTAssertTrue(snapshots.isEmpty)
+
+        monitor.requireObservedInputSource(english)
+        XCTAssertFalse(monitor.recordExplicitInputSourceSelection(
+            targetID: english, observedSourceID: russian))
+        XCTAssertEqual(monitor.pendingInputSourceTargetID, english)
+        XCTAssertEqual(monitor.predictionSessionID, session)
+    }
+
+    @MainActor
+    func testPendingSourceIsNotBypassedByEarlyRenderedGlyph() throws {
+        let monitor = KeyboardMonitor()
+        var snapshots: [PredictionSnapshot] = []
+        monitor.onPredictionInput = { snapshots.append($0) }
+        monitor.beginPredictionWordAfterConfirmedUndo(processID: 123,
+            sourceLayoutID: english, atBoundary: false)
+        let heldSession = monitor.predictionSessionID
+        monitor.requireObservedInputSource(russian)
+
+        monitor.recordPredictionText("о", processID: 123, sourceLayoutID: russian)
+
+        XCTAssertNotEqual(monitor.predictionSessionID, heldSession)
+        XCTAssertEqual(monitor.pendingInputSourceTargetID, russian)
+        XCTAssertEqual(try XCTUnwrap(snapshots.last).suffix, "о")
+    }
+
+    @MainActor
     func testDelayedSameSourceNotificationKeepsQueuedSnapshotAndFurtherPrefix() throws {
         let monitor = KeyboardMonitor()
         var snapshots: [PredictionSnapshot] = []

@@ -114,6 +114,8 @@ namespace MacSwitcher.Windows.Runtime
         private int fixtureFullBrokerOutcome = -1, fixtureFullBrokerPhase = -1;
         private int fixtureFullBudgetMilliseconds = -1, fixtureFullRpcMilliseconds = -1;
         private CorrectionReceipt? receipt;
+        private FieldSnapshot? undoFrontierField;
+        private ConfirmedUndoFrontier? undoFrontier;
 
         public event Action<RuntimeStatus>? StatusChanged;
         public event Action<CorrectionNotice>? CorrectionApplied;
@@ -475,7 +477,7 @@ namespace MacSwitcher.Windows.Runtime
                         Interlocked.Exchange(ref fixtureAutoCode,
                             !textKey ? 30 : shiftHeld ? 31 : 32);
                         Interlocked.Exchange(ref fixtureAutoSourceCode, 0);
-                        ResetSession(9); return;
+                        ResetSession(9, PreserveUndoFrontierForInput(input.VirtualKey,shiftHeld,commandModifiersUp)); return;
                     }
                     if (input.Kind == PhysicalInputKind.KeyDown)
                     {
@@ -584,13 +586,23 @@ namespace MacSwitcher.Windows.Runtime
                 ? cachedField : null;
         }
 
-        private void ResetSession(int reason = 1)
+        internal static bool PreserveUndoFrontierForInput(int virtualKey, bool shiftHeld, bool commandModifiersUp) =>
+            IsTextKey(virtualKey) && shiftHeld && commandModifiersUp;
+
+        internal static void ResetUndoFrontier(ref FieldSnapshot? field,
+            ref ConfirmedUndoFrontier? frontier, bool preserve)
+        {
+            if (!preserve) { field = null; frontier = null; }
+        }
+
+        private void ResetSession(int reason = 1, bool preserveUndoFrontier = false)
         {
             Interlocked.Exchange(ref fixtureResetReason, reason);
             operationGeneration++;
             gestureEpoch++;
             gesture.Interrupt();
             cachedField = sessionField = gestureField = null;
+            ResetUndoFrontier(ref undoFrontierField,ref undoFrontier,preserveUndoFrontier);
             unknownWord = true;
             lastSource = null;
             pendingTextKeys = 0;
@@ -669,6 +681,9 @@ namespace MacSwitcher.Windows.Runtime
                     if (response.Outcome == BrokerOutcome.Success && response.Field != null)
                     {
                         if (cachedField != null && !cachedField.SameIdentity(response.Field)) ResetSession(11);
+                        if (undoFrontier != null && (undoFrontierField == null ||
+                            !TryUndoPredictionText(response.Field, undoFrontierField, undoFrontier, out _)))
+                        { undoFrontierField = null; undoFrontier = null; }
                         cachedField = response.Field;
                         cachedAtTicks = (long)Win32.GetTickCount64();
                         cachedAtRevision = beforeRevision;
@@ -764,10 +779,18 @@ namespace MacSwitcher.Windows.Runtime
             }
             var field = response?.Field;
             if (field == null || !field.SameIdentity(origin))
-            { Interlocked.Exchange(ref fixtureAutoCode, 6); return; }
+            {
+                Interlocked.Exchange(ref fixtureAutoCode, 6);
+                lock (stateGate) { undoFrontierField = null; undoFrontier = null; }
+                return;
+            }
             if (field.SelectionStart != field.SelectionEnd ||
                 field.SelectionEnd != field.Value.Length || hook.Revision != input.Revision)
-            { Interlocked.Exchange(ref fixtureAutoCode, 7); return; }
+            {
+                Interlocked.Exchange(ref fixtureAutoCode, 7);
+                lock (stateGate) { undoFrontierField = null; undoFrontier = null; }
+                return;
+            }
             if (origin.SelectionStart != origin.SelectionEnd || origin.SelectionEnd != origin.Value.Length ||
                 !field.Value.StartsWith(origin.Value, StringComparison.Ordinal) ||
                 field.Value.Length - origin.Value.Length > Math.Max(2, 2 * pendingKeys))
@@ -777,7 +800,31 @@ namespace MacSwitcher.Windows.Runtime
                 return;
             }
             bool boundary = field.Value.Length > 0 && char.IsWhiteSpace(field.Value[field.Value.Length - 1]);
-            var context = BuildPredictionContext(field.Value);
+            FieldSnapshot? frontierField;
+            ConfirmedUndoFrontier? frontier;
+            lock (stateGate) { frontierField = undoFrontierField; frontier = undoFrontier; }
+            var predictionText = field.Value;
+            if (frontier != null)
+            {
+                if (frontierField == null || !TryUndoPredictionText(field, frontierField, frontier, out var afterUndo))
+                {
+                    lock (stateGate)
+                    {
+                        if (ReferenceEquals(undoFrontier, frontier))
+                        { undoFrontierField = null; undoFrontier = null; sessionField = null; unknownWord = true; pendingTextKeys = 0; }
+                    }
+                    Interlocked.Exchange(ref fixtureAutoCode, 9);
+                    return;
+                }
+                if (afterUndo == null)
+                {
+                    lock (stateGate) { sessionField = field; unknownWord = false; pendingTextKeys = 0; }
+                    Interlocked.Exchange(ref fixtureAutoCode, 10);
+                    return;
+                }
+                predictionText = afterUndo;
+            }
+            var context = BuildPredictionContext(predictionText);
             if (context == null)
             {
                 Interlocked.Exchange(ref fixtureAutoCode, 9);
@@ -863,6 +910,14 @@ namespace MacSwitcher.Windows.Runtime
                 if (cursor > 0 && value[cursor - 1] != ' ') break;
             }
             return new PredictionContext { Suffix = value.Substring(start), PrecedingWords = prior.ToArray() };
+        }
+
+        internal static bool TryUndoPredictionText(FieldSnapshot field, FieldSnapshot bound,
+            ConfirmedUndoFrontier frontier, out string? text)
+        {
+            text = null;
+            return field.SameIdentity(bound) && field.SelectionStart == field.SelectionEnd &&
+                field.SelectionEnd == field.Value.Length && frontier.TryCurrentText(field.Value, out text);
         }
 
         private void ConvertManual(NativeFocusSnapshot? focus, FieldSnapshot? origin, string source,
@@ -1024,6 +1079,15 @@ namespace MacSwitcher.Windows.Runtime
                 prior.SourceConfirmed = prior.SourceConfirmed && toggleSourceConfirmed;
                 prior.Undone = undo;
                 receipt = prior;
+                if (undo && prior.Origin == AdaptiveOrigin.Automatic &&
+                    prior.Field.Value == prior.Original &&
+                    prior.Field.SelectionStart == prior.Field.SelectionEnd &&
+                    prior.Field.SelectionEnd == prior.Field.Value.Length)
+                {
+                    undoFrontierField = prior.Field;
+                    undoFrontier = new ConfirmedUndoFrontier(prior.Field.Value);
+                }
+                else { undoFrontierField = null; undoFrontier = null; }
             }
             EnqueueNotice(new CorrectionNotice(prior.OriginalPhrase, prior.ReplacementPhrase, prior.SourceLanguage,
                 prior.OccurrenceId,prior.Origin,undo?AdaptiveAction.Undone:AdaptiveAction.Applied,prior.SourceConfirmed));

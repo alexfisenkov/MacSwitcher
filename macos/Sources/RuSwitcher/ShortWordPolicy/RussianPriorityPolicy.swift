@@ -21,14 +21,35 @@ enum RussianPriorityPolicy {
         "dfc": "вас", "jn": "от", "yfi": "наш", "vbh": "мир", "yb": "ни", "fuf": "ага"
     ]
 
+    private static func isNeutralEntityContext(_ word: String, key: String,
+                                               lexicon: PredictionLexicon) -> Bool {
+        lexicon.isNeutralContextEntity(key, language: "en")
+            && (word.contains(where: \.isUppercase)
+                || lexicon.frequency(of: key, language: "en") < 5_000)
+    }
+
     static func protectsEnglishContext(_ words: [String], lexicon: PredictionLexicon) -> Bool {
-        words.suffix(3).contains { word in
-            let normalized = word.lowercased().trimmingCharacters(in: .punctuationCharacters)
-            return word.dropFirst().contains(where: \.isUppercase)
-                || technicalCues.contains(normalized)
-                || lexicon.isProtectedTerm(normalized, language: "en")
-                || lexicon.frequency(of: normalized, language: "en") >= 5_000
+        let recent = words.suffix(3).map {
+            ($0, $0.lowercased().trimmingCharacters(in: .punctuationCharacters))
         }
+        // Technical instructions remain protective regardless of surrounding prose.
+        if recent.contains(where: { technicalCues.contains($0.1) }) { return true }
+        let lastRussian = recent.lastIndex(where: { _, key in
+            !key.isEmpty && key.allSatisfy { character in
+                character.unicodeScalars.allSatisfy { (0x0400...0x04FF).contains($0.value) }
+            }
+        })
+        var englishWords = 0
+        for (index, (word, key)) in recent.enumerated() {
+            if let lastRussian, index <= lastRussian { continue }
+            if isNeutralEntityContext(word, key: key, lexicon: lexicon) { continue }
+            if word.dropFirst().contains(where: \.isUppercase) { return true }
+            if lexicon.isProtectedTerm(key, language: "en")
+                || lexicon.frequency(of: key, language: "en") >= 5_000 {
+                englishWords += 1
+            }
+        }
+        return englishWords >= (lastRussian == nil ? 1 : 2)
     }
 
     static func contextualReplacement(for previous: String, sourceLanguage: String,
@@ -62,8 +83,14 @@ enum RussianPriorityPolicy {
         let exactYoWord = (current == "to\\" || current == "to`") && mapped == "ещё"
         let immediateSingleLetter = current.count == 1 && immediateSingleLetterWords.contains(mapped)
         let earlyPairedWord = current == "yt" && previous == "f" && mapped == "не"
+        let earlyAfterEntity = current == "yt" && precedingWords.suffix(3).contains {
+            isNeutralEntityContext($0,
+                key: $0.lowercased().trimmingCharacters(in: .punctuationCharacters),
+                lexicon: lexicon)
+        }
         guard commonRussianWords.contains(mapped) || immediateSingleLetter,
-              current == "ye" || exactYoWord || immediateSingleLetter || earlyPairedWord || atBoundary else { return nil }
+              current == "ye" || exactYoWord || immediateSingleLetter || earlyPairedWord
+                || earlyAfterEntity || atBoundary else { return nil }
         // Preserve real English prose, commands and named entities. A single
         // ambiguous token remains eligible only in genuinely neutral context.
         if protectsEnglishContext(precedingWords, lexicon: lexicon) { return nil }
