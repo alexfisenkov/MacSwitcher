@@ -27,7 +27,7 @@
 - [x] Русская речь с английской вставкой возвращается к русскому приоритету; реальная английская фраза и `press f` сохраняются.
 - [x] Оба представления контекста: precedingWords и слова внутри suffix; регистр/пунктуация/неизвестное имя.
 - [x] Полный golden corpus и отрицательные тесты не ухудшились; manual/undo/следующее auto проверены без чтения пользовательского профиля.
-- [ ] Критики, CI, подпись/публикация, сохранность настроек/словарей и read-back фиксируются отдельно.
+- [x] Критики, CI, подпись/публикация, сохранность настроек/словарей и read-back фиксируются отдельно.
 
 ## Расширение по подтверждённому undo-дефекту
 
@@ -48,3 +48,7 @@ macOS writer дополнительно владеет PredictionSnapshot/Keyboa
 Оба writer независимо обнаружили отсутствие iPhone в публичном curated TSV. Parent добавил одну общедоступную запись iPhone/brand и существующим protected_data/import_lock обновил только curated ресурс и соответствующую секцию манифеста. Частотные/нормативные базы, их хэши и schema3 не менялись; полный importer со schema2 не запускался. Это узкое исключение к запрету ненужной регенерации ресурсов.
 
 Состояние перед запечатыванием source: Swift535/Python35 и release build PASS; WindowsCore769/gold495 и runtime-fixture net462 build PASS. Все transport/security/settings ключи сохранены. Остаточные R2 замечания закрыты source/test read-back владельцем интеграции; третьего независимого круга не запускали. Подпись, CI, публичный read-back и физическое подтверждение разделяются.
+
+## Поставка
+
+PR7 merged, codee575924. MacCI41768184482 PASS535/35/gold495 и WindowsCI41768189082 PASS769/gold495/runtime44+contract+installer. Mac28 signed/notarized/stapled/Gatekeeper, штатно установлен: binary/prefs/dictionaryhashes/About28/180мс подтверждены. Windows3Setup/portable matchCI, RSAfeed verified; физический Windows не устанавливался. Pages41772148476 succeeded, publicHTML/iconbyteexact source0adb380. Личные данные не включались в публичные материалы; финальные535Swift повторены с проверенным CFFIXED_USER_HOME и personalfilehashunchanged. Общие редакторские/AX-инциденты вне найденных причин остаются отдельной приёмкой.

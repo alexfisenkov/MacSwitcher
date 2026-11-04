@@ -1,8 +1,8 @@
 # MacSwitcher for Windows
 
-Windows port of MacSwitcher with offline RU/EN correction and a tray menu. Current preview: `0.1.0-alpha.2`.
+Windows port of MacSwitcher with offline RU/EN correction and a tray menu. Current preview: `0.1.0-alpha.3`.
 
-[Download Setup or portable](https://github.com/alexfisenkov/MacSwitcher/releases/tag/windows-v0.1.0-alpha.2). [Windows CI](https://github.com/alexfisenkov/MacSwitcher/actions/runs/41630906057) passed on source `58a529f0dcff6aa3cde5439f028d257ee023420a`: 626 Core assertions and 44 runtime checks, including owned Edge input/textarea through the actual 90 ms runtime writer and per-user installation/data preservation. [Acceptance matrix and open work](../docs/windows-port/acceptance.md).
+[Download Setup or portable](https://github.com/alexfisenkov/MacSwitcher/releases/tag/windows-v0.1.0-alpha.3). [Windows CI](https://github.com/alexfisenkov/MacSwitcher/actions/runs/41768189082) passed on source `e57592474d19bf2e93b73740fc32683542acc879`: 769 Core assertions and 44 runtime checks, including owned Edge input/textarea through the actual 90 ms runtime writer and per-user installation/data preservation. [Acceptance matrix and open work](../docs/windows-port/acceptance.md).
 
 ## Requirements and support
 

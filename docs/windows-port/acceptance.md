@@ -1,5 +1,9 @@
 # Windows: приёмка и оставшаяся совместимость
 
+## Alpha.3 · русский контекст и подтверждённый undo
+
+Источник e57592474d19bf2e93b73740fc32683542acc879, CI41768189082 PASS769/gold495/runtime44 и installer preservation. Новый RAM-frontier прошёл runtime contract subprocess (exit0 следует из успешного fixture harness); native/UIA synthetic snapshots, пробелы, смена поля/каретки и Shift+text state проверены. Публичные пакеты совпали с CI, RSA-подписанный feed принят Core verifier. EXE без Authenticode, физический HID и целевая OS/hardware matrix остаются NOT_RUN. [Заметки](../releases/windows-0.1.0-alpha.3.md).
+
 ## Alpha.2 · локальное обучение
 
 [windows-v0.1.0-alpha.2](https://github.com/alexfisenkov/MacSwitcher/releases/tag/windows-v0.1.0-alpha.2), source `58a529f0dcff6aa3cde5439f028d257ee023420a`, [CI](https://github.com/alexfisenkov/MacSwitcher/actions/runs/41630906057) PASS: Core626/gold495/runtime44, отдельные adaptive storage/provenance/epoch/fault contracts, сохранность adaptive-rules.json при установке/переустановке/удалении. Default ON с пояснением, просмотр/удаление/сброс/off; журнал текста и клавиш не создаётся. Публичные пакеты и RSA feed перечитаны, [заметки](../releases/windows-0.1.0-alpha.2.md). Физические и широкие compatibility-ограничения ниже сохраняются.

@@ -29,7 +29,7 @@ v3.4.0 и ранее разработанный native combined-Shift режим
 - .критики/, .черновики/, .журналы/, .сборки/ — приватное, в git не входит.
 
 ## Проверка
-- swift test --package-path macos -j 4
+- Локальные Swift tests изолировать от личного словаря: `CFFIXED_USER_HOME="$(mktemp -d -t macswitcher-tests)" swift test --package-path macos -j 4` (переменная действует только на дочерний процесс; HOME не менять). Перед первым применением проверить Foundation applicationSupportDirectory в новом профиле.
 - swift build --package-path macos -c release -j 4
 - git diff --check
 - /usr/bin/python3 script/check_public.py
@@ -88,3 +88,9 @@ v3.4.0 и ранее разработанный native combined-Shift режим
 - Текущий Mac-выпуск alpha.27, источник `96fd8207499b111fd5f5b7d383575517ba237473`, CI41717875604 PASS512Swift/35Python/gold495. Подписан, notarized, штатно установлен; sidebar/topalignment/клик/стрелки проверены, prefs+словарь+обучение сохранены.
 - Alpha.26 содержала визуальный отступ коротких форм, выявленный после установки; alpha.27 исправила его с RED/Green геометрией. Дополнительный CI связан с конкретным дефектом; исходный артефакт26 сохранён.
 - Прерывистый отказ автокоррекции после ручного исправления остаётся открытым. Диагностика повторных отказов ограничена закрытыми enum и существующим opt-in; никаких набранных слов/клавиш/clipboard в OSLog. Не выдавать новые regression PASS за доказательство исправления исходной жалобы.
+
+## Бренд-контекст и undo · alpha.28 / Windows alpha.3
+
+- Исходник e57592474d19bf2e93b73740fc32683542acc879, PR7 merged. MacCI41768184482 PASS535/35/gold495; WindowsCI41768189082 PASS769/gold495/runtime44 + contract/installer. Mac28 signed/notarized/stapled и штатно установлен, prefs/словари/180мс сохранены; Windows3 опубликована, RSA-feed проверен, EXE без Authenticode.
+- Категории названий сохраняются в памяти; частотные строчные омонимы не нейтрализуют английский контекст. Подтверждённый undo сохраняет слово до границы и позволяет следующее; поле/source/pending/readonly/secure guards сохранены. Контракт docs/plans/2026-11-04-brand-context-priority.md.
+- CLI benchmarks и локальные tests запускать в новом CFFIXED_USER_HOME: PersonalWordStore.shared использует фиксированный applicationSupport путь. Содержимое личного профиля не выводить/не использовать как fixture; финальная изолированная перепроверка535PASS, actual personal dictionary hash не изменился. GitHub runner fresh profile не является пользовательским профилем.
