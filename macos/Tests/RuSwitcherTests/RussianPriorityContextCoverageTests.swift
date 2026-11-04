@@ -69,17 +69,67 @@ final class RussianPriorityContextCoverageTests: XCTestCase {
             XCTAssertNil(engine.evaluate(suffix: word + " ", sourceLanguage: "en",
                                          atBoundary: true, russianPriority: true), word)
         }
-        for context in ["press", "script", "hello", "MacSwitcher"] {
+        for context in ["press", "script", "hello"] {
             XCTAssertEqual(engine.evaluate(suffix: context + " vs ghbdtn ", sourceLanguage: "en",
                                            atBoundary: true, russianPriority: true)?.replacementSuffix,
                            context + " vs привет ", context)
         }
+        XCTAssertEqual(engine.evaluate(suffix: "MacSwitcher vs ghbdtn ", sourceLanguage: "en",
+            atBoundary: true, russianPriority: true)?.replacementSuffix, "MacSwitcher мы привет ")
         var mismatched = KeyMapping.enToRu
         mismatched["v"] = "н"
         XCTAssertEqual(engine.evaluate(suffix: "vs ghbdtn ", sourceLanguage: "en",
                                        atBoundary: true, characterMapping: mismatched,
                                        russianPriority: true)?.replacementSuffix,
                        "vs привет ")
+    }
+
+    func testBundledNamesDoNotSuppressFollowingRussianPriority() throws {
+        let engine = try engine()
+        for name in ["MacSwitcher", "ChatGPT", "Figma", "iPhone", "Apple"] {
+            for (typed, expected) in [("f", "а"), ("ye", "ну"), ("yt", "не"), ("b", "и")] {
+                XCTAssertEqual(engine.evaluate(suffix: typed, sourceLanguage: "en",
+                    precedingWords: [name], russianPriority: true)?.replacementSuffix, expected,
+                    "\(name) \(typed) early")
+                XCTAssertEqual(engine.evaluate(suffix: typed + " ", sourceLanguage: "en",
+                    atBoundary: true, precedingWords: [name], russianPriority: true)?.replacementSuffix,
+                    expected + " ", "\(name) \(typed) boundary")
+                XCTAssertEqual(engine.evaluate(suffix: name + ", " + typed, sourceLanguage: "en",
+                    russianPriority: true)?.replacementSuffix, name + ", " + expected,
+                    "\(name) \(typed) suffix")
+            }
+            XCTAssertEqual(engine.evaluate(suffix: "f yt", sourceLanguage: "en",
+                precedingWords: [name], russianPriority: true)?.replacementSuffix, "а не", name)
+            XCTAssertNil(engine.evaluate(suffix: name + " ", sourceLanguage: "en",
+                atBoundary: true, russianPriority: true), "name itself must stay protected")
+        }
+    }
+
+    func testRussianContextResetsEarlierEnglishAndNeedsTwoOrdinaryEnglishWordsToReturn() throws {
+        let engine = try engine()
+        let accepted = [["hello", "привет"], ["hello", "привет", "world"],
+            ["привет", "MacSwitcher"], ["MacSwitcher", "привет"]]
+        for context in accepted {
+            XCTAssertEqual(engine.evaluate(suffix: "f", sourceLanguage: "en",
+                precedingWords: context, russianPriority: true)?.replacementSuffix, "а", context.joined(separator: " "))
+        }
+        for context in [["hello"], ["press"], ["привет", "hello", "world"], ["iWidget"]] {
+            XCTAssertNil(engine.evaluate(suffix: "f", sourceLanguage: "en",
+                precedingWords: context, russianPriority: true), context.joined(separator: " "))
+        }
+    }
+
+    func testLowercaseFrequentHomographsRemainEnglishEvidence() throws {
+        let engine = try engine()
+        for word in ["long", "together", "red", "line", "apple"] {
+            XCTAssertNil(engine.evaluate(suffix: "f", sourceLanguage: "en",
+                precedingWords: [word], russianPriority: true), word)
+        }
+        XCTAssertEqual(engine.evaluate(suffix: "f", sourceLanguage: "en",
+            precedingWords: ["использую", "apple"], russianPriority: true)?.replacementSuffix,
+            "а")
+        XCTAssertEqual(engine.evaluate(suffix: "f", sourceLanguage: "en",
+            precedingWords: ["Apple"], russianPriority: true)?.replacementSuffix, "а")
     }
 
     func testProtectedSourceTermBlocksContextRepair() {

@@ -149,6 +149,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         var applied: [String] = []
         var correctionNotices: [ConfirmedCorrectionNotice] = []
         var confirmedAutoUndos: [ConfirmedCorrectionNotice] = []
+        let suppliedLexicon: PredictionLexicon?
 
         lazy var converter = ProductionCombinedShiftEditingTests.converter(for: [field],
             automaticRoute: { _, _, _ in .nativeVerified })
@@ -188,7 +189,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
                 "en": ["hello": 900_000, "press": 500_000, "f": 20_000]
             ])
             let value = PredictionCoordinator(monitor: monitor, converter: converter,
-                platform: platform, engine: PredictionEngine(lexicon: lexicon),
+                platform: platform, engine: PredictionEngine(lexicon: suppliedLexicon ?? lexicon),
                 receiptNow: { [unowned self] in receiptClock })
             value.onApplied = { [unowned self] word in applied.append(word) }
             value.onCorrection = { [unowned self] in correctionNotices.append($0) }
@@ -203,7 +204,8 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
             return value
         }()
 
-        init() throws {
+        init(lexicon: PredictionLexicon? = nil) throws {
+            suppliedLexicon = lexicon
             let layouts = LayoutSwitcher.installedLayouts()
             let english = try XCTUnwrap(layouts.first { LayoutSwitcher.languageCode($0) == "en" })
             let russian = try XCTUnwrap(layouts.first { LayoutSwitcher.languageCode($0) == "ru" })
@@ -666,7 +668,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
     }
 
     @MainActor
-    func testEarlyAutomaticMistakeCanBeUndoneAndWordContinues() throws {
+    func testEarlyAutomaticMistakeUndoKeepsContinuationUntilBoundary() throws {
         let rig = try AutoRig()
         _ = rig.coordinator
         rig.deliver("ghbd", source: rig.en)
@@ -678,9 +680,9 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
             .confirmed(resultID: rig.en))
         XCTAssertEqual(rig.field.text, "ghbd")
         rig.deliver("tn", source: rig.en)
-        rig.settle()
-        XCTAssertEqual(rig.field.text, "привет",
-            "The confirmed undo must seed the following prediction with its full word")
+        XCTAssertEqual(rig.field.text, "ghbdtn",
+            "The explicit undo keeps the current word unchanged until its boundary")
+        XCTAssertEqual(rig.sourceID, rig.en)
     }
 
     @MainActor
@@ -720,7 +722,71 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
     }
 
     @MainActor
-    func testConfirmedAutomaticUndoSuppressesOnlyOneIdenticalRetry() throws {
+    func testBrandShortWordDoubleShiftUndoSurvivesSpaceBeforeNextRussianWord() throws {
+        let rig = try AutoRig(lexicon: PredictionLexicon.bundled())
+        rig.coordinator.russianPriorityProvider = { true }
+        rig.deliver("MacSwitcher ", source: rig.en)
+        rig.settle()
+        rig.deliver("f", source: rig.en)
+        rig.settle(expected: .applied)
+        XCTAssertEqual(rig.field.text, "MacSwitcher а")
+        XCTAssertEqual(try rig.undoByDoubleShift().outcome, .confirmed(resultID: rig.en))
+        XCTAssertEqual(rig.field.text, "MacSwitcher f")
+
+        let afterUndo = rig.probe.latestSubmitted
+        rig.deliver(" ", source: rig.en)
+        XCTAssertEqual(rig.probe.latestSubmitted, afterUndo)
+        XCTAssertEqual(rig.field.text, "MacSwitcher f ")
+        XCTAssertEqual(rig.sourceID, rig.en)
+
+        rig.deliver("ghbdtn", source: rig.en)
+        rig.settle(expected: .applied)
+        XCTAssertEqual(rig.field.text, "MacSwitcher f привет")
+        XCTAssertEqual(rig.sourceID, rig.ru)
+    }
+
+    @MainActor
+    func testBrandUndoIgnoresContinuationAndFreshShortWordCanApply() throws {
+        let rig = try AutoRig(lexicon: PredictionLexicon.bundled())
+        rig.coordinator.russianPriorityProvider = { true }
+        rig.deliver("MacSwitcher ", source: rig.en)
+        rig.settle()
+        rig.deliver("f", source: rig.en)
+        rig.settle(expected: .applied)
+        XCTAssertEqual(try rig.undoByDoubleShift().outcome, .confirmed(resultID: rig.en))
+
+        let afterUndo = rig.probe.latestSubmitted
+        rig.deliver("oo", source: rig.en)
+        XCTAssertEqual(rig.probe.latestSubmitted, afterUndo)
+        XCTAssertEqual(rig.field.text, "MacSwitcher foo")
+        rig.deliver(" ", source: rig.en)
+        XCTAssertEqual(rig.probe.latestSubmitted, afterUndo)
+        rig.deliver("f", source: rig.en)
+        rig.settle(expected: .applied)
+        XCTAssertEqual(rig.field.text, "MacSwitcher foo а")
+        XCTAssertEqual(rig.sourceID, rig.ru)
+    }
+
+    @MainActor
+    func testUndoOfBoundaryCorrectionAllowsImmediateNextWord() throws {
+        let rig = try AutoRig(lexicon: PredictionLexicon.bundled())
+        rig.coordinator.russianPriorityProvider = { true }
+        rig.deliver("yt", source: rig.en)
+        rig.settle(expected: .noProposal)
+        rig.deliver(" ", source: rig.en)
+        rig.settle(expected: .applied)
+        XCTAssertEqual(rig.field.text, "не ")
+        XCTAssertEqual(try rig.undoByDoubleShift().outcome, .confirmed(resultID: rig.en))
+        XCTAssertEqual(rig.field.text, "yt ")
+
+        rig.deliver("ghbd", source: rig.en)
+        rig.settle(expected: .applied)
+        XCTAssertEqual(rig.field.text, "yt прив")
+        XCTAssertEqual(rig.sourceID, rig.ru)
+    }
+
+    @MainActor
+    func testConfirmedAutomaticUndoAllowsFreshWordAfterContextReset() throws {
         let rig = try AutoRig()
         rig.coordinator.russianPriorityProvider = { true }
         rig.deliver("f", source: rig.en)
@@ -731,19 +797,21 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
 
         rig.field.text = ""
         rig.field.caret = 0
-        rig.monitor.resetPredictionContext()
-        rig.deliver("f", source: rig.en)
-        rig.settle(expected: .suppressed)
-        XCTAssertEqual(rig.field.text, "f")
-        XCTAssertEqual(rig.field.queuedText, 2)
-
-        rig.field.text = ""
-        rig.field.caret = 0
+        rig.sourceID = rig.en
         rig.monitor.resetPredictionContext()
         rig.deliver("f", source: rig.en)
         rig.settle(expected: .applied)
         XCTAssertEqual(rig.field.text, "а")
         XCTAssertEqual(rig.field.queuedText, 3)
+
+        rig.field.text = ""
+        rig.field.caret = 0
+        rig.sourceID = rig.en
+        rig.monitor.resetPredictionContext()
+        rig.deliver("f", source: rig.en)
+        rig.settle(expected: .applied)
+        XCTAssertEqual(rig.field.text, "а")
+        XCTAssertEqual(rig.field.queuedText, 4)
     }
 
     @MainActor
@@ -772,8 +840,8 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
 
         XCTAssertEqual(try rig.undoByDoubleShift(notificationAfterFirst: rig.en).outcome,
             .confirmed(resultID: rig.en))
-        XCTAssertEqual(rig.monitor.predictionSessionID, beforeSession,
-            "A matched first-solo source notification must not reset the prediction session")
+        XCTAssertEqual(rig.monitor.predictionSessionID, beforeSession + 1,
+            "Only the confirmed undo starts a fresh prediction session")
         XCTAssertEqual(rig.field.text, "f")
         XCTAssertEqual(rig.confirmedAutoUndos.count, 1)
     }

@@ -74,6 +74,7 @@ struct PredictionLexicon: Sendable {
          fullWordsByLanguage: [String: [String: Int]] = [:],
          spellingWordsByLanguage: [String: Set<String>] = [:],
          protectedTermsByLanguage: [String: Set<String>] = [:],
+         neutralContextEntitiesByLanguage: [String: Set<String>] = [:],
          fullLexicon: FullFrequencyLexicon? = nil,
          spellingLexicon: SupplementalSpellingLexicon? = nil) {
         var grouped: [String: [String: Int]] = [:]
@@ -87,7 +88,8 @@ struct PredictionLexicon: Sendable {
         indexes = grouped.mapValues { LanguageIndex(words: $0) }
         self.fullLexicon = fullLexicon ?? FullFrequencyLexicon(wordsByLanguage: fullWordsByLanguage)
         self.spellingLexicon = spellingLexicon ?? SupplementalSpellingLexicon(wordsByLanguage: spellingWordsByLanguage)
-        protectedTerms = ProtectedTerms(termsByLanguage: protectedTermsByLanguage)
+        protectedTerms = ProtectedTerms(termsByLanguage: protectedTermsByLanguage,
+            neutralContextEntitiesByLanguage: neutralContextEntitiesByLanguage)
     }
 
     private init(indexes: [String: LanguageIndex], fullLexicon: FullFrequencyLexicon,
@@ -169,6 +171,10 @@ struct PredictionLexicon: Sendable {
 
     func isProtectedTerm(_ word: String, language: String) -> Bool {
         protectedTerms.contains(word, language: language) || isPersonalWord(word, language: language)
+    }
+
+    func isNeutralContextEntity(_ word: String, language: String) -> Bool {
+        protectedTerms.isNeutralContextEntity(word, language: language)
     }
 
     /// Reads a bounded live snapshot; add/remove/import take effect without rebuilding the engine.

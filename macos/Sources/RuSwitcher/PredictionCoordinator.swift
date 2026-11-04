@@ -42,7 +42,6 @@ final class PredictionCoordinator {
     private var pendingCaretAnchor: PredictionPendingCaretAnchor?
     private let correctionReceipts: ConfirmedCorrectionReceipts
     private let receiptNow: () -> UInt64
-    private var oneShotSuppression: OneShotCorrectionSuppression?
     private var confirmedAdaptiveUndo: (id: UUID, original: String, replacement: String,
                                         focus: CombinedShiftFocus)?
     private struct RecentAutomaticEdit {
@@ -54,6 +53,7 @@ final class PredictionCoordinator {
         let receiptID: UUID?
     }
     private var recentAutomaticEdit: RecentAutomaticEdit?
+    private var undoHeldFocus: (focus: CombinedShiftFocus, sourceLayoutID: String)?
     /// AppDelegate supplies a saved choice. Legacy call sites default to off.
     var russianPriorityProvider: () -> Bool = { false }
     /// Exact displayed source phrase and language; storage belongs to the caller.
@@ -92,6 +92,51 @@ final class PredictionCoordinator {
                 return PredictionEngine(lexicon: lexicon)
             }
         }
+        monitor.beforePredictionText = { [weak self] processID, sourceLayoutID, text in
+            self?.allowsPredictionTextDuringUndoHold(processID: processID,
+                sourceLayoutID: sourceLayoutID, text: text) ?? true
+        }
+        monitor.onConfirmedUndoHoldSourceChanged = { [weak self] sourceID in
+            guard let self, let held = self.undoHeldFocus else { return }
+            self.undoHeldFocus = (held.focus, sourceID)
+        }
+    }
+
+    private func allowsPredictionTextDuringUndoHold(processID: Int32,
+        sourceLayoutID: String, text: String) -> Bool {
+        guard let held = undoHeldFocus else { return true }
+        guard monitor.predictionIsWaitingForUndoBoundary,
+              held.focus.processID == processID,
+              held.sourceLayoutID == sourceLayoutID else {
+            undoHeldFocus = nil
+            return true // Existing source/PID reset handles the new input.
+        }
+        guard !platform.isSecure() else { return false }
+        let currentElement: AXUIElement?
+        if let focusedIdentity = platform.focusedIdentity {
+            currentElement = focusedIdentity(processID)
+        } else {
+            // Synthetic platform fixtures retain their existing focus seam.
+            currentElement = platform.captureFocus(processID)?.element
+        }
+        guard let currentElement else {
+            RuntimeDiagnostics.record(.autoFocusAnchorUnavailable)
+            if text.last?.isWhitespace == true {
+                // This packet closes the unknown current word. End the old hold
+                // without scoring any part of it; the next word must capture
+                // its own exact field and caret. A trailing partial word stays held.
+                undoHeldFocus = nil
+                monitor.resetPredictionContext()
+            }
+            return false
+        }
+        if !CFEqual(currentElement, held.focus.element) {
+            undoHeldFocus = nil
+            monitor.resetPredictionContext()
+            return true // The next snapshot captures this new field normally.
+        }
+        if text.contains(where: \.isWhitespace) { undoHeldFocus = nil }
+        return true
     }
 
     /// Reuse the already-loading immutable RU/EN corpus. SQLite may fault or
@@ -118,6 +163,7 @@ final class PredictionCoordinator {
     }
 
     func invalidate() {
+        if !monitor.predictionIsWaitingForUndoBoundary { undoHeldFocus = nil }
         debounce?.cancel(); debounce = nil
         if let pendingDebounceID {
             self.pendingDebounceID = nil
@@ -287,18 +333,6 @@ final class PredictionCoordinator {
             anchorFocus = nil
             pendingCaretAnchor = nil
             RuntimeDiagnostics.record(.autoFocusMismatch); return
-        }
-        if let oneShotSuppression {
-            if DispatchTime.now().uptimeNanoseconds > oneShotSuppression.expiresAt {
-                self.oneShotSuppression = nil
-            } else if oneShotSuppression.matches(focus: originalFocus,
-                sourceLayoutID: snapshot.sourceLayoutID,
-                original: proposal.originalSuffix, replacement: proposal.replacementSuffix) {
-                self.oneShotSuppression = nil
-                outcome = .suppressed
-                RuntimeDiagnostics.record(.autoProposalRejected)
-                return
-            }
         }
         guard var pending = pendingCaretAnchor, let currentSelection = originalFocus.selectionRange() else {
             RuntimeDiagnostics.record(.autoCaretUnavailable); return
@@ -504,10 +538,11 @@ final class PredictionCoordinator {
     /// and source. The notice contains no AX element or whole-field contents.
     func completeDoubleShiftAutomaticUndo(_ receipt: ConfirmedCorrectionReceipt) {
         recentAutomaticEdit = nil
-        oneShotSuppression = OneShotCorrectionSuppression(focus: receipt.focus,
+        let atBoundary = Self.undoIsAtBoundary(receipt.before)
+        monitor.beginPredictionWordAfterConfirmedUndo(processID: receipt.focus.processID,
             sourceLayoutID: receipt.sourceLayoutID,
-            original: receipt.notice.original, replacement: receipt.notice.replacement,
-            expiresAt: DispatchTime.now().uptimeNanoseconds + 2_000_000_000)
+            atBoundary: atBoundary)
+        undoHeldFocus = atBoundary ? nil : (receipt.focus, receipt.sourceLayoutID)
         onConfirmedAutomaticUndo?(receipt.notice)
         onAdaptiveAutomaticUndo?(receipt.notice.id, receipt.editReplacement, receipt.editOriginal,
             receipt.focus, adaptiveGenerationProvider())
@@ -591,19 +626,27 @@ final class PredictionCoordinator {
                field.focus.processID == focus.processID,
                CFEqual(field.focus.element, focus.element) {
                 monitor.adoptConfirmedManualField(field, resultLayoutID: receipt.sourceLayoutID)
+                let atBoundary = Self.undoIsAtBoundary(field.after)
+                monitor.beginPredictionWordAfterConfirmedUndo(processID: focus.processID,
+                    sourceLayoutID: receipt.sourceLayoutID,
+                    atBoundary: atBoundary)
+                undoHeldFocus = atBoundary ? nil : (field.focus, receipt.sourceLayoutID)
             } else {
                 monitor.markConverted()
             }
             converter.armManualRedoAfterConfirmedAutomaticUndo(receipt)
             recentAutomaticEdit = nil
-            oneShotSuppression = OneShotCorrectionSuppression(focus: focus,
-                sourceLayoutID: receipt.sourceLayoutID,
-                original: receipt.notice.original, replacement: receipt.notice.replacement,
-                expiresAt: DispatchTime.now().uptimeNanoseconds + 2_000_000_000)
             confirmedAdaptiveUndo = (receipt.notice.id, receipt.editReplacement,
                 receipt.editOriginal, receipt.focus)
             return .confirmed
         }
+    }
+
+    private static func undoIsAtBoundary(_ observation: NativeFieldObservation) -> Bool {
+        guard observation.selectionLength == 0,
+              let prefix = Range(NSRange(location: 0,
+                  length: observation.caretUTF16Location), in: observation.text) else { return false }
+        return observation.text[prefix].last?.isWhitespace == true
     }
 
     /// Compare changed tokens rather than the entire two-word editing suffix.

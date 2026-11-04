@@ -44,15 +44,15 @@
   },
   "protected_terms": {
     "source": "dictionaries/protected-terms-source.tsv",
-    "source_sha256": "6787b2cd600cd70ae44f3239979dedbb56bc36291f3763597b4cebcc259ba2e7",
+    "source_sha256": "d0619b3e1b238b3fa5c996a30956a2e9fb918b8aea77f8f5c84e8bff104df133",
     "output": "macos/Sources/RuSwitcher/Resources/protected-terms.tsv",
-    "output_sha256": "145f388d15aeccd3033374ec957be41d926851a58a0ecd19467cca414fda5d55",
-    "entries": 2434,
+    "output_sha256": "1d9b7b09343483f35ad51098f99d070f3cad02f6da6bb0139d599ad90d9fdb89",
+    "entries": 2435,
     "counts": {
       "ru": 872,
-      "en": 1562
+      "en": 1563
     },
-    "bytes": 45723,
+    "bytes": 45739,
     "provenance": "Project-curated public spellings of brands, technology, common given/family names, IT words and place names; no personal contacts or user text",
     "license": "CC0-1.0",
     "license_url": "https://creativecommons.org/publicdomain/zero/1.0/"

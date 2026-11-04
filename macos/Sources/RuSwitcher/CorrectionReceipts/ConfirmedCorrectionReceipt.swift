@@ -107,23 +107,3 @@ final class ConfirmedCorrectionReceipts {
         now >= receipt.issuedAt && now - receipt.issuedAt <= Self.lifetimeNanoseconds
     }
 }
-
-/// An undo suppresses just the next identical automatic proposal in that field.
-/// No preference or lexical learning is written from a transient undo.
-struct OneShotCorrectionSuppression {
-    let focus: CombinedShiftFocus
-    let sourceLayoutID: String
-    let original: String
-    let replacement: String
-    let expiresAt: UInt64
-
-    func matches(focus candidate: CombinedShiftFocus, sourceLayoutID: String,
-                 original: String, replacement: String) -> Bool {
-        self.focus.processID == candidate.processID
-            && CFEqual(self.focus.element, candidate.element)
-            && self.sourceLayoutID == sourceLayoutID
-            && self.original.utf16.elementsEqual(original.utf16)
-            && self.replacement.utf16.elementsEqual(replacement.utf16)
-            && DispatchTime.now().uptimeNanoseconds <= expiresAt
-    }
-}
