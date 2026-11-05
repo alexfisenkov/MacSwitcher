@@ -1088,7 +1088,8 @@ final class TextConverter {
     func convert(wordKeys: [TypedKey], prevWordKeys: [TypedKey], boundaryCount: Int,
                  passthroughSuffix: String = "", typedSuffix: String = "", context: CombinedShiftContext? = nil,
                  execution: CombinedShiftExecutionContext? = nil,
-                 inputBarrierIsActive: (() -> Bool)? = nil) -> Bool {
+                 inputBarrierIsActive: (() -> Bool)? = nil,
+                 fallbackSourceIsCurrent: (() -> Bool)? = nil) -> Bool {
         guard context == nil || execution != nil else {
             RuntimeDiagnostics.recordFailure(.wordContextUnavailable); return false
         }
@@ -1139,6 +1140,23 @@ final class TextConverter {
         let insert = pair.converted + passthroughSuffix + spaces
         let original = pair.original + originalSuffix + spaces
         if let execution {
+            if let inputBarrierIsActive, let fallbackSourceIsCurrent, let context {
+                guard let initial = execution.focus.initialSelection else {
+                    RuntimeDiagnostics.recordFailure(.wordNativeCaretMismatch)
+                    RuntimeDiagnostics.recordFailure(.wordNativeFirstSelectionMissing); return false
+                }
+                guard initial.length == 0 else {
+                    RuntimeDiagnostics.recordFailure(.wordNativeCaretMismatch)
+                    RuntimeDiagnostics.recordFailure(.wordNativeFirstSelectionNoncollapsed); return false
+                }
+                if initial.location < original.utf16.count {
+                    RuntimeDiagnostics.recordFailure(.wordNativeCaretMismatch)
+                    RuntimeDiagnostics.recordFailure(.wordNativeFirstCaretTooShort)
+                    guard fallbackSourceIsCurrent() else { return false }
+                    return convertVerifiedLastWord(context: context, execution: execution,
+                        inputBarrierIsActive: inputBarrierIsActive)
+                }
+            }
             let resultContext = context.map { DynamicKeyMapping.resultContext(for: insert, requested: $0) }
             guard performNativeBufferEdit(original: original, replacement: insert, execution: execution,
                 inputBarrierIsActive: inputBarrierIsActive, context: resultContext) else {
@@ -1184,7 +1202,12 @@ final class TextConverter {
         guard inputBarrierIsActive(), execution.isValid(timeout: nativeAXTimeout) else {
             RuntimeDiagnostics.recordFailure(.wordInputBarrierUnavailable); return false
         }
-        guard let initial = execution.focus.initialSelection, initial.length == 0 else {
+        guard let initial = execution.focus.initialSelection else {
+            RuntimeDiagnostics.recordFailure(.wordNativeFirstSelectionMissing)
+            RuntimeDiagnostics.recordFailure(.verifiedWordCaretUnavailable); return false
+        }
+        guard initial.length == 0 else {
+            RuntimeDiagnostics.recordFailure(.wordNativeFirstSelectionNoncollapsed)
             RuntimeDiagnostics.recordFailure(.verifiedWordCaretUnavailable); return false
         }
         guard let observed = wholeFieldObservation(focus: execution.focus) else {
@@ -1914,9 +1937,17 @@ final class TextConverter {
             guard inputBarrierIsActive() else {
                 RuntimeDiagnostics.recordFailure(.wordInputBarrierUnavailable); return false
             }
-            guard let caret = execution.focus.initialSelection, caret.length == 0,
-                  caret.location >= original.utf16.count else {
-                RuntimeDiagnostics.recordFailure(.wordNativeCaretMismatch); return false
+            guard let caret = execution.focus.initialSelection else {
+                RuntimeDiagnostics.recordFailure(.wordNativeCaretMismatch)
+                RuntimeDiagnostics.recordFailure(.wordNativeFirstSelectionMissing); return false
+            }
+            guard caret.length == 0 else {
+                RuntimeDiagnostics.recordFailure(.wordNativeCaretMismatch)
+                RuntimeDiagnostics.recordFailure(.wordNativeFirstSelectionNoncollapsed); return false
+            }
+            guard caret.location >= original.utf16.count else {
+                RuntimeDiagnostics.recordFailure(.wordNativeCaretMismatch)
+                RuntimeDiagnostics.recordFailure(.wordNativeFirstCaretTooShort); return false
             }
             guard let snapshot = CombinedShiftSelectionSnapshot(
                     range: CFRange(location: caret.location - original.utf16.count, length: original.utf16.count),

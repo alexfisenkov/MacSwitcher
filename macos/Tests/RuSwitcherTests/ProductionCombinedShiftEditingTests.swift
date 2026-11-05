@@ -23,6 +23,8 @@ final class ProductionCombinedShiftEditingTests: XCTestCase {
         var queuedText = 0
         var queuedSelection = 0
         var observedCount = 0
+        var substringCount = 0
+        var substringReadDelay: TimeInterval = 0
         var subrole: (AXError, AnyObject?) = (.attributeUnsupported, nil)
         var queuedLayoutTargets: [String] = []
 
@@ -39,6 +41,8 @@ final class ProductionCombinedShiftEditingTests: XCTestCase {
 
         func substring(_ range: CFRange) -> String? {
             observedCount += 1
+            substringCount += 1
+            if substringReadDelay > 0 { Thread.sleep(forTimeInterval: substringReadDelay) }
             let units = Array(text.utf16)
             guard range.location >= 0, range.length >= 0, range.location <= units.count,
                   range.length <= units.count - range.location else { return nil }
