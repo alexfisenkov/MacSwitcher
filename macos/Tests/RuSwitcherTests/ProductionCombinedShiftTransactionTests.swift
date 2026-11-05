@@ -85,10 +85,11 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
             }
         }
 
-        func request(_ direction: CombinedShiftContext) throws -> CombinedShiftRequest {
+        func request(_ direction: CombinedShiftContext,
+                     firstFocus: CombinedShiftFocus? = nil) throws -> CombinedShiftRequest {
             let contexts = [enToRu.sourceLayoutID: enToRu, ruToEn.sourceLayoutID: ruToEn]
             _ = try XCTUnwrap(monitor.snapshotCombinedShiftRequest(action: .switchLayout(direction),
-                frontProcessID: frontField.pid, focus: frontField.focus(),
+                frontProcessID: frontField.pid, focus: firstFocus ?? frontField.focus(),
                 contextForSource: { contexts[$0] }))
             return try XCTUnwrap(monitor.snapshotCombinedShiftRequest(action: .convert(direction),
                 frontProcessID: frontField.pid, focus: frontField.focus(),
@@ -1027,6 +1028,171 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
             .confirmed(resultID: rig.enToRu.targetLayoutID))
         XCTAssertEqual(field.text, "привет")
         XCTAssertEqual(field.queuedText, 1)
+    }
+
+    @MainActor
+    func testStaleNonemptyWordHistoryUsesActualAnchoredLastWordBeforeAnyEdit() throws {
+        let field = Field(pid: 5193, text: "ghbd")
+        let rig = try Rig(fields: [field])
+        try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+        rig.sourceID = rig.enToRu.targetLayoutID
+        let request = try rig.request(rig.enToRu)
+        XCTAssertFalse(request.wordKeys.isEmpty)
+        XCTAssertEqual(rig.run(request, direction: rig.enToRu).outcome,
+            .confirmed(resultID: rig.enToRu.targetLayoutID))
+        XCTAssertEqual(field.text, "прив")
+        XCTAssertEqual(field.queuedText, 1)
+        XCTAssertEqual(rig.sourceRequests, 1)
+
+        rig.monitor.markConverted()
+        rig.sourceID = rig.ruToEn.targetLayoutID
+        XCTAssertEqual(rig.run(try rig.request(rig.ruToEn), direction: rig.ruToEn).outcome,
+            .confirmed(resultID: rig.ruToEn.targetLayoutID))
+        XCTAssertEqual(field.text, "ghbd")
+        XCTAssertEqual(field.queuedText, 2)
+
+        rig.monitor.markConverted()
+        rig.sourceID = rig.enToRu.targetLayoutID
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome,
+            .confirmed(resultID: rig.enToRu.targetLayoutID))
+        XCTAssertEqual(field.text, "прив")
+        XCTAssertEqual(field.queuedText, 3)
+
+        rig.monitor.markConverted()
+        rig.sourceID = rig.ruToEn.targetLayoutID
+        XCTAssertEqual(rig.run(try rig.request(rig.ruToEn), direction: rig.ruToEn).outcome,
+            .confirmed(resultID: rig.ruToEn.targetLayoutID))
+        XCTAssertEqual(field.text, "ghbd")
+        XCTAssertEqual(field.queuedText, 4)
+
+        field.type(" ")
+        rig.monitor.handleKeyDown(keyCode: KC.space, flags: [],
+            renderedSourceLayoutID: rig.enToRu.sourceLayoutID)
+        field.type("ghbd")
+        try rig.type("ghbd", source: rig.enToRu.sourceLayoutID)
+        rig.sourceID = rig.enToRu.targetLayoutID
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome,
+            .confirmed(resultID: rig.enToRu.targetLayoutID))
+        XCTAssertEqual(field.text, "ghbd прив")
+        XCTAssertEqual(field.queuedText, 5)
+    }
+
+    @MainActor
+    func testStaleWordHistoryCannotWriteWithoutAnchoredWholeField() throws {
+        let field = Field(pid: 5194, text: "ghbd")
+        let rig = try Rig(fields: [field])
+        try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+        rig.sourceID = rig.enToRu.targetLayoutID
+        rig.wholeObservationAvailable = false
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome, .stopped)
+        XCTAssertEqual(field.text, "ghbd")
+        XCTAssertEqual(field.queuedText, 0)
+        XCTAssertEqual(rig.sourceRequests, 0)
+    }
+
+    @MainActor
+    func testStaleWordFallbackRefusesMissingFirstCaretAndChangedCaret() throws {
+        let field = Field(pid: 5195, text: "ghbd")
+        let rig = try Rig(fields: [field])
+        try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+        rig.sourceID = rig.enToRu.targetLayoutID
+        let captured = field.focus()
+        let noCaret = CombinedShiftFocus(processID: captured.processID, element: captured.element,
+            initialSelection: nil, fieldBoundary: captured.fieldBoundary)
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu, firstFocus: noCaret),
+            direction: rig.enToRu).outcome, .stopped)
+        XCTAssertEqual(field.queuedText, 0)
+
+        let request = try rig.request(rig.enToRu)
+        field.caret = 3
+        XCTAssertEqual(rig.run(request, direction: rig.enToRu).outcome, .stopped)
+        XCTAssertEqual(field.text, "ghbd")
+        XCTAssertEqual(field.queuedText, 0)
+        XCTAssertEqual(rig.sourceRequests, 0)
+    }
+
+    @MainActor
+    func testStaleWordFallbackRefusesWrongSourceSecureReadOnlyAndUnavailableValue() throws {
+        for gate in 0..<4 {
+            let field = Field(pid: Int32(5200 + gate), text: "ghbd")
+            let rig = try Rig(fields: [field])
+            try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+            rig.sourceID = rig.enToRu.targetLayoutID
+            let request = try rig.request(rig.enToRu)
+            switch gate {
+            case 0: rig.sourceID = rig.enToRu.sourceLayoutID
+            case 1: field.secure = true
+            case 2: field.readOnly = true
+            default: rig.wholeObservationAvailable = false
+            }
+            XCTAssertEqual(rig.run(request, direction: rig.enToRu).outcome, .stopped)
+            XCTAssertEqual(field.text, "ghbd")
+            XCTAssertEqual(field.queuedText, 0)
+            XCTAssertEqual(rig.sourceRequests, 0)
+        }
+    }
+
+    @MainActor
+    func testStaleWordFallbackNeverRetriesAfterUnknownMutation() throws {
+        let field = Field(pid: 5205, text: "ghbd")
+        field.dropInsertion = true
+        let rig = try Rig(fields: [field])
+        try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+        rig.sourceID = rig.enToRu.targetLayoutID
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome, .stopped)
+        XCTAssertEqual(field.queuedText, 1)
+        XCTAssertTrue(rig.converter.hasUnconfirmedAXEdit(in: field.focus()))
+        rig.converter.clearState()
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome, .stopped)
+        XCTAssertEqual(field.queuedText, 1)
+    }
+
+    @MainActor
+    func testStaleWordFallbackRefusesChangedRevisionAndProcess() throws {
+        let first = Field(pid: 5206, text: "ghbd")
+        let other = Field(pid: 5207, text: "ghbd")
+        let rig = try Rig(fields: [first, other])
+        try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+        rig.sourceID = rig.enToRu.targetLayoutID
+        let staleRevision = try rig.request(rig.enToRu)
+        rig.monitor.handleKeyDown(keyCode: KC.space, flags: [],
+            renderedSourceLayoutID: rig.enToRu.sourceLayoutID)
+        XCTAssertEqual(rig.run(staleRevision, direction: rig.enToRu).outcome, .stopped)
+        XCTAssertEqual(first.queuedText, 0)
+
+        let wrongProcess = try rig.request(rig.enToRu)
+        rig.frontField = other
+        XCTAssertEqual(rig.run(wrongProcess, direction: rig.enToRu).outcome, .stopped)
+        XCTAssertEqual(first.text, "ghbd")
+        XCTAssertEqual(other.text, "ghbd")
+        XCTAssertEqual(first.queuedText + other.queuedText, 0)
+        XCTAssertEqual(rig.sourceRequests, 0)
+    }
+
+    @MainActor
+    func testValidBufferDoesNotSpendLeaseOnExtraAXSuffixProbe() throws {
+        let field = Field(pid: 5208, text: "ghbdtn")
+        field.substringReadDelay = 0.060
+        let rig = try Rig(fields: [field])
+        try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+        rig.sourceID = rig.enToRu.targetLayoutID
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome,
+            .confirmed(resultID: rig.enToRu.targetLayoutID))
+        XCTAssertEqual(field.text, "привет")
+        XCTAssertEqual(field.queuedText, 1)
+        XCTAssertEqual(field.substringCount, 0)
+    }
+
+    @MainActor
+    func testSameLengthStaleBufferSuffixStillRefusesWithoutWriting() throws {
+        let field = Field(pid: 5209, text: "ghbdxx")
+        let rig = try Rig(fields: [field])
+        try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+        rig.sourceID = rig.enToRu.targetLayoutID
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome, .stopped)
+        XCTAssertEqual(field.text, "ghbdxx")
+        XCTAssertEqual(field.queuedText, 0)
+        XCTAssertEqual(rig.sourceRequests, 0)
     }
 
     @MainActor

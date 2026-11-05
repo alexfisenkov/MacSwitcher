@@ -80,6 +80,7 @@ enum RuntimeDiagnosticFailureReason: String, CaseIterable, Sendable {
     case wordContextUnavailable, wordInputBarrierUnavailable, wordBufferUnavailable
     case wordMappingUnavailable, wordConversionBusy, wordMappingNoChange
     case wordNativeStateBlocked, wordNativeCaretMismatch, wordNativeSnapshotInvalid
+    case wordNativeFirstSelectionMissing, wordNativeFirstSelectionNoncollapsed, wordNativeFirstCaretTooShort
     case wordNativeEditRefused
     case verifiedWordStateBlocked, verifiedWordCaretUnavailable, verifiedWordFieldUnavailable
     case verifiedWordFieldMismatch, verifiedWordTrailingSpaceLimit, verifiedWordNoFinalLetter
