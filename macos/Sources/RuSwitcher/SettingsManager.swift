@@ -56,6 +56,7 @@ final class SettingsManager: @unchecked Sendable {
         static let deniedWords = "com.ruswitcher.deniedWords"
         static let alwaysConvertWords = "com.ruswitcher.alwaysConvertWords"
         static let adaptiveLearning = "com.macswitcher.adaptiveLearning"
+        static let automaticRecoveryArchive = "com.macswitcher.automaticRecoveryArchive"
     }
 
     init(defaults: UserDefaults, combinedShiftDefault: Bool = Bundle.main.object(forInfoDictionaryKey: "LocalCombinedShiftDefault") as? Bool ?? true,
@@ -71,6 +72,12 @@ final class SettingsManager: @unchecked Sendable {
     var adaptiveLearningEnabled: Bool {
         get { defaults.object(forKey: Keys.adaptiveLearning) as? Bool ?? true }
         set { defaults.set(newValue, forKey: Keys.adaptiveLearning) }
+    }
+
+    /// Explicit opt-in: full originals after uncertain edits, in local Recovery only.
+    var automaticRecoveryArchiveEnabled: Bool {
+        get { defaults.object(forKey: Keys.automaticRecoveryArchive) as? Bool ?? false }
+        set { defaults.set(newValue, forKey: Keys.automaticRecoveryArchive) }
     }
 
     var autoSwitchEnabled: Bool {

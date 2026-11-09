@@ -7,6 +7,29 @@ import XCTest
 final class ProductionCombinedShiftTransactionTests: XCTestCase {
     typealias Field = ProductionCombinedShiftEditingTests.Field
 
+    private final class ArchiveProbe: @unchecked Sendable {
+        private let lock = NSLock()
+        private var state = (enabled: false, lease: false, fail: false, calls: 0, sawLease: false)
+        func configure(enabled: Bool? = nil, lease: Bool? = nil, fail: Bool? = nil) {
+            lock.lock(); defer { lock.unlock() }
+            if let enabled { state.enabled = enabled }
+            if let lease { state.lease = lease }
+            if let fail { state.fail = fail }
+        }
+        var enabled: Bool { lock.lock(); defer { lock.unlock() }; return state.enabled }
+        var calls: Int { lock.lock(); defer { lock.unlock() }; return state.calls }
+        var sawLease: Bool { lock.lock(); defer { lock.unlock() }; return state.sawLease }
+        func save(_ sources: [RecoveryArchive.Source], in directory: URL) throws -> RecoveryArchive.Receipt {
+            lock.lock()
+            state.calls += 1
+            state.sawLease = state.sawLease || state.lease
+            let fail = state.fail
+            lock.unlock()
+            if fail { throw RecoveryArchive.Failure.syncFailed }
+            return try RecoveryArchive.saveVerified(sources, in: directory)
+        }
+    }
+
     @MainActor
     private final class Rig {
         let monitor = KeyboardMonitor()
@@ -393,6 +416,277 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
     }
 
     @MainActor
+    func testVerifiedArchiveReleasesOnlyBackedRAMCapacityAndKeepsExactFieldLocked() throws {
+        let fields = (0..<12).map { Field(pid: 5700 + Int32($0), text: "ghbdtn") }
+        fields.forEach { $0.dropInsertion = true }
+        let rig = try Rig(fields: fields)
+        for field in fields.prefix(8) {
+            rig.frontField = field
+            rig.monitor.resetCombinedShift()
+            try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+            rig.sourceID = rig.enToRu.targetLayoutID
+            XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome, .stopped)
+            XCTAssertEqual(field.queuedText, 1)
+        }
+        XCTAssertEqual(rig.converter.unconfirmedOriginals.count, 8)
+        rig.frontField = fields[8]
+        rig.monitor.resetCombinedShift()
+        try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+        rig.sourceID = rig.enToRu.targetLayoutID
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome, .stopped)
+        XCTAssertEqual(fields[8].queuedText, 0)
+
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let originals = rig.converter.unconfirmedOriginals.map { RecoveryArchive.Source(id: $0.id, text: $0.text) }
+        XCTAssertThrowsError(try RecoveryArchive.saveVerified(originals, in: directory,
+            syncer: { _, isDirectory in
+                if !isDirectory { throw RecoveryArchive.Failure.syncFailed }
+            }))
+        XCTAssertEqual(rig.converter.unconfirmedOriginals.count, 8)
+        XCTAssertEqual(rig.converter.archivedOriginals.count, 0)
+        let receipt = try RecoveryArchive.saveVerified(originals, in: directory)
+        XCTAssertTrue(rig.converter.markArchived(receipt))
+        let oldest = try XCTUnwrap(rig.converter.backedOriginals.first)
+        XCTAssertEqual(try RecoveryArchive.original(id: oldest.id, receipt: oldest.archive), oldest.text)
+        XCTAssertTrue(rig.converter.evictValidatedBacking(id: oldest.id, receipt: oldest.archive))
+        let unrelated = try RecoveryArchive.saveVerified([.init(id: UUID(), text: "synthetic")], in: directory)
+        XCTAssertFalse(rig.converter.markArchived(unrelated))
+        rig.converter.clearState()
+        XCTAssertTrue(rig.converter.hasUnconfirmedAXEdit(in: fields[0].focus()))
+        rig.frontField = fields[8]
+        rig.monitor.resetCombinedShift()
+        try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+        rig.sourceID = rig.enToRu.targetLayoutID
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome, .stopped)
+        XCTAssertEqual(fields[8].queuedText, 1)
+        XCTAssertEqual(rig.converter.unconfirmedOriginals.count, 8)
+        XCTAssertEqual(rig.converter.archivedOriginals.count, 1)
+        XCTAssertEqual(try RecoveryArchive.original(id: rig.converter.archivedOriginals[0].id,
+            receipt: rig.converter.archivedOriginals[0].archive), "ghbdtn")
+        rig.frontField = fields[0]
+        rig.monitor.resetCombinedShift()
+        try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+        rig.sourceID = rig.enToRu.targetLayoutID
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome, .stopped)
+        XCTAssertEqual(fields[0].queuedText, 1)
+        for field in fields[9...] {
+            let backed = try XCTUnwrap(rig.converter.backedOriginals.first)
+            XCTAssertEqual(try RecoveryArchive.original(id: backed.id, receipt: backed.archive), backed.text)
+            XCTAssertTrue(rig.converter.evictValidatedBacking(id: backed.id, receipt: backed.archive))
+            rig.frontField = field
+            rig.monitor.resetCombinedShift()
+            try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+            rig.sourceID = rig.enToRu.targetLayoutID
+            XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome, .stopped)
+            XCTAssertEqual(field.queuedText, 1)
+        }
+        XCTAssertEqual(rig.converter.unconfirmedOriginals.count, 8)
+        XCTAssertEqual(rig.converter.archivedOriginals.count, 4)
+        XCTAssertEqual(Set(rig.converter.archivedOriginals.map(\.id)).count, 4)
+        for original in rig.converter.archivedOriginals {
+            XCTAssertEqual(try RecoveryArchive.original(id: original.id, receipt: original.archive), "ghbdtn")
+        }
+        rig.converter.releaseArchivedLocks(forTerminatedProcessID: fields[0].pid)
+        XCTAssertEqual(rig.converter.archivedOriginals.count, 3)
+        XCTAssertFalse(rig.converter.hasUnconfirmedAXEdit(in: fields[0].focus()))
+        XCTAssertEqual(try RecoveryArchive.original(id: originals[0].id, receipt: receipt), "ghbdtn")
+    }
+
+    @MainActor
+    func testAutomaticArchiveRunsAfterLeaseCoalescesAndPreservesRAMOnFailure() async throws {
+        let field = Field(pid: 5720, text: "ghbdtn")
+        let later = Field(pid: 5723, text: "ghbdtn")
+        field.dropInsertion = true
+        later.dropInsertion = true
+        let rig = try Rig(fields: [field, later])
+        try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+        rig.sourceID = rig.enToRu.targetLayoutID
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome, .stopped)
+        XCTAssertEqual(rig.converter.unbackedOriginals.count, 1)
+
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let probe = ArchiveProbe()
+        let controller = RecoveryArchiveController(converter: rig.converter,
+            enabled: { probe.enabled }, directory: { directory }, save: { try probe.save($0, in: $1) })
+        controller.scheduleAutomaticAfterCurrentEvent()
+        await Task.yield()
+        XCTAssertEqual(probe.calls, 0, "Default-off must not export")
+
+        probe.configure(enabled: true, lease: true, fail: true)
+        let failed = expectation(description: "automatic export failure")
+        controller.onFailure = { manual, _ in XCTAssertFalse(manual); failed.fulfill() }
+        controller.scheduleAutomaticAfterCurrentEvent()
+        controller.scheduleAutomaticAfterCurrentEvent()
+        probe.configure(lease: false)
+        await fulfillment(of: [failed], timeout: 3)
+        XCTAssertEqual(probe.calls, 1, "Duplicate pending requests must not create duplicate exports")
+        XCTAssertFalse(probe.sawLease, "Archive I/O must start after the input lease")
+        XCTAssertEqual(rig.converter.unbackedOriginals.count, 1)
+
+        probe.configure(fail: false)
+        let saved = expectation(description: "explicit retry saves")
+        controller.onSaved = { saved.fulfill() }
+        controller.requestManual() // bypass automatic failure backoff
+        await fulfillment(of: [saved], timeout: 3)
+        XCTAssertEqual(rig.converter.unbackedOriginals.count, 0)
+        XCTAssertEqual(rig.converter.unconfirmedOriginals.count, 1,
+            "A newly backed field remains available for explicit reconversion")
+        probe.configure(enabled: false)
+        rig.frontField = later
+        rig.monitor.resetCombinedShift()
+        try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+        rig.sourceID = rig.enToRu.targetLayoutID
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome, .stopped)
+        controller.scheduleAutomaticAfterCurrentEvent()
+        await Task.yield()
+        XCTAssertEqual(probe.calls, 2, "Opt-out prevents new automatic exports")
+        XCTAssertEqual(rig.converter.unbackedOriginals.count, 1)
+    }
+
+    @MainActor
+    func testAutomaticArchiveSavesUnknownAddedDuringInFlightExport() async throws {
+        let fields = [Field(pid: 5721, text: "ghbdtn"), Field(pid: 5722, text: "ghbdtn")]
+        fields.forEach { $0.dropInsertion = true }
+        let rig = try Rig(fields: fields)
+        rig.frontField = fields[0]
+        try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+        rig.sourceID = rig.enToRu.targetLayoutID
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome, .stopped)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let probe = ArchiveProbe()
+        probe.configure(enabled: true)
+        let entered = expectation(description: "first archive started")
+        let completed = expectation(description: "both archives completed")
+        completed.expectedFulfillmentCount = 2
+        let gate = DispatchSemaphore(value: 0)
+        defer { gate.signal() }
+        let controller = RecoveryArchiveController(converter: rig.converter,
+            enabled: { probe.enabled }, directory: { directory }, save: { sources, url in
+                if probe.calls == 0 {
+                    entered.fulfill()
+                    _ = gate.wait(timeout: .now() + 3)
+                }
+                return try probe.save(sources, in: url)
+            })
+        controller.onSaved = { completed.fulfill() }
+        controller.scheduleAutomaticAfterCurrentEvent()
+        await fulfillment(of: [entered], timeout: 3)
+        rig.frontField = fields[1]
+        rig.monitor.resetCombinedShift()
+        try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+        rig.sourceID = rig.enToRu.targetLayoutID
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome, .stopped)
+        controller.scheduleAutomaticAfterCurrentEvent()
+        gate.signal()
+        await fulfillment(of: [completed], timeout: 3)
+        XCTAssertEqual(probe.calls, 2)
+        XCTAssertTrue(rig.converter.unbackedOriginals.isEmpty)
+        XCTAssertEqual(rig.converter.unconfirmedOriginals.count, 2)
+    }
+
+    @MainActor
+    func testAutomaticArchiveRetriesOnlyOnceAndOptOutCancelsPendingRetry() async throws {
+        let field = Field(pid: 5724, text: "ghbdtn")
+        field.dropInsertion = true
+        let rig = try Rig(fields: [field])
+        try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+        rig.sourceID = rig.enToRu.targetLayoutID
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome, .stopped)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let probe = ArchiveProbe()
+        probe.configure(enabled: true, fail: true)
+        let retried = expectation(description: "one automatic retry")
+        retried.expectedFulfillmentCount = 2
+        let controller = RecoveryArchiveController(converter: rig.converter,
+            enabled: { probe.enabled }, directory: { directory },
+            save: { try probe.save($0, in: $1) }, retryDelay: 0.03)
+        controller.onFailure = { _, _ in retried.fulfill() }
+        controller.requestAutomatic()
+        await fulfillment(of: [retried], timeout: 3)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(probe.calls, 2)
+        XCTAssertEqual(rig.converter.unbackedOriginals.count, 1)
+
+        let cancelProbe = ArchiveProbe()
+        cancelProbe.configure(enabled: true, fail: true)
+        let firstFailure = expectation(description: "failure before opt-out")
+        let cancellation = RecoveryArchiveController(converter: rig.converter,
+            enabled: { cancelProbe.enabled }, directory: { directory },
+            save: { try cancelProbe.save($0, in: $1) }, retryDelay: 0.03)
+        cancellation.onFailure = { _, _ in firstFailure.fulfill() }
+        cancellation.requestAutomatic()
+        await fulfillment(of: [firstFailure], timeout: 3)
+        cancelProbe.configure(enabled: false)
+        cancellation.settingChanged(false)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(cancelProbe.calls, 1)
+    }
+
+    @MainActor
+    func testControllerPreparesHeadroomOnlyAfterValidatingArchiveOffInputPath() async throws {
+        let fields = (0..<8).map { Field(pid: 5740 + Int32($0), text: "ghbdtn") }
+        fields.forEach { $0.dropInsertion = true }
+        let rig = try Rig(fields: fields)
+        for field in fields {
+            rig.frontField = field
+            rig.monitor.resetCombinedShift()
+            try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+            rig.sourceID = rig.enToRu.targetLayoutID
+            XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome, .stopped)
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let prepared = expectation(description: "verified backed headroom")
+        let controller = RecoveryArchiveController(converter: rig.converter,
+            enabled: { false }, directory: { directory })
+        controller.onHeadroomPrepared = { prepared.fulfill() }
+        controller.requestManual()
+        await fulfillment(of: [prepared], timeout: 3)
+        XCTAssertEqual(rig.converter.unconfirmedOriginals.count, 7)
+        XCTAssertEqual(rig.converter.archivedOriginals.count, 1)
+        XCTAssertTrue(rig.converter.hasUnconfirmedAXEdit(in: fields[0].focus()))
+        let alreadySaved = expectation(description: "existing archive validated without reexport")
+        controller.onSaved = { alreadySaved.fulfill() }
+        controller.requestManual()
+        await fulfillment(of: [alreadySaved], timeout: 3)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path).count, 1)
+    }
+
+    @MainActor
+    func testMissingArchiveRevokesBackingButNeverDropsOnlyRAMOriginal() async throws {
+        let fields = (0..<8).map { Field(pid: 5760 + Int32($0), text: "ghbdtn") }
+        fields.forEach { $0.dropInsertion = true }
+        let rig = try Rig(fields: fields)
+        for field in fields {
+            rig.frontField = field
+            rig.monitor.resetCombinedShift()
+            try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+            rig.sourceID = rig.enToRu.targetLayoutID
+            XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome, .stopped)
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let originals = rig.converter.unconfirmedOriginals.map { RecoveryArchive.Source(id: $0.id, text: $0.text) }
+        let receipt = try RecoveryArchive.saveVerified(originals, in: directory)
+        XCTAssertTrue(rig.converter.markArchived(receipt))
+        try FileManager.default.removeItem(at: receipt.file)
+        let failed = expectation(description: "manual resave fails")
+        let controller = RecoveryArchiveController(converter: rig.converter,
+            enabled: { false }, directory: { directory },
+            save: { _, _ in throw RecoveryArchive.Failure.writeFailed })
+        controller.onFailure = { manual, _ in XCTAssertTrue(manual); failed.fulfill() }
+        controller.requestManual()
+        await fulfillment(of: [failed], timeout: 3)
+        XCTAssertEqual(rig.converter.unconfirmedOriginals.count, 8)
+        XCTAssertEqual(rig.converter.unbackedOriginals.count, 8)
+        XCTAssertTrue(rig.converter.archivedOriginals.isEmpty)
+    }
+
+    @MainActor
     func testUnknownObservedResultRequiresExplicitExactSelectionThenFreshWordWorks() throws {
         let field = Field(pid: 5113, text: "ghbdtn")
         let rig = try Rig(fields: [field])
@@ -404,6 +698,13 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         XCTAssertEqual(rig.converter.unconfirmedOriginals.first?.text, "ghbdtn")
         XCTAssertEqual(field.queuedText, 1)
         XCTAssertEqual(field.text, "привет", "Unicode arrived; only the caret ACK was unavailable")
+
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let originals = rig.converter.unconfirmedOriginals.map { RecoveryArchive.Source(id: $0.id, text: $0.text) }
+        XCTAssertTrue(rig.converter.markArchived(try RecoveryArchive.saveVerified(originals, in: directory)))
+        XCTAssertEqual(rig.converter.unconfirmedOriginals.count, 1,
+            "A backed fresh field must keep its original in RAM for explicit reconversion")
 
         // A fresh observation now reports the actual result/caret. This does
         // not by itself authorize recovery from a collapsed caret.

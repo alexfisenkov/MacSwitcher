@@ -306,7 +306,7 @@ final class TextConverter {
     private var lastSelectionRange: CFRange?
     private var lastWasAXEdit = false
     private struct UnconfirmedAXEdit {
-        let id = UUID()
+        let id: UUID
         let focus: CombinedShiftFocus
         let original: CombinedShiftSelectionSnapshot
         let replacement: String
@@ -314,9 +314,12 @@ final class TextConverter {
         let predictionLayouts: (source: String, target: String)?
         let requiresExplicitSelection: Bool
         let lastNativeObservation: NativeFieldObservation?
+        var archive: RecoveryArchive.Receipt?
         init(focus: CombinedShiftFocus, original: CombinedShiftSelectionSnapshot, replacement: String,
              layoutContext: CombinedShiftContext?, predictionLayouts: (source: String, target: String)?,
-             requiresExplicitSelection: Bool = false, lastNativeObservation: NativeFieldObservation? = nil) {
+             requiresExplicitSelection: Bool = false, lastNativeObservation: NativeFieldObservation? = nil,
+             id: UUID = UUID(), archive: RecoveryArchive.Receipt? = nil) {
+            self.id = id; self.archive = archive
             self.focus = focus; self.original = original; self.replacement = replacement
             self.layoutContext = layoutContext; self.predictionLayouts = predictionLayouts
             self.requiresExplicitSelection = requiresExplicitSelection
@@ -327,15 +330,24 @@ final class TextConverter {
     // erase an ambiguous write's source. Only an explicit matching-field manual
     // gesture may reconcile/recover it; automatic editing remains blocked.
     private var unconfirmedAXEdits: [UnconfirmedAXEdit] = []
+    private struct ArchivedAXField {
+        let focus: CombinedShiftFocus
+        let id: UUID
+        let archive: RecoveryArchive.Receipt
+    }
+    // Text-free exact-field locks. A backed original may leave RAM, never its
+    // quarantine. These locks are intentionally independent of clearState().
+    private var archivedAXFields: [ArchivedAXField] = []
+    enum RecoveryCapacityReason { case unsaved, archiveLimit }
+    var onRecoveryCapacityBlocked: ((RecoveryCapacityReason) -> Void)?
+    var onUnconfirmedSourceRetained: (() -> Void)?
     struct RecoveryOriginal {
         let id: UUID
         let text: String
     }
     private static let maximumUnconfirmedFields = 8
     private static let maximumRecoveryUTF16Units = 1_048_576
-    private func canRetainAXSource(original: String, replacement: String) -> Bool {
-        canRetainRecoveryUnits(original.utf16.count + replacement.utf16.count)
-    }
+    private static let maximumArchivedFieldLocks = 256
     private func canRetainRecoveryUnits(_ proposed: Int, replacing focus: CombinedShiftFocus? = nil) -> Bool {
         let retained = unconfirmedAXEdits.reduce(0) { total, edit in
             if let focus, edit.focus.processID == focus.processID, CFEqual(edit.focus.element, focus.element) { return total }
@@ -343,16 +355,94 @@ final class TextConverter {
         }
         return proposed >= 0 && proposed <= Self.maximumRecoveryUTF16Units - retained
     }
-    var hasUnconfirmedAXEdit: Bool { !unconfirmedAXEdits.isEmpty }
-    /// Available only to an explicit menu action. Never automatically copied,
-    /// logged or persisted; survives clearState and oversized native recovery.
+    var hasUnconfirmedAXEdit: Bool { !unconfirmedAXEdits.isEmpty || !archivedAXFields.isEmpty }
+    var hasRAMUnconfirmedAXEdit: Bool { !unconfirmedAXEdits.isEmpty }
+    /// Available to an explicit menu action and export. Never logged or copied
+    /// automatically; survives clearState and oversized native recovery.
     var unconfirmedOriginals: [RecoveryOriginal] { unconfirmedAXEdits.map { RecoveryOriginal(id: $0.id, text: $0.original.text) } }
+    var unbackedOriginals: [RecoveryOriginal] {
+        unconfirmedAXEdits.filter { $0.archive == nil }.map { RecoveryOriginal(id: $0.id, text: $0.original.text) }
+    }
+    struct BackedOriginal: Sendable {
+        let id: UUID
+        let text: String
+        let archive: RecoveryArchive.Receipt
+    }
+    var backedOriginals: [BackedOriginal] {
+        unconfirmedAXEdits.compactMap { edit in
+            edit.archive.map { BackedOriginal(id: edit.id, text: edit.original.text, archive: $0) }
+        }
+    }
+    var needsRecoveryHeadroom: Bool {
+        let retained = unconfirmedAXEdits.reduce(0) { $0 + $1.original.text.utf16.count + $1.replacement.utf16.count }
+        return unconfirmedAXEdits.count >= Self.maximumUnconfirmedFields ||
+            retained > Self.maximumRecoveryUTF16Units - NativeFieldEditPlan.maximumFieldUnits * 2
+    }
+    func invalidateBacking(id: UUID, receipt: RecoveryArchive.Receipt) {
+        guard let index = unconfirmedAXEdits.firstIndex(where: { $0.id == id &&
+            $0.archive?.file == receipt.file && $0.archive?.payloadDigest == receipt.payloadDigest }) else { return }
+        unconfirmedAXEdits[index].archive = nil
+    }
+    func evictValidatedBacking(id: UUID, receipt: RecoveryArchive.Receipt) -> Bool {
+        guard needsRecoveryHeadroom,
+              archivedAXFields.count < Self.maximumArchivedFieldLocks,
+              let index = unconfirmedAXEdits.firstIndex(where: { $0.id == id &&
+                  $0.archive?.file == receipt.file && $0.archive?.payloadDigest == receipt.payloadDigest }) else { return false }
+        let edit = unconfirmedAXEdits.remove(at: index)
+        archivedAXFields.append(ArchivedAXField(focus: edit.focus, id: edit.id, archive: receipt))
+        return true
+    }
+    struct ArchivedRecoveryOriginal {
+        let id: UUID
+        let archive: RecoveryArchive.Receipt
+    }
+    var archivedOriginals: [ArchivedRecoveryOriginal] {
+        archivedAXFields.map { ArchivedRecoveryOriginal(id: $0.id, archive: $0.archive) }
+    }
+    func releaseArchivedLocks(forTerminatedProcessID processID: pid_t) {
+        archivedAXFields.removeAll { $0.focus.processID == processID }
+    }
+    func markArchived(_ receipt: RecoveryArchive.Receipt) -> Bool {
+        guard !receipt.digests.isEmpty,
+              receipt.digests.allSatisfy({ entry in
+                  unconfirmedAXEdits.contains { $0.id == entry.key && RecoveryArchive.digest($0.original.text) == entry.value }
+              })
+        else { return false }
+        for index in unconfirmedAXEdits.indices where receipt.digests[unconfirmedAXEdits[index].id] != nil {
+            unconfirmedAXEdits[index].archive = receipt
+        }
+        return true
+    }
     func hasUnconfirmedAXEdit(in focus: CombinedShiftFocus) -> Bool {
-        unconfirmedAXEdits.contains { $0.focus.processID == focus.processID && CFEqual($0.focus.element, focus.element) }
+        let blocked = unconfirmedAXEdits.contains { $0.focus.processID == focus.processID && CFEqual($0.focus.element, focus.element) }
+            || archivedAXFields.contains { $0.focus.processID == focus.processID && CFEqual($0.focus.element, focus.element) }
+        if blocked { RuntimeDiagnostics.record(.recoverySameFieldBlocked) }
+        return blocked
+    }
+    private func ensureRecoveryCapacity(_ proposed: Int, replacing focus: CombinedShiftFocus? = nil) -> Bool {
+        guard proposed >= 0, proposed <= Self.maximumRecoveryUTF16Units else {
+            RuntimeDiagnostics.record(.recoveryUnitsFull)
+            onRecoveryCapacityBlocked?(.unsaved)
+            return false
+        }
+        if focus == nil && unconfirmedAXEdits.count >= Self.maximumUnconfirmedFields {
+            RuntimeDiagnostics.record(archivedAXFields.count >= Self.maximumArchivedFieldLocks
+                ? .recoveryArchiveLimit : .recoverySlotsFull)
+            onRecoveryCapacityBlocked?(archivedAXFields.count >= Self.maximumArchivedFieldLocks
+                ? .archiveLimit : .unsaved)
+            return false
+        }
+        guard canRetainRecoveryUnits(proposed, replacing: focus) else {
+            RuntimeDiagnostics.record(.recoveryUnitsFull)
+            onRecoveryCapacityBlocked?(.unsaved)
+            return false
+        }
+        return true
     }
     private func retainUnconfirmed(_ edit: UnconfirmedAXEdit) {
         removeUnconfirmed(in: edit.focus)
         unconfirmedAXEdits.append(edit)
+        onUnconfirmedSourceRetained?()
     }
     private func removeUnconfirmed(in focus: CombinedShiftFocus) {
         unconfirmedAXEdits.removeAll { $0.focus.processID == focus.processID && CFEqual($0.focus.element, focus.element) }
@@ -389,8 +479,7 @@ final class TextConverter {
                   (!forceNativeFixture || (appID == "com.apple.TextEdit" && CommandLine.arguments.contains("--diagnostic-panel")))
             else { RuntimeDiagnostics.record(.nativeAutoBlocked); return false }
         }
-        guard !hasUnconfirmedAXEdit(in: execution.focus),
-              unconfirmedAXEdits.count < Self.maximumUnconfirmedFields else {
+        guard !hasUnconfirmedAXEdit(in: execution.focus) else {
             RuntimeDiagnostics.record(.unconfirmedEditBlocked); return false
         }
         guard !isConverting, original != replacement, !sourceLayoutID.isEmpty, !resultLayoutID.isEmpty,
@@ -401,7 +490,7 @@ final class TextConverter {
         else { return false }
         let recoveryUnits = usesNative ? NativeFieldEditPlan.maximumFieldUnits * 2
             : original.utf16.count + replacement.utf16.count
-        guard canRetainRecoveryUnits(recoveryUnits) else {
+        guard ensureRecoveryCapacity(recoveryUnits) else {
             RuntimeDiagnostics.record(.unconfirmedEditBlocked); return false
         }
         isConverting = true
@@ -732,7 +821,6 @@ final class TextConverter {
             onFailure(.selectionSourceMismatch); return nil
         }
         guard !isConverting, !hasUnconfirmedAXEdit(in: focus),
-              unconfirmedAXEdits.count < Self.maximumUnconfirmedFields,
               let initial = focus.initialSelection, initial.length > 0,
               initial.length <= NativeFieldEditPlan.maximumSelectedReplacementUnits else {
             onFailure(.selectionStateBlocked); return nil
@@ -758,8 +846,7 @@ final class TextConverter {
         let replacement = restoring ? lastOriginal : policy!.replacement
         guard replacement != original.text, !replacement.isEmpty,
               !isConverting, !hasUnconfirmedAXEdit(in: focus),
-              unconfirmedAXEdits.count < Self.maximumUnconfirmedFields,
-              canRetainAXSource(original: original.text, replacement: replacement) else {
+              ensureRecoveryCapacity(original.text.utf16.count + replacement.utf16.count) else {
             onFailure(.selectionReplacementRejected); return nil
         }
         guard execution.isValid(timeout: nativeAXTimeout),
@@ -788,7 +875,7 @@ final class TextConverter {
             guard prepared == nil else { return false }
             return recoverUnconfirmedAXEdit(execution: execution, inputBarrierIsActive: inputBarrierIsActive)
         }
-        guard unconfirmedAXEdits.count < Self.maximumUnconfirmedFields else {
+        guard ensureRecoveryCapacity(0) else {
             RuntimeDiagnostics.record(.unconfirmedEditBlocked); return false
         }
         if inputBarrierIsActive != nil {
@@ -836,7 +923,7 @@ final class TextConverter {
                 : selectedResultContext(policy!, requested: context)
         }
         guard replacement != original.text, !replacement.isEmpty else { return false }
-        guard canRetainAXSource(original: original.text, replacement: replacement) else {
+        guard ensureRecoveryCapacity(original.text.utf16.count + replacement.utf16.count) else {
             RuntimeDiagnostics.record(.unconfirmedEditBlocked); return false
         }
         isConverting = true
@@ -906,12 +993,11 @@ final class TextConverter {
             guard preservedOriginal.focus.processID == execution.focus.processID,
                   CFEqual(preservedOriginal.focus.element, execution.focus.element) else { return .refused }
         } else {
-            guard !hasUnconfirmedAXEdit(in: execution.focus),
-                  unconfirmedAXEdits.count < Self.maximumUnconfirmedFields else {
+            guard !hasUnconfirmedAXEdit(in: execution.focus) else {
                 RuntimeDiagnostics.record(.unconfirmedEditBlocked); return .refused
             }
         }
-        guard canRetainRecoveryUnits(NativeFieldEditPlan.maximumFieldUnits * 2,
+        guard ensureRecoveryCapacity(NativeFieldEditPlan.maximumFieldUnits * 2,
             replacing: preservedOriginal?.focus) else {
             RuntimeDiagnostics.record(.unconfirmedEditBlocked); return .refused
         }
@@ -994,7 +1080,8 @@ final class TextConverter {
                 replacement: actual.text,
                 layoutContext: preservedOriginal?.layoutContext ?? context,
                 predictionLayouts: preservedOriginal?.predictionLayouts ?? layouts,
-                requiresExplicitSelection: true, lastNativeObservation: actual))
+                requiresExplicitSelection: true, lastNativeObservation: actual,
+                id: preservedOriginal?.id ?? UUID(), archive: preservedOriginal?.archive))
             return .unknown
         }
     }
@@ -1065,7 +1152,8 @@ final class TextConverter {
                     replacement: pending.original.text, layoutContext: pending.layoutContext,
                     predictionLayouts: pending.predictionLayouts,
                     requiresExplicitSelection: pending.requiresExplicitSelection,
-                    lastNativeObservation: pending.lastNativeObservation))
+                    lastNativeObservation: pending.lastNativeObservation,
+                    id: pending.id, archive: pending.archive))
             }
             return false
         }

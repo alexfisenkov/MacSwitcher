@@ -28,4 +28,44 @@ final class RecoveryArchiveTests: XCTestCase {
         try Data("not a directory".utf8).write(to: directory)
         XCTAssertThrowsError(try RecoveryArchive.save([source], in: directory))
     }
+
+    func testSyncFailureNeverProducesReceipt() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = RecoveryArchive.Source(id: UUID(), text: "synthetic")
+        XCTAssertThrowsError(try RecoveryArchive.saveVerified([source], in: directory,
+            syncer: { _, isDirectory in
+                if !isDirectory { throw RecoveryArchive.Failure.syncFailed }
+            }))
+        for _ in 0..<260 {
+            XCTAssertThrowsError(try RecoveryArchive.saveVerified([source], in: directory,
+                syncer: { _, isDirectory in
+                    if !isDirectory { throw RecoveryArchive.Failure.syncFailed }
+                }))
+        }
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path).count, 0,
+            "Failed exports must not spend the 256-file quota")
+    }
+
+    func testArchiveFileCountLimitRefusesWithoutDeletingPriorExports() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for index in 0..<256 {
+            try FileManager.default.createDirectory(at: directory.appendingPathComponent("existing-\(index)"),
+                withIntermediateDirectories: false)
+        }
+        XCTAssertThrowsError(try RecoveryArchive.saveVerified([.init(id: UUID(), text: "synthetic")], in: directory))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path).count, 256)
+    }
+
+    func testExplicitReadRejectsReplacedOrOversizedArchive() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = RecoveryArchive.Source(id: UUID(), text: "synthetic")
+        let receipt = try RecoveryArchive.saveVerified([source], in: directory)
+        XCTAssertEqual(try RecoveryArchive.original(id: source.id, receipt: receipt), source.text)
+        try Data(repeating: 65, count: receipt.payloadBytes + 1).write(to: receipt.file, options: .atomic)
+        XCTAssertThrowsError(try RecoveryArchive.original(id: source.id, receipt: receipt))
+    }
 }

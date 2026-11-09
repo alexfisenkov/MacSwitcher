@@ -6,6 +6,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private let keyboardMonitor = KeyboardMonitor()
     private let textConverter = TextConverter()
+    private lazy var recoveryArchiveController = RecoveryArchiveController(
+        converter: textConverter,
+        enabled: { SettingsManager.shared.automaticRecoveryArchiveEnabled },
+        directory: {
+            try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                appropriateFor: nil, create: true).appendingPathComponent("MacSwitcher/Recovery", isDirectory: true)
+        })
     private lazy var predictionCoordinator = PredictionCoordinator(monitor: keyboardMonitor, converter: textConverter)
     private let settingsController = SettingsWindowController()
     private let perAppLayoutManager = PerAppLayoutManager()
@@ -31,10 +38,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let adaptiveQueue = DispatchQueue(label: "com.macswitcher.adaptive-rules", qos: .utility)
     private var manualLearningProvenance = AdaptiveManualProvenance()
     private var automaticUndoLearningProvenance = AdaptiveAutomaticUndoProvenance()
+    private var lastRecoveryCapacityNoticeAt: Date?
     private static let recoveryCopyItemTag = 71003
     private static let sourceRecoveryItemTag = 71004
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        textConverter.onUnconfirmedSourceRetained = { [weak self] in
+            self?.recoveryArchiveController.scheduleAutomaticAfterCurrentEvent()
+        }
+        recoveryArchiveController.onSaved = { [weak self] in
+            guard let self, let recovery = self.statusItem.menu?.item(withTag: Self.recoveryCopyItemTag) else { return }
+            self.refreshRecoveryMenu(recovery)
+        }
+        recoveryArchiveController.onFailure = { [weak self] manual, reason in
+            self?.showRecoveryArchiveFailure(manual: manual, reason: reason)
+        }
+        NSWorkspace.shared.notificationCenter.addObserver(self,
+            selector: #selector(observedApplicationTermination(_:)),
+            name: NSWorkspace.didTerminateApplicationNotification, object: nil)
+        textConverter.onRecoveryCapacityBlocked = { [weak self] reason in
+            DispatchQueue.main.async { self?.showRecoveryCapacityNotice(reason) }
+        }
         let introShown = UserDefaults.standard.bool(forKey: "com.macswitcher.adaptiveLearningIntroShown")
         AdaptiveRuleStore.shared.setEnabled(AdaptiveIntroPolicy.mayReadOrRecord(
             preferenceEnabled: SettingsManager.shared.adaptiveLearningEnabled,
@@ -74,6 +98,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func setupSettingsCallbacks() {
+        settingsController.onRecoveryArchiveChanged = { [weak self] enabled in
+            self?.recoveryArchiveController.settingChanged(enabled)
+        }
         settingsController.onAutoSwitchChanged = { [weak self] _ in
             self?.resetCombinedShiftAfterPause()
             self?.syncElectronAccessibilityBridge()
@@ -219,6 +246,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             kind: .unknownEdit,
             actionTitle: hasRecovery ? (L10n.languageCode == "ru" ? "Показать исходный текст" : "Show original text") : nil,
             onAction: hasRecovery ? { [weak self] in self?.openRecoveryOriginals() } : nil)
+    }
+
+    private func showRecoveryCapacityNotice(_ reason: TextConverter.RecoveryCapacityReason) {
+        let now = Date()
+        if let last = lastRecoveryCapacityNoticeAt, now.timeIntervalSince(last) < 60 { return }
+        lastRecoveryCapacityNoticeAt = now
+        let body: String
+        switch reason {
+        case .unsaved:
+            body = L10n.languageCode == "ru"
+                ? "Память исходных текстов заполнена. Сохраните их локально через меню MacSwitcher, чтобы продолжить в других полях. Поля с неподтверждённой правкой останутся заблокированы."
+                : "Original-text memory is full. Save originals locally from the MacSwitcher menu to continue in other fields. Fields with unconfirmed edits stay blocked."
+        case .archiveLimit:
+            body = L10n.languageCode == "ru"
+                ? "Достигнут предел сохранённых полей. Закройте затронутые поля и штатно перезапустите MacSwitcher после проверки архивов."
+                : "Saved-field limit reached. Close affected fields and restart MacSwitcher normally after checking the archives."
+        }
+        showFeedback(title: "MacSwitcher", body: body,
+            kind: .unknownEdit,
+            actionTitle: L10n.languageCode == "ru" ? "Открыть исходники" : "Open originals",
+            onAction: { [weak self] in self?.openRecoveryOriginals() })
+    }
+
+    private func showRecoveryArchiveFailure(manual: Bool, reason: RecoveryArchive.Failure) {
+        switch reason {
+        case .archiveLimit: RuntimeDiagnostics.record(.recoveryArchiveQuota)
+        case .verificationFailed, .invalidSources: RuntimeDiagnostics.record(.recoveryArchiveVerificationFailed)
+        case .syncFailed, .writeFailed: RuntimeDiagnostics.record(.recoveryArchiveWriteFailed)
+        }
+        if manual {
+            let alert = NSAlert()
+            alert.messageText = L10n.languageCode == "ru" ? "Исходники не сохранены" : "Originals were not saved"
+            alert.informativeText = L10n.languageCode == "ru"
+                ? (reason == .archiveLimit
+                    ? "Папка Recovery достигла лимита. Исходники остаются в памяти. Проверьте архивы перед удалением; штатный выход отменится, если сохранить их не удастся."
+                    : "Исходники остаются в памяти. Проверьте папку Recovery и повторите сохранение через меню. Штатный выход отменится, если сохранить их не удастся.")
+                : (reason == .archiveLimit
+                    ? "The Recovery folder reached its limit. Originals remain in memory. Check archives before deleting any; normal quit will be cancelled if saving fails."
+                    : "Originals remain in memory. Check the Recovery folder and retry from the menu. Normal quit will be cancelled if saving fails.")
+            alert.runModal()
+        } else {
+            let quota = reason == .archiveLimit
+            showFeedback(title: "MacSwitcher", body: L10n.languageCode == "ru"
+                ? (quota ? "Папка Recovery достигла лимита. Исходники остаются в памяти. Откройте архивы; перед удалением проверьте, что они больше не нужны."
+                    : "Не удалось сохранить исходники локально. Они остаются в памяти; повторите сохранение через меню.")
+                : (quota ? "Recovery archive limit reached. Originals remain in memory. Open archives; check that files are no longer needed before deleting any."
+                    : "Could not save originals locally. They remain in memory; retry from the menu."),
+                kind: .saveFailure,
+                actionTitle: L10n.languageCode == "ru" ? "Открыть Recovery" : "Open Recovery",
+                onAction: { [weak self] in self?.openRecoveryArchiveFolder() })
+        }
     }
 
     private func openRecoveryOriginals() {
@@ -949,6 +1027,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         recovery.tag = Self.recoveryCopyItemTag
         menu.addItem(recovery)
         refreshRecoveryMenu(recovery)
+        let archiveFolder = NSMenuItem(title: L10n.languageCode == "ru"
+            ? "Открыть папку архивов исходников"
+            : "Open original-text archive folder", action: #selector(openRecoveryArchiveFolder), keyEquivalent: "")
+        archiveFolder.target = self
+        menu.addItem(archiveFolder)
         menu.addItem(NSMenuItem.separator())
 
         let inputSource = NSMenuItem(title: L10n.menuInputSource, action: nil, keyEquivalent: "")
@@ -1226,6 +1309,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item.representedObject = original
             submenu.addItem(item)
         }
+        for (index, original) in textConverter.archivedOriginals.enumerated() {
+            let title = L10n.languageCode == "ru" ? "Скопировать из архива \(index + 1)" : "Copy from archive \(index + 1)"
+            let item = NSMenuItem(title: title, action: #selector(copyArchivedRecoveryOriginal(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = original
+            submenu.addItem(item)
+        }
+        if textConverter.hasRAMUnconfirmedAXEdit {
+            submenu.addItem(NSMenuItem.separator())
+            let save = NSMenuItem(title: L10n.languageCode == "ru"
+                ? "Сохранить исходники локально и продолжить"
+                : "Save originals locally and continue", action: #selector(saveRecoveryOriginals), keyEquivalent: "")
+            save.target = self
+            submenu.addItem(save)
+        }
         parent.submenu = submenu
     }
 
@@ -1233,6 +1331,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let original = sender.representedObject as? TextConverter.RecoveryOriginal else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(original.text, forType: .string)
+    }
+
+    @objc private func copyArchivedRecoveryOriginal(_ sender: NSMenuItem) {
+        guard let original = sender.representedObject as? TextConverter.ArchivedRecoveryOriginal else { return }
+        do {
+            let text = try RecoveryArchive.original(id: original.id, receipt: original.archive)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+        } catch {
+            RuntimeDiagnostics.record(.recoveryArchiveFailed)
+            let alert = NSAlert()
+            alert.messageText = L10n.languageCode == "ru" ? "Не удалось прочитать архив" : "Could not read the archive"
+            alert.runModal()
+        }
+    }
+
+    @objc private func saveRecoveryOriginals() {
+        recoveryArchiveController.requestManual()
+    }
+
+    @objc private func openRecoveryArchiveFolder() {
+        guard let support = try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+            appropriateFor: nil, create: false) else { return }
+        let directory = support.appendingPathComponent("MacSwitcher/Recovery", isDirectory: true)
+        if FileManager.default.fileExists(atPath: directory.path) { NSWorkspace.shared.open(directory) }
+    }
+
+    @objc private func observedApplicationTermination(_ notification: Notification) {
+        guard let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+        textConverter.releaseArchivedLocks(forTerminatedProcessID: application.processIdentifier)
     }
 
     @objc private func toggleKeySound(_ sender: NSMenuItem) {
@@ -1344,6 +1472,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        NSWorkspace.shared.notificationCenter.removeObserver(self,
+            name: NSWorkspace.didTerminateApplicationNotification, object: nil)
         monitoringActive = false
         tapRecovery.stop()
         iconRefreshTimer?.invalidate()
@@ -1357,7 +1487,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard textConverter.hasUnconfirmedAXEdit else { return .terminateNow }
+        guard textConverter.hasRAMUnconfirmedAXEdit else { return .terminateNow }
+        // Normal quit is an explicit user action, outside the physical input
+        // lease. Validate existing backups before deciding which RAM originals
+        // still need a new export; never spend archive quota twice for them.
+        for source in textConverter.backedOriginals {
+            if (try? RecoveryArchive.original(id: source.id, receipt: source.archive)) != source.text {
+                textConverter.invalidateBacking(id: source.id, receipt: source.archive)
+            }
+        }
+        guard !textConverter.unbackedOriginals.isEmpty else { return .terminateNow }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = L10n.languageCode == "ru" ? "Сначала сохраните исходный текст" : "Save the original text first"
@@ -1370,7 +1509,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         do {
             let directory = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
                 appropriateFor: nil, create: true).appendingPathComponent("MacSwitcher/Recovery", isDirectory: true)
-            let originals = textConverter.unconfirmedOriginals.map { RecoveryArchive.Source(id: $0.id, text: $0.text) }
+            let originals = textConverter.unbackedOriginals.map { RecoveryArchive.Source(id: $0.id, text: $0.text) }
             _ = try RecoveryArchive.save(originals, in: directory)
             return .terminateNow
         } catch {

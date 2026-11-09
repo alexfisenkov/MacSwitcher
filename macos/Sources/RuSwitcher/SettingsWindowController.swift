@@ -32,6 +32,7 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
     var onCaretFlagChanged: ((Bool) -> Void)?
     var onHideIconChanged: ((Bool) -> Void)?
     var onPredictionPreferencesChanged: (() -> Void)?
+    var onRecoveryArchiveChanged: ((Bool) -> Void)?
 
     func showWindow() {
         if let window {
@@ -807,6 +808,23 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
         view.addSubview(betaHint)
         y -= 47   // дальше идём по бегущему y
 
+        let recoveryCheckbox = NSButton(checkboxWithTitle: L10n.languageCode == "ru"
+            ? "Автоматически сохранять исходники после сбоя"
+            : "Automatically save originals after an uncertain edit",
+            target: self, action: #selector(recoveryArchiveChanged(_:)))
+        recoveryCheckbox.frame = NSRect(x: 20, y: y, width: 420, height: 22)
+        recoveryCheckbox.state = SettingsManager.shared.automaticRecoveryArchiveEnabled ? .on : .off
+        view.addSubview(recoveryCheckbox)
+        y -= 18
+        let recoveryHint = NSTextField(wrappingLabelWithString: L10n.languageCode == "ru"
+            ? "Только при неподтверждённой правке: полный текст поля локально в Library/Application Support/MacSwitcher/Recovery. Обычный ввод не сохраняется; передачи в сеть нет. По умолчанию выключено."
+            : "Only after an uncertain edit: the full field text is saved locally in Library/Application Support/MacSwitcher/Recovery. Ordinary typing is not saved; nothing is sent over the network. Off by default.")
+        recoveryHint.frame = NSRect(x: 40, y: y - 46, width: 400, height: 60)
+        recoveryHint.font = .systemFont(ofSize: 11)
+        recoveryHint.textColor = .secondaryLabelColor
+        view.addSubview(recoveryHint)
+        y -= 76
+
         // issue #22 (B): умная по-словная конверсия выделения. По умолчанию ВКЛ.
         let smartCheckbox = NSButton(checkboxWithTitle: L10n.settingsSmartConversion,
                                      target: self, action: #selector(smartConversionChanged))
@@ -903,6 +921,24 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
         }
         SettingsManager.shared.hideMenuBarIcon = hide
         onHideIconChanged?(hide)
+    }
+
+    @objc private func recoveryArchiveChanged(_ sender: NSButton) {
+        let enabled = sender.state == .on
+        if enabled {
+            let alert = NSAlert()
+            alert.messageText = L10n.languageCode == "ru"
+                ? "Сохранять полные исходники локально?"
+                : "Save full originals locally?"
+            alert.informativeText = L10n.languageCode == "ru"
+                ? "При неподтверждённой правке MacSwitcher автоматически сохранит полный исходный текст поля в личной папке Recovery. Обычный ввод не записывается и ничего не отправляется в сеть. Архивы остаются до вашего удаления."
+                : "After an uncertain edit, MacSwitcher will save the full original field text in your private Recovery folder. Ordinary typing is not recorded and nothing is sent over the network. Archives remain until you delete them."
+            alert.addButton(withTitle: L10n.languageCode == "ru" ? "Включить" : "Enable")
+            alert.addButton(withTitle: L10n.languageCode == "ru" ? "Отмена" : "Cancel")
+            if alert.runModal() != .alertFirstButtonReturn { sender.state = .off; return }
+        }
+        SettingsManager.shared.automaticRecoveryArchiveEnabled = enabled
+        onRecoveryArchiveChanged?(enabled)
     }
 
     @objc private func quitApp() {

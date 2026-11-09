@@ -2,6 +2,17 @@ import XCTest
 @testable import RuSwitcher
 
 final class CombinedShiftSettingsTests: XCTestCase {
+    func testAutomaticRecoveryArchiveRequiresExplicitOptInAndPersistsOptOut() throws {
+        let domain = "RuSwitcherTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let settings = SettingsManager(defaults: defaults)
+        XCTAssertFalse(settings.automaticRecoveryArchiveEnabled)
+        settings.automaticRecoveryArchiveEnabled = true
+        XCTAssertTrue(SettingsManager(defaults: defaults).automaticRecoveryArchiveEnabled)
+        settings.automaticRecoveryArchiveEnabled = false
+        XCTAssertFalse(SettingsManager(defaults: defaults).automaticRecoveryArchiveEnabled)
+    }
     func testAppExclusionsStartEmptyAndOnlyExplicitAdditionsSurviveUpgrade() throws {
         let domain = "RuSwitcherTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))

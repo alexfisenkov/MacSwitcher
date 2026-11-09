@@ -27,6 +27,8 @@ enum RuntimeDiagnosticEvent: String, CaseIterable, Sendable {
     case selectionSnapshotUnavailable, selectionAXWriteRefused, selectionAXWritePosted
     case selectionAXWriteVerified, selectionAXReadbackMismatch, selectionClipboardFallback, selectionCancelled
     case selectionAXUnsupported, selectionAXMutationUnknown, autoAXUnsupported, autoAXMutationUnknown, unconfirmedEditBlocked
+    case recoverySameFieldBlocked, recoverySlotsFull, recoveryUnitsFull, recoveryArchiveLimit, recoveryArchiveFailed
+    case recoveryArchiveQuota, recoveryArchiveWriteFailed, recoveryArchiveVerificationFailed
     case harnessSelectionStarted, harnessSelectionPassed, harnessSelectionFailed
     case harnessAutoStarted, harnessAutoPassed, harnessAutoFailed
     case autoWorkStarted, sourceNotificationPreserved, sourceNotificationInvalidated
@@ -60,6 +62,10 @@ enum RuntimeDiagnosticEvent: String, CaseIterable, Sendable {
              .nativeFenceUnavailable, .nativeAutoBlocked, .nativeAutoUncertain,
              .nativeAutoFocusRecheckFailed, .nativeInvalidExecution,
              .nativeSuffixMismatch, .nativePreparationNavigationUncertain:
+            return true
+        case .recoverySameFieldBlocked, .recoverySlotsFull, .recoveryUnitsFull, .recoveryArchiveLimit,
+             .recoveryArchiveFailed, .recoveryArchiveQuota, .recoveryArchiveWriteFailed,
+             .recoveryArchiveVerificationFailed:
             return true
         default:
             return false
