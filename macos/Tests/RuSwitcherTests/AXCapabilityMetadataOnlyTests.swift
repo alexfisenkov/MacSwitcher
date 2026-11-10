@@ -63,4 +63,59 @@ final class AXCapabilityMetadataOnlyTests: XCTestCase {
         XCTAssertEqual(AXCapabilityDiagnostics.runIfRequested(arguments: ["MacSwitcher",
             "--ax-capabilities-metadata", "com.apple.TextEdit", "--enable-accessibility"]), 2)
     }
+
+    @MainActor
+    func testOverlayMetadataSerializesOnlyClosedRolesAndAttributeMembership() throws {
+        let focus = AXCapabilityDiagnostics.overlayFocusMetadata(
+            role: "private-role-text", subrole: "private-subrole-text",
+            attributeNames: [kAXValueAttribute, kAXSelectedTextRangeAttribute,
+                "AXTitle", "AXDescription", "private-window-title"])
+        XCTAssertEqual(focus.role, .other)
+        XCTAssertTrue(focus.valueAttributePresent)
+        XCTAssertTrue(focus.selectedTextRangeAttributePresent)
+        XCTAssertFalse(focus.selectedTextAttributePresent)
+        let encoded = try JSONEncoder().encode(focus)
+        let output = try XCTUnwrap(String(data: encoded, encoding: .utf8))
+        for forbidden in ["private", "AXTitle", "AXDescription", "AXValue", "AXSelectedTextRange"] {
+            XCTAssertFalse(output.contains(forbidden))
+        }
+    }
+
+    @MainActor
+    func testOverlayHostInspectionIncludesThirdPartyBundleIDsAndIsBoundedToTwelve() throws {
+        var inspected: [Int32] = []
+        let pids = [Int32(1), 1, 2, 3] + Array(Int32(4)...Int32(30))
+        let hosts = AXCapabilityDiagnostics.overlayHosts(windowOwnerPIDs: pids,
+            bundleIDForPID: { pid in
+                pid == 2 ? "com.example.launcher" : pid == 3 ? nil
+                    : pid == 1 ? "com.apple.Spotlight" : "private window title"
+            }, inspect: { pid in inspected.append(pid); return .unavailable })
+        XCTAssertEqual(hosts.count, 12)
+        XCTAssertEqual(inspected.count, 12)
+        XCTAssertEqual(Set(inspected).count, 12)
+        XCTAssertEqual(hosts.first?.bundleID, "com.apple.Spotlight")
+        XCTAssertEqual(hosts[1].bundleID, "com.example.launcher")
+        XCTAssertTrue(hosts.dropFirst(2).allSatisfy { $0.bundleID == "UnknownHost" })
+        XCTAssertTrue(inspected.contains(2))
+        XCTAssertTrue(inspected.contains(3))
+        let encoded = try JSONEncoder().encode(hosts)
+        let output = try XCTUnwrap(String(data: encoded, encoding: .utf8))
+        XCTAssertFalse(output.contains("private window title"))
+    }
+
+    @MainActor
+    func testOverlayModeRejectsAnyAdditionalArgumentsBeforeInspection() {
+        XCTAssertEqual(AXCapabilityDiagnostics.runIfRequested(arguments: ["MacSwitcher",
+            "--ax-overlay-metadata", "--enable-accessibility"]), 2)
+        XCTAssertEqual(AXCapabilityDiagnostics.runIfRequested(arguments: ["MacSwitcher",
+            "--ax-overlay-metadata", "com.apple.Spotlight"]), 2)
+    }
+
+    @MainActor
+    func testUnknownAXFlagsExitBeforeGUI() {
+        XCTAssertEqual(AXCapabilityDiagnostics.runIfRequested(arguments: ["MacSwitcher", "--ax-metadata"]), 2)
+        XCTAssertEqual(AXCapabilityDiagnostics.runIfRequested(arguments: ["MacSwitcher",
+            "--ax-overlay-metadata=anything"]), 2)
+        XCTAssertNil(AXCapabilityDiagnostics.runIfRequested(arguments: ["MacSwitcher", "--benchmark-prediction"]))
+    }
 }

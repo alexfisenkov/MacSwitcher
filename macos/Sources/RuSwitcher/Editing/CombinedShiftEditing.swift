@@ -97,7 +97,8 @@ enum CombinedShiftEditing {
                 }
                 return converter.convert(wordKeys: request.wordKeys, prevWordKeys: request.prevWordKeys,
                     boundaryCount: request.boundaryCount, context: wordContext, execution: execution,
-                    inputBarrierIsActive: inputBarrierIsActive)
+                    inputBarrierIsActive: inputBarrierIsActive,
+                    fallbackSourceIsCurrent: fallbackSourceIsCurrent)
             }
         }
         let succeeded = performEdit()

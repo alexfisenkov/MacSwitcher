@@ -27,6 +27,8 @@ enum RuntimeDiagnosticEvent: String, CaseIterable, Sendable {
     case selectionSnapshotUnavailable, selectionAXWriteRefused, selectionAXWritePosted
     case selectionAXWriteVerified, selectionAXReadbackMismatch, selectionClipboardFallback, selectionCancelled
     case selectionAXUnsupported, selectionAXMutationUnknown, autoAXUnsupported, autoAXMutationUnknown, unconfirmedEditBlocked
+    case recoverySameFieldBlocked, recoverySlotsFull, recoveryUnitsFull, recoveryArchiveLimit, recoveryArchiveFailed
+    case recoveryArchiveQuota, recoveryArchiveWriteFailed, recoveryArchiveVerificationFailed
     case harnessSelectionStarted, harnessSelectionPassed, harnessSelectionFailed
     case harnessAutoStarted, harnessAutoPassed, harnessAutoFailed
     case autoWorkStarted, sourceNotificationPreserved, sourceNotificationInvalidated
@@ -61,6 +63,10 @@ enum RuntimeDiagnosticEvent: String, CaseIterable, Sendable {
              .nativeAutoFocusRecheckFailed, .nativeInvalidExecution,
              .nativeSuffixMismatch, .nativePreparationNavigationUncertain:
             return true
+        case .recoverySameFieldBlocked, .recoverySlotsFull, .recoveryUnitsFull, .recoveryArchiveLimit,
+             .recoveryArchiveFailed, .recoveryArchiveQuota, .recoveryArchiveWriteFailed,
+             .recoveryArchiveVerificationFailed:
+            return true
         default:
             return false
         }
@@ -80,6 +86,7 @@ enum RuntimeDiagnosticFailureReason: String, CaseIterable, Sendable {
     case wordContextUnavailable, wordInputBarrierUnavailable, wordBufferUnavailable
     case wordMappingUnavailable, wordConversionBusy, wordMappingNoChange
     case wordNativeStateBlocked, wordNativeCaretMismatch, wordNativeSnapshotInvalid
+    case wordNativeFirstSelectionMissing, wordNativeFirstSelectionNoncollapsed, wordNativeFirstCaretTooShort
     case wordNativeEditRefused
     case verifiedWordStateBlocked, verifiedWordCaretUnavailable, verifiedWordFieldUnavailable
     case verifiedWordFieldMismatch, verifiedWordTrailingSpaceLimit, verifiedWordNoFinalLetter
@@ -171,6 +178,18 @@ enum RuntimeDiagnostics {
 @MainActor
 enum AXCapabilityDiagnostics {
     static func runIfRequested(arguments: [String]) -> Int32? {
+        let knownAXFlags: Set<String> = ["--ax-capabilities", "--ax-capabilities-metadata",
+                                         "--ax-overlay-metadata"]
+        if arguments.dropFirst().contains(where: { $0.hasPrefix("--ax-") && !knownAXFlags.contains($0) }) {
+            emit(["error": "unknownAXMode"]); return 2
+        }
+        if arguments.contains("--ax-overlay-metadata") {
+            guard arguments.count == 2, arguments[1] == "--ax-overlay-metadata" else {
+                emit(["error": "overlayModeAcceptsNoOtherArguments"]); return 2
+            }
+            runOverlayMetadata()
+            return 0
+        }
         if let index = arguments.firstIndex(of: "--ax-capabilities-metadata") {
             guard !arguments.contains("--enable-accessibility") else {
                 emit(["error": "metadataModeDisallowsAccessibilityMutation"]); return 2
@@ -198,6 +217,155 @@ enum AXCapabilityDiagnostics {
         result["enableAccessibilityRequested"] = arguments.contains("--enable-accessibility")
         emit(result)
         return targets.isEmpty ? 2 : 0
+    }
+
+    /// Only public process IDs and validated bundle IDs leave this mode.
+    /// The AX reader below has no operation for text, ranges, titles, or setters.
+    private static let overlayHostLimit = 12
+    private static func closedBundleID(_ raw: String?) -> String {
+        guard let raw, raw.utf8.count <= 128 else { return "UnknownHost" }
+        let parts = raw.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count >= 2, parts.allSatisfy({ part in
+            !part.isEmpty && part.utf8.count <= 63
+                && part.utf8.allSatisfy { byte in
+                    (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122)
+                        || (byte >= 48 && byte <= 57) || byte == 45
+                }
+                && part.first?.isASCII == true && part.last?.isASCII == true
+        }) else { return "UnknownHost" }
+        return raw
+    }
+
+    enum OverlayRole: String, Encodable {
+        case textField = "AXTextField", textArea = "AXTextArea", searchField = "AXSearchField"
+        case comboBox = "AXComboBox", group = "AXGroup", window = "AXWindow", other = "Other"
+
+        init(rawAXRole: String?) {
+            switch rawAXRole {
+            case kAXTextFieldRole: self = .textField
+            case kAXTextAreaRole: self = .textArea
+            case "AXSearchField": self = .searchField
+            case kAXComboBoxRole: self = .comboBox
+            case kAXGroupRole: self = .group
+            case kAXWindowRole: self = .window
+            default: self = .other
+            }
+        }
+    }
+
+    struct OverlayFocusMetadata: Encodable {
+        let available: Bool
+        let role: OverlayRole
+        let secureTextSubrole: Bool
+        let valueAttributePresent: Bool
+        let selectedTextAttributePresent: Bool
+        let selectedTextRangeAttributePresent: Bool
+        let selectedTextMarkerRangeAttributePresent: Bool
+
+        static let unavailable = Self(available: false, role: .other,
+            secureTextSubrole: false, valueAttributePresent: false,
+            selectedTextAttributePresent: false, selectedTextRangeAttributePresent: false,
+            selectedTextMarkerRangeAttributePresent: false)
+    }
+
+    struct OverlayHostMetadata: Encodable {
+        let pid: Int32
+        let bundleID: String
+        let focus: OverlayFocusMetadata
+    }
+
+    static func overlayFocusMetadata(role: String?, subrole: String?, attributeNames: [String])
+        -> OverlayFocusMetadata {
+        let names = Set(attributeNames)
+        return OverlayFocusMetadata(available: true, role: OverlayRole(rawAXRole: role),
+            secureTextSubrole: subrole == kAXSecureTextFieldSubrole,
+            valueAttributePresent: names.contains(kAXValueAttribute),
+            selectedTextAttributePresent: names.contains(kAXSelectedTextAttribute),
+            selectedTextRangeAttributePresent: names.contains(kAXSelectedTextRangeAttribute),
+            selectedTextMarkerRangeAttributePresent: names.contains("AXSelectedTextMarkerRange"))
+    }
+
+    /// Pure test seam: duplicates and hosts beyond the cap never reach AX.
+    /// An invalid or unavailable identifier receives one closed label.
+    static func overlayHosts(windowOwnerPIDs: [Int32], bundleIDForPID: (Int32) -> String?,
+                             inspect: (Int32) -> OverlayFocusMetadata) -> [OverlayHostMetadata] {
+        var seen: Set<Int32> = []
+        var hosts: [OverlayHostMetadata] = []
+        for pid in windowOwnerPIDs where pid > 0 {
+            guard seen.insert(pid).inserted else { continue }
+            hosts.append(OverlayHostMetadata(pid: pid,
+                bundleID: closedBundleID(bundleIDForPID(pid)),
+                focus: inspect(pid)))
+            if hosts.count == overlayHostLimit { break }
+        }
+        return hosts
+    }
+
+    private static func runOverlayMetadata() {
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+            as? [[String: Any]] ?? []
+        let ownerPIDs = windows.compactMap { ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value }
+        let secure = AutoSwitchPolicy.secureInputActive
+        let hosts = overlayHosts(windowOwnerPIDs: ownerPIDs,
+            bundleIDForPID: { NSRunningApplication(processIdentifier: $0)?.bundleIdentifier },
+            inspect: { secure ? .unavailable : inspectOverlayFocus(processID: $0) })
+        let systemFocus = secure ? nil : inspectSystemOverlayFocus()
+        let report = OverlayReport(mode: "overlayMetadata", trusted: AXIsProcessTrusted(),
+            secureInputActive: secure, hostLimit: overlayHostLimit,
+            candidateCount: ownerPIDs.count, hosts: hosts, systemFocus: systemFocus)
+        if let data = try? JSONEncoder().encode(report),
+           let output = String(data: data, encoding: .utf8) { print(output) }
+    }
+
+    private struct OverlayReport: Encodable {
+        let mode: String
+        let trusted: Bool
+        let secureInputActive: Bool
+        let hostLimit: Int
+        let candidateCount: Int
+        let hosts: [OverlayHostMetadata]
+        let systemFocus: OverlayHostMetadata?
+    }
+
+    private static func inspectOverlayFocus(processID: Int32) -> OverlayFocusMetadata {
+        let app = AXUIElementCreateApplication(processID)
+        guard AXUIElementSetMessagingTimeout(app, 0.020) == .success else { return .unavailable }
+        var raw: AnyObject?
+        guard AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &raw) == .success,
+              let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() else { return .unavailable }
+        return inspectOverlayElement(raw as! AXUIElement, expectedPID: processID)
+    }
+
+    private static func inspectSystemOverlayFocus() -> OverlayHostMetadata? {
+        let system = AXUIElementCreateSystemWide()
+        guard AXUIElementSetMessagingTimeout(system, 0.020) == .success else { return nil }
+        var raw: AnyObject?
+        guard AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &raw) == .success,
+              let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() else { return nil }
+        let element = raw as! AXUIElement
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success, pid > 0 else { return nil }
+        let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+        return OverlayHostMetadata(pid: pid,
+            bundleID: closedBundleID(bundleID),
+            focus: inspectOverlayElement(element, expectedPID: pid))
+    }
+
+    private static func inspectOverlayElement(_ element: AXUIElement, expectedPID: Int32)
+        -> OverlayFocusMetadata {
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success, pid == expectedPID,
+              AXUIElementSetMessagingTimeout(element, 0.020) == .success else { return .unavailable }
+        var roleRaw: AnyObject?
+        var subroleRaw: AnyObject?
+        var namesRaw: CFArray?
+        let roleStatus = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRaw)
+        let subroleStatus = AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &subroleRaw)
+        let namesStatus = AXUIElementCopyAttributeNames(element, &namesRaw)
+        guard namesStatus == .success else { return .unavailable }
+        return overlayFocusMetadata(role: roleStatus == .success ? roleRaw as? String : nil,
+            subrole: subroleStatus == .success ? subroleRaw as? String : nil,
+            attributeNames: namesRaw as? [String] ?? [])
     }
 
     /// The metadata reader deliberately has no operation for reading a text,
