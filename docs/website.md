@@ -33,3 +33,12 @@ Alpha.26 and the alpha.27 layout correction are released. PR5/PR6 are merged; ex
 ## Brand-context delivery · 2026-11-04
 
 PR7 merged; Mac alpha.28 and Windows alpha.3 released from e57592474d19bf2e93b73740fc32683542acc879. [Pages41772148476](https://github.com/alexfisenkov/MacSwitcher/actions/runs/41772148476) deployed exact main0adb38050d8a59562d7c102f9d4ef78ad48787ac. Public home/legal/product mark byte-matched source. Both current releases and signed feeds were anonymously read back; Windows RSA feed accepted by the Core verifier. No website layout changes, only versioned download links/labels.
+
+
+## Recovery-capacity publication · 2026-11-10
+
+The owner explicitly authorized merging PR10, publishing alpha.30 and updating the site. PR10 merged as `2b1f52936556c69d033d92189ed2947199c21aa8`, preserving the earlier branch history. The release tag v0.1.0-alpha.30 points to the exact signed/CI executable source `f0717815adbf9a7c9b9cb22f06126734bf2224f4`; later commits update documentation and the signed feed only.
+
+The public universal ZIP is42,971,684 bytes, SHA-256 `d441a12a9bbe39b8bde8ce6900a7b5aab0b5d4f0c1616d2278131b6435baa1cb`. Anonymous downloads of the ZIP, SHA256SUMS and release.json matched the prepared files. The normal public raw appcast matched its signed source byte-for-byte and passed Sparkle verification; version.json reports alpha.30/build30. Windows remains alpha.3.
+
+[Pages42816504804](https://github.com/alexfisenkov/MacSwitcher/actions/runs/42816504804) passed check/deploy from exactmain `cca642f88d00ab869a9dcf8400d48f82394534c2`. Public home, legal page and SVG returnedHTTP200 and byte-matched that source. Home SHA-256: `2ea79e1c518a1beb9482812bcba822f6707dc499d3b2f4eb6a5612b51dc49cfd`; legal: `383ee182bb53b0fd9d079b7907bf6618eb48e6036366cbd5d666b7c15766a3a3`. Both languages point to Mac alpha.30; the privacy page describes optional macOS recovery backups, default OFF, possible full-field content, local permissions and retention. No layout changes. Physical repeated-gesture acceptance remains deferred; Spotlight/Campo and Terminal are separate follow-up work.
