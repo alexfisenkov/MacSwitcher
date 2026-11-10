@@ -6,6 +6,17 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/alexfisenkov/MacSwitcher</link>
     <description>Signed MacSwitcher releases</description>
     <item>
+      <title>MacSwitcher 0.1.0-alpha.30</title>
+      <link>https://github.com/alexfisenkov/MacSwitcher/releases/tag/v0.1.0-alpha.30</link>
+      <pubDate>Mon, 09 Nov 2026 16:41:54 +0000</pubDate>
+      <description>Исправлена общая блокировка после заполнения памяти исходников: сохранённые копии освобождают место, а защита затронутых полей сохраняется. Добавлено добровольное локальное автосохранение исходников сбойных замен.</description>
+      <sparkle:version>30</sparkle:version>
+      <sparkle:shortVersionString>0.1.0-alpha.30</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <sparkle:channel>alpha</sparkle:channel>
+      <enclosure url="https://github.com/alexfisenkov/MacSwitcher/releases/download/v0.1.0-alpha.30/MacSwitcher-0.1.0-alpha.30-universal.zip" length="42971684" type="application/octet-stream" sparkle:edSignature="9LV+GS/oqIWHep4KW6xefh6twXzvSqJiRbtqikI2aSdy2yYJT1cLHCsm7NEfzIzAy4NQNtzukCFhBi4sn8alCw=="></enclosure>
+    </item>
+    <item>
       <title>MacSwitcher 0.1.0-alpha.28</title>
       <link>https://github.com/alexfisenkov/MacSwitcher/releases/tag/v0.1.0-alpha.28</link>
       <pubDate>Wed, 04 Nov 2026 03:39:51 +0000</pubDate>
@@ -227,6 +238,6 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: r0HMs7Gh9UE9/a5LNdrgRJSzKlyZi6pQD7D76rDwSLP7nc1Qi37IpxRJ+Up8UznqBVeXjocdCCsmEoP/tP92BA==
-length: 22191
+edSignature: np4s70UfBN1bJ13dKnONtecn25psm/ZpaSSR46zZy/t3K6hGzC5sr5+WAHcY2dOAu8VZxME/sIzfKr12ISIFBQ==
+length: 23402
 -->
