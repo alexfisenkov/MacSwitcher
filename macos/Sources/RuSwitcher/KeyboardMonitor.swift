@@ -223,9 +223,22 @@ final class KeyboardMonitor: @unchecked Sendable {
         nativeInputTransportAvailable && inputFence.hasActiveLease
     }
     var nativeTapNeedsRecovery: Bool {
+        nativeTapRecoveryStatus.needsRecovery
+    }
+    var nativeTapRecoveryStatus: NativeTapRecoveryStatus {
         NativeTapRecoveryStatus(tapPresent: eventTap != nil,
             tapEnabled: eventTap.map { CGEvent.tapIsEnabled(tap: $0) } == true,
-            fenceAvailable: inputFence.isAvailable).needsRecovery
+            fenceAvailable: inputFence.isAvailable,
+            fenceRequired: nativeInputGateConfigured)
+    }
+    var hasNativeInputLease: Bool { inputFence.hasActiveLease }
+
+    /// Retire gesture and prediction context after a system pause without
+    /// touching retained edit originals or asking the target for text.
+    func invalidateRuntimeInputContext() {
+        interruptCombinedShift()
+        fullReset()
+        keysTypedSinceConversion = true
     }
 
     @MainActor
@@ -305,7 +318,43 @@ final class KeyboardMonitor: @unchecked Sendable {
         return inputFence.remainingDuration(lease)
     }
     var onPredictionInput: (@MainActor (PredictionSnapshot) -> Void)?
+    var onRuntimeSecureInputObserved: (@MainActor () -> Void)?
+    var onRuntimeSecureInputResumed: (@MainActor () -> Void)?
+    var onRuntimeNormalKeyboardActivity: (@MainActor () -> Bool)?
+    private var secureInputObservedInEvents = false
+
+    /// Event-time guard catches Secure Input intervals shorter than the status
+    /// timer when the OS still delivers at least one callback during the pause.
+    /// Never records the event or any target text.
+    @discardableResult
+    func noteRuntimeSecureInput(_ active: Bool, isKeyboardEvent: Bool = true) -> Bool {
+        if active {
+            guard !secureInputObservedInEvents else { return false }
+            secureInputObservedInEvents = true
+            MainActor.assumeIsolated { onRuntimeSecureInputObserved?() }
+            if !hasNativeInputLease { invalidateRuntimeInputContext() }
+            return false
+        } else if secureInputObservedInEvents {
+            // Mouse/scroll delivery does not prove keyboard delivery. Keep the
+            // latch until a real keyboard callback or a proactive safe re-arm.
+            guard isKeyboardEvent else { return true }
+            // Keep the latch until an edit lease releases. Forward this event
+            // unchanged but do not add it to a stale prediction window.
+            guard !hasNativeInputLease else {
+                interruptCombinedShift() // physical key revokes stale edit authority
+                return false
+            }
+            secureInputObservedInEvents = false
+            invalidateRuntimeInputContext()
+            MainActor.assumeIsolated { onRuntimeSecureInputResumed?() }
+        }
+        guard isKeyboardEvent else { return true }
+        let mayProcess = MainActor.assumeIsolated { onRuntimeNormalKeyboardActivity?() ?? true }
+        if !mayProcess { interruptCombinedShift() } // revoke shell permit even when not buffering this key
+        return mayProcess
+    }
     var onPredictionInvalidated: (@MainActor () -> Void)?
+    var onInputRevisionAdvanced: (() -> Void)?
     /// issue #10: любой ввод/клик пользователя — чтобы спрятать флаг у каретки во время печати.
     var onUserInput: (() -> Void)?
     /// issue #10: включена ли фича флага-у-каретки. Гейтит диспатч onUserInput на горячем пути,
@@ -352,10 +401,7 @@ final class KeyboardMonitor: @unchecked Sendable {
 
         let precheck = CGPreflightListenEventAccess()
         rslog("Preflight check = \(precheck)")
-        if !precheck {
-            rslog("Requesting access...")
-            CGRequestListenEventAccess()
-        }
+        guard precheck else { return false } // prompts belong to the explicit permission wizard
 
         triggerConfig = TriggerConfig.current()
         switchConfig = TriggerConfig.switchHotkey()
@@ -413,6 +459,7 @@ final class KeyboardMonitor: @unchecked Sendable {
 
     func stop() {
         nativeInputGateConfigured = false
+        secureInputObservedInEvents = false
         inputFence.interrupt()
         interruptCombinedShift()
         predictionBuffer.reset()
@@ -717,6 +764,7 @@ final class KeyboardMonitor: @unchecked Sendable {
         clearCombinedShiftCandidate()
         invalidatePrediction()
         inputRevision &+= 1
+        onInputRevisionAdvanced?()
     }
 
     private func clearCombinedShiftCandidate() {
@@ -822,7 +870,14 @@ final class KeyboardMonitor: @unchecked Sendable {
         if case .switchLayout = action {
             // Only a qualified first solo reads AX, before its layout flip. Uppercase,
             // shortcuts, held Shift and the second tap perform no AX capture here.
-            focus = CombinedShiftFocus.capture(processID: frontPID)
+            switch SearchOverlayTarget.capture(hostPID: frontPID) {
+            case .absent:
+                focus = CombinedShiftFocus.capture(processID: frontPID)
+            case .unverified:
+                focus = nil  // never bind the underlay while search is visible
+            case .verified(let target):
+                focus = target
+            }
         } else {
             focus = nil
         }
@@ -1362,6 +1417,11 @@ private func processKeyboardInput(type: CGEventType, event: CGEvent, monitor: Ke
            (!monitor.nativeInputTransportAvailable || !diagnosticFixtureEventIsAdmitted(event)) {
             return nil
         }
+        let secureInput = AutoSwitchPolicy.secureInputActive
+        let isKeyboardEvent = type == .keyDown || type == .keyUp || type == .flagsChanged
+        let mayProcess = monitor.noteRuntimeSecureInput(secureInput,
+            isKeyboardEvent: isKeyboardEvent)
+        if !mayProcess { return diagnosticFixture ? nil : Unmanaged.passUnretained(event) }
         if admission.wasHeld { RuntimeDiagnostics.record(.nativeFenceHeldInput) }
         if admission.interrupted { RuntimeDiagnostics.record(.nativeFenceInterrupted) }
         let allowCombinedShift = monitor.allowCombinedShift(after: admission)

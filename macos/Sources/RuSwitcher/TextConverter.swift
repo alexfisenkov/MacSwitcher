@@ -791,6 +791,14 @@ final class TextConverter {
         selectionPolicy(text, context: context, normalize: normalize)?.replacement ?? text
     }
 
+    /// Exposes the existing selection policy's result source to a shell-owned
+    /// editor. It does not add a second conversion policy or write any field.
+    func shellSelectionConversion(_ text: String, context: CombinedShiftContext)
+        -> (replacement: String, resultLayoutID: String)? {
+        guard let result = selectionPolicy(text, context: context) else { return nil }
+        return (result.replacement, selectedResultContext(result, requested: context).targetLayoutID)
+    }
+
     private func selectedResultContext(_ result: SelectionPolicyResult,
                                        requested: CombinedShiftContext) -> CombinedShiftContext {
         guard result.smart else {

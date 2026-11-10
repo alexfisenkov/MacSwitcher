@@ -26,6 +26,8 @@
 	<true/>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>MacSwitcher reads the selected terminal tab to correct an unsubmitted command line when shell integration is enabled. It does not run commands.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 MacSwitcher contributors. Based on MIT-licensed RuSwitcher.</string>
 	<key>LocalEdition</key>

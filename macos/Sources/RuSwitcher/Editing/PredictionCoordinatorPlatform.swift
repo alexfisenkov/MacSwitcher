@@ -47,6 +47,7 @@ struct PredictionCoordinatorPlatform {
     let selectSource: (String) -> LayoutSelectionCommit.Outcome
     let sourceRequestedAt: () -> UInt64
     let noteUnconfirmedSource: (String, UInt64) -> Void
+    var searchOverlayActive: () -> Bool = { false }
 
     func isSecure() -> Bool { AutoSwitchPolicy.secureInputActive || secureInputActive() }
 
@@ -70,6 +71,7 @@ struct PredictionCoordinatorPlatform {
             finishLease: { monitor.finishNativeInputTransaction($0, replayLayoutID: $1) },
             selectSource: { LayoutSwitcher.switchToWithConfirmation(layoutID: $0) },
             sourceRequestedAt: { DispatchTime.now().uptimeNanoseconds },
-            noteUnconfirmedSource: { monitor.noteUnconfirmedInputSource($0, requestedAt: $1) })
+            noteUnconfirmedSource: { monitor.noteUnconfirmedInputSource($0, requestedAt: $1) },
+            searchOverlayActive: { SearchOverlayTarget.mayHaveActiveOverlay() })
     }
 }

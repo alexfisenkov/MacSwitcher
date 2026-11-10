@@ -35,6 +35,11 @@ def metadata(root, revision, dirty):
     info = plistlib.loads((root / "macos/Info.plist").read_bytes())
     if info["CFBundleIdentifier"] != BUNDLE_ID:
         raise ValueError("Unexpected bundle identity")
+    if not isinstance(info.get("NSAppleEventsUsageDescription"), str) or not info["NSAppleEventsUsageDescription"].strip():
+        raise ValueError("Shell integration requires an Apple Events usage description")
+    entitlements = plistlib.loads((root / "macos/RuSwitcher.entitlements").read_bytes())
+    if entitlements.get("com.apple.security.automation.apple-events") is not True:
+        raise ValueError("Shell integration requires the Apple Events entitlement")
     info.update(CFBundleShortVersionString=version["short_version"],
                 CFBundleVersion=str(version["build"]),
                 MacSwitcherReleaseVersion=version["version"],

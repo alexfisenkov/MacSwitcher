@@ -39,6 +39,16 @@ class ProductTests(unittest.TestCase):
         self.assertNotIn("LocalProjectRoot", info)
         self.assertNotIn(b"/Users/", plistlib.dumps(info))
 
+    def test_shell_automation_metadata_is_explicit_and_narrow(self):
+        build = load("build_app")
+        info = build.metadata(ROOT, "a" * 40, False)
+        self.assertIn("selected terminal tab", info["NSAppleEventsUsageDescription"])
+        entitlements = plistlib.loads((ROOT / "macos/RuSwitcher.entitlements").read_bytes())
+        self.assertIs(entitlements["com.apple.security.automation.apple-events"], True)
+        self.assertIs(entitlements["com.apple.security.app-sandbox"], False)
+        self.assertNotIn("com.apple.security.cs.disable-library-validation", entitlements)
+        self.assertNotIn("com.apple.security.cs.allow-unsigned-executable-memory", entitlements)
+
     def test_native_rollout_metadata_requires_explicit_boolean_acceptance(self):
         build = load("build_app")
         version = build.json.loads((ROOT / "version.json").read_text())

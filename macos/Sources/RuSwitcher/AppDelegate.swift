@@ -6,6 +6,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private let keyboardMonitor = KeyboardMonitor()
     private let textConverter = TextConverter()
+    private let shellAuthorizationGate = ShellAuthorizationGate()
+    private lazy var shellCoordinator = ManualShellCoordinator(gate: shellAuthorizationGate)
     private lazy var recoveryArchiveController = RecoveryArchiveController(
         converter: textConverter,
         enabled: { SettingsManager.shared.automaticRecoveryArchiveEnabled },
@@ -20,8 +22,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var permissionCheckTimer: Timer?
     private var iconRefreshTimer: Timer?
     private var monitoringActive = false
+    private var systemSleeping = false
+    private var runtimeSleepObserver: NSObjectProtocol?
+    private var runtimeWakeObserver: NSObjectProtocol?
+    private lazy var runtimeHealth = RuntimeHealthController(observe: { [weak self] in
+        guard let self else { return RuntimeHealthSnapshot(monitoring: false,
+            masterEnabled: false, accessibilityGranted: false, inputMonitoringGranted: false,
+            secureInput: false, sleeping: false,
+            tap: NativeTapRecoveryStatus(tapPresent: false, tapEnabled: false,
+                fenceAvailable: false), nativeLeaseActive: false,
+            shellEditActive: false, unknownEditRetained: false, shell: .disabled) }
+        return self.runtimeHealthSnapshot()
+    }, invalidateContext: { [weak self] in
+        guard let self else { return }
+        _ = self.nativeSelectionAwaitGate.nextAction()
+        self.pendingNativeSelection?.cancel()
+        self.pendingNativeSelection = nil
+        self.predictionCoordinator.invalidate()
+        self.keyboardMonitor.invalidateRuntimeInputContext()
+        self.shellCoordinator.invalidatePendingForRuntimeTransition()
+    }, rearmTap: { [weak self] in
+        self?.tapRecovery.request(allowNewEpisode: true)
+    }, pollTap: { [weak self] needsRecovery in
+        self?.tapRecovery.poll(needsRecovery: needsRecovery)
+    }, maintainShell: { [weak self] in
+        self?.shellCoordinator.maintainHealth()
+    })
     private lazy var tapRecovery = MonitoringTapRecovery(isActive: { [weak self] in
         self?.monitoringActive == true
+    }, mayReconfigure: { [weak self] in
+        self?.mayReconfigureRuntimeTap() == true
     }, reconfigure: { [weak self] in
         self?.keyboardMonitor.reconfigure() == true
     }, schedule: { delay, action in
@@ -53,9 +83,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         recoveryArchiveController.onFailure = { [weak self] manual, reason in
             self?.showRecoveryArchiveFailure(manual: manual, reason: reason)
         }
+        shellCoordinator.onUnknown = { [weak self] in
+            guard let self else { return }
+            if let menu = self.statusItem?.menu?.item(withTag: Self.recoveryCopyItemTag) {
+                self.refreshRecoveryMenu(menu)
+            }
+            if self.shellCoordinator.hasUnbackedUnknown {
+                self.showUnknownEditNotice()
+                if SettingsManager.shared.automaticRecoveryArchiveEnabled {
+                    if let directory = try? self.recoveryDirectory() {
+                        self.shellCoordinator.scheduleAutomaticArchive(in: directory) { [weak self] in
+                            self?.showFeedback(title: "MacSwitcher",
+                                body: L10n.languageCode == "ru"
+                                    ? "Исходная строка терминала осталась в памяти; локальное сохранение не удалось."
+                                    : "The original terminal line remains in memory; local saving failed.",
+                                kind: .saveFailure)
+                        }
+                    }
+                }
+            }
+        }
+        shellCoordinator.onConfirmed = { [weak self] resultLayoutID in
+            guard let self else { return }
+            let outcome = LayoutSwitcher.switchToWithConfirmation(layoutID: resultLayoutID)
+            self.keyboardMonitor.markConverted()
+            if outcome != .confirmed {
+                self.keyboardMonitor.requireObservedInputSource(resultLayoutID)
+                self.presentSourceFailure(targetID: resultLayoutID)
+            }
+            self.updateStatusIcon()
+        }
         NSWorkspace.shared.notificationCenter.addObserver(self,
             selector: #selector(observedApplicationTermination(_:)),
             name: NSWorkspace.didTerminateApplicationNotification, object: nil)
+        runtimeSleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.runtimeWillSleep() }
+            }
+        runtimeWakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.runtimeDidWake() }
+            }
         textConverter.onRecoveryCapacityBlocked = { [weak self] reason in
             DispatchQueue.main.async { self?.showRecoveryCapacityNotice(reason) }
         }
@@ -65,6 +133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             explanationShown: introShown))
         setupStatusItem()
         setupSettingsCallbacks()
+        configureShellBridge()
         syncLoginItem()
         // «Запускались раньше?» снимаем ДО визарда: он через startMonitoring →
         // offerLaunchAtLoginIfNeeded выставляет launchAtLoginAsked уже на этом же
@@ -104,6 +173,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         settingsController.onAutoSwitchChanged = { [weak self] _ in
             self?.resetCombinedShiftAfterPause()
             self?.syncElectronAccessibilityBridge()
+            self?.configureShellBridge()
             // Не адресуем пункт по индексу: меню группирует пункты по назначению,
             // а recovery и раскладки появляются динамически. Пересборка — как у соседних колбэков.
             self?.rebuildMenu()
@@ -127,6 +197,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.textConverter.clearState()
             self?.reconfigureTap()
             self?.configurePredictionPreferences()
+            self?.configureShellBridge()
+        }
+        settingsController.onShellBridgeSetupRequested = { [weak self] in
+            self?.showShellBridgeSetup()
+        }
+        settingsController.onRuntimeCheckRequested = { [weak self] in
+            self?.showRuntimeCheck()
         }
         settingsController.onAutoConvertChanged = { [weak self] _ in
             self?.predictionCoordinator.invalidate()
@@ -160,6 +237,121 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         predictionCoordinator.phraseExceptionLookup = { original, language in
             PersonalWordStore.shared.containsPhrase(original: original, sourceLanguage: language)
         }
+    }
+
+    private func configureShellBridge() {
+        shellCoordinator.configure(enabled: SettingsManager.shared.shellBridgeEnabled
+            && SettingsManager.shared.combinedShiftEnabled
+            && SettingsManager.shared.autoSwitchEnabled)
+        if shellCoordinator.isRequested {
+            let gate = shellAuthorizationGate
+            keyboardMonitor.onInputRevisionAdvanced = { _ = gate.next() }
+        } else {
+            keyboardMonitor.onInputRevisionAdvanced = nil
+        }
+    }
+
+    /// Explicit setup only. Showing this preview does not change the profile.
+    private func showShellBridgeSetup() {
+        guard let resource = ShellBridgeProfilePatch.packagedResourceURL else {
+            showShellBridgeSetupResult(success: false, detail: L10n.languageCode == "ru"
+                ? "Ресурс подключения отсутствует в приложении."
+                : "The packaged shell resource is missing.")
+            return
+        }
+        let profile = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".zshrc")
+        do {
+            let existing = FileManager.default.fileExists(atPath: profile.path)
+                ? try Data(contentsOf: profile) : nil
+            let current = try ShellBridgeProfilePatch.preview(profileData: existing,
+                resourcePath: resource.path)
+            let uninstall = current.action == .alreadyInstalled
+            let plan = try ShellBridgeProfilePatch.preview(profileData: existing,
+                resourcePath: resource.path, uninstall: uninstall)
+            let alert = NSAlert()
+            alert.alertStyle = .informational
+            alert.messageText = L10n.languageCode == "ru"
+                ? (uninstall ? "Подключение zsh установлено" : "Подключить zsh к MacSwitcher?")
+                : (uninstall ? "zsh integration is installed" : "Connect zsh to MacSwitcher?")
+            alert.informativeText = (L10n.languageCode == "ru"
+                ? "При установке или удалении меняется только одна строка ~/.zshrc. Перед записью сохранится точная приватная копия (0600). После изменения откройте новое окно терминала. Доступ к вкладке запрашивается отдельно.\n\n"
+                : "Installing or removing changes exactly one line in ~/.zshrc. A byte-exact private backup (0600) is saved first. Open a new terminal window afterward. Tab access is requested separately.\n\n")
+                + plan.sourceLine
+            if uninstall {
+                alert.addButton(withTitle: L10n.languageCode == "ru" ? "Запросить доступ к вкладке" : "Request tab access")
+                alert.addButton(withTitle: L10n.languageCode == "ru" ? "Удалить строку" : "Remove line")
+                alert.addButton(withTitle: L10n.languageCode == "ru" ? "Отмена" : "Cancel")
+                let choice = alert.runModal()
+                if choice == .alertFirstButtonReturn { showShellBridgeConsent(); return }
+                guard choice == .alertSecondButtonReturn else { return }
+            } else {
+                alert.addButton(withTitle: L10n.languageCode == "ru" ? "Установить строку" : "Install line")
+                alert.addButton(withTitle: L10n.languageCode == "ru" ? "Отмена" : "Cancel")
+                guard alert.runModal() == .alertFirstButtonReturn else { return }
+            }
+            let (result, backup) = try ShellBridgeProfilePatch.apply(profile: profile,
+                resourcePath: resource.path, uninstall: uninstall)
+            showShellBridgeSetupResult(success: true, detail: L10n.languageCode == "ru"
+                ? "\(result.action == .uninstall ? "Подключение удалено" : "Подключение установлено"). Откройте новое окно терминала. Резервная копия: \(backup?.path ?? "—")."
+                : "\(result.action == .uninstall ? "Integration removed" : "Integration installed"). Open a new terminal window. Backup: \(backup?.path ?? "—").")
+        } catch ShellBridgeProfilePatch.PatchError.conflict {
+            showShellBridgeSetupResult(success: false, detail: L10n.languageCode == "ru"
+                ? "Другой редактор изменил ~/.zshrc во время настройки. Текущий файл и приватные копии сохранены в ~/.macswitcher-profile-recovery. Проверьте их перед повтором."
+                : "Another editor changed ~/.zshrc during setup. The current file and private copies are preserved in ~/.macswitcher-profile-recovery. Review them before retrying.")
+        } catch {
+            showShellBridgeSetupResult(success: false, detail: L10n.languageCode == "ru"
+                ? "Настройка не завершена. Проверьте ~/.zshrc и приватные копии в ~/.macswitcher-profile-recovery перед повтором."
+                : "Setup did not finish. Review ~/.zshrc and private copies in ~/.macswitcher-profile-recovery before retrying.")
+        }
+    }
+
+    private func showShellBridgeSetupResult(success: Bool, detail: String) {
+        let alert = NSAlert()
+        alert.alertStyle = success ? .informational : .warning
+        alert.messageText = "MacSwitcher"
+        alert.informativeText = detail
+        alert.runModal()
+    }
+
+    /// The user clicks this separately after installing the source line.
+    /// Capability discovery is local; the TCC consent request runs off main.
+    private func showShellBridgeConsent() {
+        let discovery = SelectedTTYCapabilityDiscovery()
+        let hosts = NSWorkspace.shared.runningApplications.filter {
+            discovery.capability(pid: $0.processIdentifier) != nil
+        }
+        guard hosts.count == 1, let host = hosts.first else {
+            showShellBridgeSetupResult(success: false, detail: L10n.languageCode == "ru"
+                ? "Откройте один совместимый терминал и повторите запрос доступа."
+                : "Open one compatible terminal and request access again.")
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = L10n.languageCode == "ru" ? "Разрешить определять активную вкладку?" : "Allow active-tab lookup?"
+        alert.informativeText = (host.localizedName ?? host.bundleIdentifier ?? "Terminal")
+            + (L10n.languageCode == "ru"
+                ? ": macOS может назвать разрешение «управлением приложением». MacSwitcher использует его только чтобы определить активную вкладку терминала. Команды не запускаются."
+                : ": macOS may call this permission “control the app.” MacSwitcher uses it only to identify the active terminal tab. No commands are run.")
+        alert.addButton(withTitle: L10n.languageCode == "ru" ? "Запросить доступ" : "Request access")
+        alert.addButton(withTitle: L10n.languageCode == "ru" ? "Отмена" : "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let pid = host.processIdentifier
+        Task { [weak self] in
+            let result = await Task.detached(priority: .userInitiated) {
+                NativeReadOnlyAppleEventExecutor.requestConsent(pid: pid)
+            }.value
+            self?.showShellBridgeSetupResult(success: result == noErr,
+                detail: result == noErr
+                    ? (L10n.languageCode == "ru" ? "Доступ к выбранной вкладке разрешён."
+                        : "Selected-tab access is allowed.")
+                    : (L10n.languageCode == "ru" ? "Доступ пока не получен; строка терминала не будет изменяться."
+                        : "Access was not granted; the terminal line will remain untouched."))
+        }
+    }
+
+    private func recoveryDirectory() throws -> URL {
+        try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+            appropriateFor: nil, create: true).appendingPathComponent("MacSwitcher/Recovery", isDirectory: true)
     }
 
     /// Повторный запуск приложения (двойной клик в «Программах», Spotlight, Launchpad) —
@@ -239,7 +431,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func showUnknownEditNotice() {
-        let hasRecovery = textConverter.hasUnconfirmedAXEdit
+        let hasRecovery = textConverter.hasUnconfirmedAXEdit || !shellCoordinator.uncertainOriginals.isEmpty
         showFeedback(title: "MacSwitcher",
             body: CorrectionFeedbackPolicy.recoveryMessage(languageCode: L10n.languageCode,
                 hasRecovery: hasRecovery),
@@ -557,11 +749,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
             }
         ) {
-            rslog("Event tap failed - will retry in 5s")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
-                self?.startMonitoring()
-            }
-            return
+            // Keep the ordinary callbacks configured and let the existing
+            // two-second health poll plus one tap recovery queue retry safely.
+            rslog("Event tap failed - health poll will retry when safe")
         }
 
         monitoringActive = true
@@ -569,6 +759,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         configurePredictionPreferences()
         keyboardMonitor.onCombinedShift = { [weak self] request in
             self?.handleCombinedShift(request)
+        }
+        keyboardMonitor.onRuntimeSecureInputObserved = { [weak self] in
+            self?.runtimeHealth.noteSecureInputObserved()
+        }
+        keyboardMonitor.onRuntimeSecureInputResumed = { [weak self] in
+            self?.runtimeHealth.noteSecureInputResumed()
+        }
+        keyboardMonitor.onRuntimeNormalKeyboardActivity = { [weak self] in
+            self?.runtimeHealth.noteNormalKeyboardActivity() ?? true
         }
         keyboardMonitor.onPredictionInput = { [weak self] snapshot in
             self?.predictionCoordinator.submit(snapshot)
@@ -665,11 +864,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         iconRefreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
-                if self.monitoringActive {
-                    // A timed-out fence, missing tap or disabled tap needs a fresh host.
-                    // Pending originals remain retained during restart.
-                    self.tapRecovery.poll(needsRecovery: self.keyboardMonitor.nativeTapNeedsRecovery)
-                }
+                self.runtimeHealth.poll()
                 self.electronAccessibilityBridge.refresh()
                 self.updateStatusIcon()
             }
@@ -722,6 +917,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             _ = keyboardMonitor.recordExplicitInputSourceSelection(
                 targetID: direction.targetLayoutID, observedSourceID: LayoutSwitcher.currentLayoutID())
             updateStatusIcon()
+            shellCoordinator.prepare(first: request)
             return  // preserve typed buffers and undo; this may still be the first half of a double
         case .convert(let direction):
             guard request.inputRevision == keyboardMonitor.inputRevision else {
@@ -732,7 +928,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // The controlled instance receives the real Shift gestures. Local source was already
         // selected on tap one; another generic toggle here would race that instance.
         guard !AutoSwitchPolicy.shouldDeferToRemoteClient else { RuntimeDiagnostics.record(.doubleRemoteDeferred); return }
-        guard let focus = request.focus, focus.processID == request.frontProcessID else {
+        let nativeFallback = { [weak self] in
+            guard let self else { return }
+            self.runNativeCombinedShift(request, context: context)
+        }
+        if shellCoordinator.convert(second: request, context: context,
+            converter: textConverter, isCurrent: { [weak self] in
+                guard let self else { return false }
+                return SettingsManager.shared.shellBridgeEnabled
+                    && SettingsManager.shared.combinedShiftEnabled
+                    && SettingsManager.shared.autoSwitchEnabled
+                    && self.keyboardMonitor.inputRevision == request.inputRevision
+                    && NSWorkspace.shared.frontmostApplication?.processIdentifier == request.frontProcessID
+                    && LayoutSwitcher.currentLayoutID() == context.targetLayoutID
+                    && !AutoSwitchPolicy.secureInputActive
+            }, nativeFallback: nativeFallback) { return }
+        nativeFallback()
+    }
+
+    private func runNativeCombinedShift(_ request: CombinedShiftRequest,
+                                        context: CombinedShiftContext) {
+        guard let focus = request.focus,
+              (focus.searchOverlay?.hostPID == request.frontProcessID
+                || (focus.searchOverlay == nil && focus.processID == request.frontProcessID)),
+              focus.currentTargetProcessID() == focus.processID else {
             RuntimeDiagnostics.record(.doubleMissingFocus); return
         }
         let execution = CombinedShiftExecutionContext(focus: focus, inputRevision: request.inputRevision,
@@ -768,7 +987,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                       let current = self.textConverter.nativeSelectionBaseline(execution: execution),
                       baseline.matches(current),
                       self.keyboardMonitor.inputRevision == execution.inputRevision,
-                      NSWorkspace.shared.frontmostApplication?.processIdentifier == execution.focus.processID,
+                      execution.focus.currentTargetProcessID() == execution.focus.processID,
                       !AutoSwitchPolicy.secureInputActive,
                       LayoutSwitcher.currentLayoutID() == context.targetLayoutID else {
                     self.showCombinedShiftRefusal()
@@ -797,7 +1016,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         selectionKnownWord: ((String, String) -> Bool?)? = nil) {
         let platform = CombinedShiftTransaction.Platform(
             currentSourceID: LayoutSwitcher.currentLayoutID,
-            frontProcessID: { NSWorkspace.shared.frontmostApplication?.processIdentifier },
+            frontProcessID: { execution.focus.currentTargetProcessID() },
             secureInputActive: { AutoSwitchPolicy.secureInputActive },
             beginLease: { [weak self] pid in
                 self?.keyboardMonitor.beginNativeInputTransaction(processID: pid)
@@ -1181,7 +1400,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             statusItem.button?.image = nil
             statusItem.button?.title = flag
         }
+        statusItem.button?.toolTip = runtimeHealthTooltip(runtimeHealth.state)
         if changed { caretIndicator?.layoutChanged() }
+    }
+
+    private func runtimeHealthTooltip(_ state: RuntimeHealthState) -> String? {
+        let ru = L10n.languageCode == "ru"
+        switch state {
+        case .off, .connected: return nil
+        case .sleeping: return ru ? "MacSwitcher: выход из сна" : "MacSwitcher: waking up"
+        case .permissionsRequired: return ru ? "MacSwitcher: проверьте разрешения" : "MacSwitcher: check permissions"
+        case .secureInputPaused: return ru ? "MacSwitcher: защищённый ввод" : "MacSwitcher: Secure Input"
+        case .editDeferred: return ru ? "MacSwitcher: восстановление отложено" : "MacSwitcher: recovery deferred"
+        case .tapUnavailable: return ru ? "MacSwitcher: нет подключения к клавиатуре" : "MacSwitcher: keyboard connection unavailable"
+        case .shellRecovering: return ru ? "MacSwitcher: подключение терминала восстанавливается" : "MacSwitcher: terminal connection recovering"
+        case .shellNeedsUserAction: return ru ? "MacSwitcher: проверьте подключение терминала" : "MacSwitcher: check terminal connection"
+        case .unconfirmedEdit: return ru ? "MacSwitcher: есть неподтверждённая правка" : "MacSwitcher: an edit is unconfirmed"
+        case .selfCheckFailed: return ru ? "MacSwitcher: внутренняя проверка не прошла" : "MacSwitcher: internal check failed"
+        }
     }
 
     /// Подпись монохромной плашки — родная аббревиатура языка, как у системного индикатора.
@@ -1283,6 +1519,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         SettingsManager.shared.autoSwitchEnabled.toggle()
         resetCombinedShiftAfterPause()
         syncElectronAccessibilityBridge()
+        configureShellBridge()
         let enabled = SettingsManager.shared.autoSwitchEnabled
         sender.state = enabled ? .on : .off
         settingsController.updateAutoSwitchState(enabled)
@@ -1298,7 +1535,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func refreshRecoveryMenu(_ parent: NSMenuItem) {
-        let hasRecovery = textConverter.hasUnconfirmedAXEdit
+        let hasRecovery = textConverter.hasUnconfirmedAXEdit || !shellCoordinator.uncertainOriginals.isEmpty
         parent.isEnabled = hasRecovery
         parent.isHidden = !hasRecovery
         let submenu = NSMenu()
@@ -1316,7 +1553,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item.representedObject = original
             submenu.addItem(item)
         }
-        if textConverter.hasRAMUnconfirmedAXEdit {
+        for (index, original) in shellCoordinator.uncertainOriginals.enumerated() {
+            let title = L10n.languageCode == "ru"
+                ? "Скопировать исходную строку терминала \(index + 1)"
+                : "Copy original terminal line \(index + 1)"
+            let item = NSMenuItem(title: title, action: #selector(copyShellRecoveryOriginal(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = original
+            submenu.addItem(item)
+        }
+        if textConverter.hasRAMUnconfirmedAXEdit || shellCoordinator.hasUnbackedUnknown {
             submenu.addItem(NSMenuItem.separator())
             let save = NSMenuItem(title: L10n.languageCode == "ru"
                 ? "Сохранить исходники локально и продолжить"
@@ -1349,6 +1595,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func saveRecoveryOriginals() {
         recoveryArchiveController.requestManual()
+        if shellCoordinator.hasUnbackedUnknown {
+            do {
+                shellCoordinator.scheduleAutomaticArchive(in: try recoveryDirectory()) { [weak self] in
+                    self?.showFeedback(title: "MacSwitcher",
+                        body: L10n.languageCode == "ru"
+                            ? "Исходная строка терминала осталась в памяти; сохранение не удалось."
+                            : "The original terminal line remains in memory; saving failed.", kind: .saveFailure)
+                }
+            } catch {
+                showFeedback(title: "MacSwitcher",
+                    body: L10n.languageCode == "ru"
+                        ? "Исходная строка терминала осталась в памяти; сохранение не удалось."
+                        : "The original terminal line remains in memory; saving failed.", kind: .saveFailure)
+            }
+        }
+    }
+
+    @objc private func copyShellRecoveryOriginal(_ sender: NSMenuItem) {
+        guard let original = sender.representedObject as? ManualShellCoordinator.RecoveryOriginal else { return }
+        let text: String
+        if let archive = original.archive {
+            guard let saved = try? RecoveryArchive.original(id: original.id, receipt: archive) else { return }
+            text = saved
+        } else {
+            guard let retained = original.text else { return }
+            text = retained
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     @objc private func openRecoveryArchiveFolder() {
@@ -1391,7 +1666,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Пересоздаёт event tap и, если создание не удалось (например, session-tap отклонён),
     /// ретраит — иначе тумблер «вкл», а tap'а нет, и приложение молча не реагирует на триггер.
     private func reconfigureTap() {
-        tapRecovery.request()
+        tapRecovery.request(allowNewEpisode: true)
+    }
+
+    private func runtimeHealthSnapshot() -> RuntimeHealthSnapshot {
+        RuntimeHealthSnapshot(monitoring: monitoringActive,
+            masterEnabled: SettingsManager.shared.autoSwitchEnabled,
+            accessibilityGranted: AXIsProcessTrusted(),
+            inputMonitoringGranted: CGPreflightListenEventAccess(),
+            secureInput: AutoSwitchPolicy.secureInputActive,
+            sleeping: systemSleeping,
+            tap: keyboardMonitor.nativeTapRecoveryStatus,
+            nativeLeaseActive: keyboardMonitor.hasNativeInputLease,
+            shellEditActive: shellCoordinator.hasInFlightEdit,
+            unknownEditRetained: textConverter.hasUnconfirmedAXEdit
+                || !shellCoordinator.uncertainOriginals.isEmpty,
+            shell: shellCoordinator.health)
+    }
+
+    private func mayReconfigureRuntimeTap() -> Bool {
+        runtimeHealth.mayReconfigureTap()
+    }
+
+    private func runtimeWillSleep() {
+        systemSleeping = true
+        runtimeHealth.poll(reason: .sleep)
+    }
+
+    private func runtimeDidWake() {
+        systemSleeping = false
+        runtimeHealth.poll(reason: .wake)
+    }
+
+    private func showRuntimeCheck() {
+        let report = runtimeHealth.runManualCheck()
+        let ru = L10n.languageCode == "ru"
+        let summary: String
+        switch report.state {
+        case .off: summary = ru ? "Обработка выключена в настройках." : "Processing is off in settings."
+        case .sleeping: summary = ru ? "Компьютер выходит из сна." : "The Mac is waking up."
+        case .permissionsRequired: summary = ru ? "Проверьте разрешения «Универсальный доступ» и «Мониторинг ввода»." : "Check Accessibility and Input Monitoring permissions."
+        case .secureInputPaused: summary = ru ? "Защищённый ввод временно приостановил обработку." : "Secure Input has paused processing."
+        case .editDeferred: summary = ru ? "Идёт редактирование; восстановление отложено." : "An edit is in progress; recovery is deferred."
+        case .tapUnavailable:
+            summary = ru
+                ? (tapRecovery.isExhausted ? "MacSwitcher не получает нажатия. Проверьте разрешения и попробуйте проверку ещё раз." : "MacSwitcher пока не подключён к клавиатуре; повторяем проверку.")
+                : (tapRecovery.isExhausted ? "MacSwitcher cannot receive keys. Check permissions and run the check again." : "MacSwitcher is not connected to the keyboard yet; checking again.")
+        case .shellRecovering: summary = ru ? "Подключение терминала временно недоступно; число повторов ограничено." : "The terminal connection is temporarily unavailable; retries are limited."
+        case .shellNeedsUserAction: summary = ru ? "Проверьте подключение терминала и доступ к вкладке." : "Check the terminal connection and tab access."
+        case .unconfirmedEdit: summary = ru ? "Есть неподтверждённая замена. Проверьте исходный текст в меню восстановления." : "An edit is unconfirmed. Check the original text in the recovery menu."
+        case .connected: summary = ru ? "MacSwitcher подключён к клавиатуре." : "MacSwitcher is connected to the keyboard."
+        case .selfCheckFailed: summary = ru ? "Внутренняя проверка не прошла." : "An internal check failed."
+        }
+        let passed = report.checks.filter { $0.passed }.count
+        var detail = ru
+            ? "\(summary)\n\nВнутренние проверки: \(passed)/\(report.checks.count). Они не проверяют ввод в других приложениях."
+            : "\(summary)\n\nInternal checks: \(passed)/\(report.checks.count). They do not test typing in other apps."
+        if case .listening(let sessions) = report.shell, sessions == 0 {
+            detail += ru
+                ? "\n\nТерминал: сейчас нет подключения. При необходимости проверьте настройку и откройте новое окно."
+                : "\n\nzsh: no prompt is connected now. Check setup and open a new window if needed."
+        }
+        if report.unknownEditRetained && report.state != .unconfirmedEdit {
+            detail += ru
+                ? "\n\nЕсть неподтверждённая замена. Проверьте исходный текст в меню восстановления."
+                : "\n\nAn edit is unconfirmed. Check the original text in the recovery menu."
+        }
+        let alert = NSAlert()
+        alert.messageText = ru ? "Проверка MacSwitcher" : "MacSwitcher check"
+        alert.informativeText = detail
+        alert.runModal()
     }
 
     @objc private func recheckPermissions() {
@@ -1474,6 +1818,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         NSWorkspace.shared.notificationCenter.removeObserver(self,
             name: NSWorkspace.didTerminateApplicationNotification, object: nil)
+        if let runtimeSleepObserver { NSWorkspace.shared.notificationCenter.removeObserver(runtimeSleepObserver) }
+        if let runtimeWakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(runtimeWakeObserver) }
         monitoringActive = false
         tapRecovery.stop()
         iconRefreshTimer?.invalidate()
@@ -1481,13 +1827,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         electronAccessibilityBridge.stop()
         perAppLayoutManager.stop()
         keyboardMonitor.stop()
+        shellCoordinator.configure(enabled: false)
         // Не теряем буфер обмена в 2-секундном окне отложенного восстановления
         // (актуально и при само-обновлении, которое завершает процесс).
         textConverter.flushPendingClipboardRestore()
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard textConverter.hasRAMUnconfirmedAXEdit else { return .terminateNow }
+        if shellCoordinator.hasInFlightEdit {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = L10n.languageCode == "ru"
+                ? "Подождите завершения исправления строки" : "Wait for the line edit to finish"
+            alert.informativeText = L10n.languageCode == "ru"
+                ? "Исходная строка хранится в памяти, пока результат записи не подтверждён. Повторите выход после завершения проверки."
+                : "The original line remains in memory until the edit is verified. Quit again after verification finishes."
+            alert.runModal()
+            return .terminateCancel
+        }
+        guard textConverter.hasRAMUnconfirmedAXEdit || shellCoordinator.hasUnbackedUnknown else {
+            return .terminateNow
+        }
         // Normal quit is an explicit user action, outside the physical input
         // lease. Validate existing backups before deciding which RAM originals
         // still need a new export; never spend archive quota twice for them.
@@ -1496,7 +1856,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 textConverter.invalidateBacking(id: source.id, receipt: source.archive)
             }
         }
-        guard !textConverter.unbackedOriginals.isEmpty else { return .terminateNow }
+        guard !textConverter.unbackedOriginals.isEmpty || shellCoordinator.hasUnbackedUnknown else {
+            return .terminateNow
+        }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = L10n.languageCode == "ru" ? "Сначала сохраните исходный текст" : "Save the original text first"
@@ -1510,7 +1872,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let directory = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
                 appropriateFor: nil, create: true).appendingPathComponent("MacSwitcher/Recovery", isDirectory: true)
             let originals = textConverter.unbackedOriginals.map { RecoveryArchive.Source(id: $0.id, text: $0.text) }
-            _ = try RecoveryArchive.save(originals, in: directory)
+            if !originals.isEmpty { _ = try RecoveryArchive.save(originals, in: directory) }
+            try shellCoordinator.saveUncertainOriginals(in: directory)
             return .terminateNow
         } catch {
             let failure = NSAlert()

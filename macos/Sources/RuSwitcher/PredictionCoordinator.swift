@@ -227,7 +227,8 @@ final class PredictionCoordinator {
         // Capture before returning the first callback, rather than letting a later
         // queued capture become stale after a burst. Unknown focus stays unavailable;
         // a subsequent proposal must never establish a different field as baseline.
-        guard snapshot.sessionID == monitor.predictionSessionID,
+        guard !platform.searchOverlayActive(),
+              snapshot.sessionID == monitor.predictionSessionID,
               snapshot.isCurrent(processID: platform.frontmost().processID,
                   revision: monitor.inputRevision, generation: monitor.predictionGeneration),
               !platform.isSecure() else {
@@ -314,6 +315,9 @@ final class PredictionCoordinator {
         }.value
         guard isCurrent(snapshot) else { outcome = .stale; RuntimeDiagnostics.record(.autoEvaluationStale); return }
         guard let proposal else { outcome = .noProposal; RuntimeDiagnostics.record(.autoNoProposal); return }
+        // A floating search field may acquire input after this word's first
+        // event. Never commit a proposal to the stale underlay anchor.
+        guard !platform.searchOverlayActive() else { outcome = .stale; return }
         RuntimeDiagnostics.record(.autoProposal)
         guard proposal.originalSuffix == snapshot.suffix,
               !Self.containsDeniedChange(original: proposal.originalSuffix, replacement: proposal.replacementSuffix),

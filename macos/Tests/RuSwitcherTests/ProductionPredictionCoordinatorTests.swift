@@ -97,6 +97,7 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         var onApplication: (() -> Void)?
         var captureAvailable = true
         var captureFocusCount = 0
+        var searchOverlayActive = false
 
         lazy var converter = ProductionCombinedShiftEditingTests.converter(for: fields,
             automaticRoute: { _, _, _ in .nativeVerified })
@@ -135,7 +136,7 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
             }, sourceRequestedAt: { DispatchTime.now().uptimeNanoseconds },
             noteUnconfirmedSource: { [unowned self] target, at in
                 monitor.noteUnconfirmedInputSource(target, requestedAt: at)
-            })
+            }, searchOverlayActive: { [unowned self] in searchOverlayActive })
 
         lazy var coordinator: PredictionCoordinator = {
             let value = PredictionCoordinator(monitor: monitor, converter: converter, platform: platform, engine: engine)
@@ -201,6 +202,20 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         let en = try XCTUnwrap(layouts.first { LayoutSwitcher.languageCode($0) == "en" })
         let ru = try XCTUnwrap(layouts.first { LayoutSwitcher.languageCode($0) == "ru" })
         return (LayoutSwitcher.sourceID(en), LayoutSwitcher.sourceID(ru))
+    }
+
+    @MainActor
+    func testVisibleSearchOverlayDoesNotAnchorOrEditUnderlay() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2099, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        rig.searchOverlayActive = true
+        _ = rig.coordinator
+        rig.deliver("ghbd")
+        rig.settle(expected: .stale)
+        XCTAssertEqual(rig.captureFocusCount, 0)
+        XCTAssertEqual(rig.beginLeaseAttempts, 0)
+        XCTAssertEqual(field.text, "ghbd")
     }
 
     @MainActor
