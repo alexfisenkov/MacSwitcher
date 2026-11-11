@@ -190,12 +190,32 @@ struct ScriptableShellFocusProof: GenericShellEditorFocusProof {
         return frontmostPID() == appPID
     }
 
-    private static func shellIsForeground(_ pid: Int32, tty: String) -> Bool {
-        let fd = Darwin.open(tty, O_RDONLY | O_NOCTTY | O_NONBLOCK)
+    static func shellIsForeground(_ pid: Int32, tty: String) -> Bool {
+        guard pid > 0 else { return false }
+        let fd = Darwin.open(tty, O_RDONLY | O_NOCTTY | O_NONBLOCK | O_CLOEXEC)
         guard fd >= 0 else { return false }
         defer { Darwin.close(fd) }
-        let foreground = Darwin.tcgetpgrp(fd)
-        return foreground > 0 && foreground == Darwin.getpgid(pid)
+        var device = stat()
+        guard Darwin.fstat(fd, &device) == 0,
+              device.st_mode & mode_t(S_IFMT) == mode_t(S_IFCHR) else { return false }
+
+        // tcgetpgrp(fd) requires this GUI process to own the controlling TTY.
+        // KERN_PROC_PID reports the shell's own controlling TTY and foreground
+        // group without reading its command line, environment or buffer.
+        var mib = [Int32(CTL_KERN), Int32(KERN_PROC), Int32(KERN_PROC_PID), pid]
+        var process = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.size
+        guard Darwin.sysctl(&mib, u_int(mib.count), &process, &size, nil, 0) == 0,
+              size == MemoryLayout<kinfo_proc>.size,
+              process.kp_proc.p_pid == pid,
+              process.kp_proc.p_stat != SZOMB,
+              process.kp_eproc.e_ucred.cr_uid == Darwin.geteuid(),
+              process.kp_eproc.e_pcred.p_ruid == Darwin.getuid(),
+              process.kp_eproc.e_flag & Int32(EPROC_CTTY) != 0,
+              process.kp_eproc.e_tdev == device.st_rdev,
+              process.kp_eproc.e_pgid > 0,
+              process.kp_eproc.e_tpgid == process.kp_eproc.e_pgid else { return false }
+        return true
     }
 
     private static func axFocusedTextArea(pid: Int32, bounds: CGRect) -> Bool {

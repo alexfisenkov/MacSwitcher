@@ -1,9 +1,148 @@
 import AppKit
 import ApplicationServices
+import Darwin
 import XCTest
 @testable import RuSwitcher
 
+/// Own PTY/session fixture. Python is spawned directly as the process under
+/// test; it never launches a shell or touches the user's terminal/profile.
+private final class ForegroundPTYFixture {
+    private static let script = #"""
+import os, pty, signal, sys
+def stop(_signal, _frame):
+    raise SystemExit
+signal.signal(signal.SIGTERM, stop)
+command_read, command_write = os.pipe()
+reply_read, reply_write = os.pipe()
+shell, master = pty.fork()
+if shell == 0:
+    os.close(command_write)
+    os.close(reply_read)
+    child = None
+    try:
+        os.write(reply_write, f'{os.getpid()} {os.ttyname(0)}\n'.encode())
+        if os.read(command_read, 1) == b'b':
+            child = os.fork()
+            if child == 0:
+                os.setpgid(0, 0)
+                signal.pause()
+                os._exit(0)
+            os.setpgid(child, child)
+            os.tcsetpgrp(0, child)
+            os.write(reply_write, f'{child}\n'.encode())
+        signal.pause()
+    finally:
+        if child:
+            os.kill(child, signal.SIGKILL)
+    os._exit(0)
+os.close(command_read)
+os.close(reply_write)
+background = None
+try:
+    print(os.read(reply_read, 256).decode().strip(), flush=True)
+    for command in sys.stdin:
+        if command.strip() == 'background':
+            os.write(command_write, b'b')
+            background = int(os.read(reply_read, 256).decode().strip())
+            print(background, flush=True)
+finally:
+    if background:
+        os.kill(background, signal.SIGKILL)
+    os.kill(shell, signal.SIGTERM)
+    os.waitpid(shell, 0)
+    os.close(master)
+"""#
+
+    let shellPID: pid_t
+    let tty: String
+    private let process: Process
+    private let input: Pipe
+    private let output: Pipe
+
+    init() throws {
+        let process = Process()
+        let input = Pipe(), output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        process.arguments = ["-c", Self.script]
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = Pipe()
+        try process.run()
+        let parts: [Substring]
+        let validatedPID: pid_t
+        do {
+            parts = try Self.readReply(from: output).split(separator: " ")
+            guard parts.count == 2, let pid = pid_t(parts[0]), pid > 0,
+                  parts[1].hasPrefix("/dev/ttys") else { throw POSIXError(.EIO) }
+            validatedPID = pid
+        } catch {
+            input.fileHandleForWriting.closeFile()
+            if process.isRunning { process.terminate() }
+            process.waitUntilExit()
+            throw error
+        }
+        self.process = process
+        self.input = input
+        self.output = output
+        shellPID = validatedPID
+        tty = String(parts[1])
+    }
+
+    func moveShellToBackground() throws {
+        try input.fileHandleForWriting.write(contentsOf: Data("background\n".utf8))
+        guard let pid = pid_t(try Self.readReply(from: output)), pid > 0 else {
+            throw POSIXError(.EIO)
+        }
+    }
+
+    private static func readReply(from output: Pipe) throws -> String {
+        let fd = output.fileHandleForReading.fileDescriptor
+        var waiting = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+        guard poll(&waiting, 1, 3_000) == 1, waiting.revents & Int16(POLLIN) != 0 else {
+            throw POSIXError(.ETIMEDOUT)
+        }
+        var bytes = [UInt8](repeating: 0, count: 256)
+        let count = read(fd, &bytes, bytes.count)
+        guard count > 0, let line = String(bytes: bytes[..<count], encoding: .utf8)?.split(separator: "\n").first else {
+            throw POSIXError(.EIO)
+        }
+        return String(line)
+    }
+
+    deinit {
+        input.fileHandleForWriting.closeFile()
+        if process.isRunning { process.terminate() }
+        process.waitUntilExit()
+    }
+}
+
 final class ScriptableSelectedTTYTests: XCTestCase {
+    func testForegroundProofUsesShellControllingTTYFromNonControllingParent() throws {
+        let fixture = try ForegroundPTYFixture()
+        let selectedFD = Darwin.open(fixture.tty, O_RDONLY | O_NOCTTY | O_NONBLOCK)
+        XCTAssertGreaterThanOrEqual(selectedFD, 0)
+        if selectedFD >= 0 {
+            let foreground = Darwin.tcgetpgrp(selectedFD)
+            let failure = errno
+            Darwin.close(selectedFD)
+            XCTAssertEqual(foreground, -1)
+            XCTAssertEqual(failure, ENOTTY)
+        }
+        XCTAssertTrue(ScriptableShellFocusProof.shellIsForeground(fixture.shellPID, tty: fixture.tty))
+        XCTAssertFalse(ScriptableShellFocusProof.shellIsForeground(Int32.max, tty: fixture.tty))
+
+        var otherMaster: Int32 = -1, otherSlave: Int32 = -1
+        var otherName = [CChar](repeating: 0, count: 128)
+        XCTAssertEqual(openpty(&otherMaster, &otherSlave, &otherName, nil, nil), 0)
+        defer { if otherMaster >= 0 { close(otherMaster) }; if otherSlave >= 0 { close(otherSlave) } }
+        XCTAssertFalse(ScriptableShellFocusProof.shellIsForeground(fixture.shellPID,
+            tty: String(decoding: otherName.prefix(while: { $0 != 0 }).map(UInt8.init(bitPattern:)),
+                as: UTF8.self)))
+
+        try fixture.moveShellToBackground()
+        XCTAssertFalse(ScriptableShellFocusProof.shellIsForeground(fixture.shellPID, tty: fixture.tty))
+    }
+
     private final class MockExecutor: ReadOnlyAppleEventExecutor {
         var permission: OSStatus = noErr
         var readCodes: [OSType] = []
