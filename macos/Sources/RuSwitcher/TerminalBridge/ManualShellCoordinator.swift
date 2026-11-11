@@ -315,7 +315,9 @@ final class ManualShellCoordinator {
                last.after.tty == snapshot.tty,
                last.after.lineNonce == snapshot.lineNonce,
                last.after.buffer == snapshot.buffer,
-               last.after.cursor == snapshot.cursor {
+               last.after.cursor == snapshot.cursor,
+               last.after.mark == snapshot.mark,
+               last.after.regionActive == snapshot.regionActive {
                 return (GenericShellEditorProposal(expected: snapshot,
                     replacementBuffer: last.before.buffer, replacementCursor: last.before.cursor,
                     requestID: UUID()), context.targetLayoutID)

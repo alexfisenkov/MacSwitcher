@@ -46,6 +46,8 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         var wholeObservationAvailable = true
         var reportWrongCaretAfterText = false
         var selectionKnownWord: ((String, String) -> Bool?)?
+        var gestureHostPID: Int32?
+        var currentTargetPID: (() -> Int32?)?
 
         lazy var converter = TextConverter(selectionPreferences: { [unowned self] in
             policySawLease = fence.hasActiveLease
@@ -112,10 +114,10 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
                      firstFocus: CombinedShiftFocus? = nil) throws -> CombinedShiftRequest {
             let contexts = [enToRu.sourceLayoutID: enToRu, ruToEn.sourceLayoutID: ruToEn]
             _ = try XCTUnwrap(monitor.snapshotCombinedShiftRequest(action: .switchLayout(direction),
-                frontProcessID: frontField.pid, focus: firstFocus ?? frontField.focus(),
+                frontProcessID: gestureHostPID ?? frontField.pid, focus: firstFocus ?? frontField.focus(),
                 contextForSource: { contexts[$0] }))
             return try XCTUnwrap(monitor.snapshotCombinedShiftRequest(action: .convert(direction),
-                frontProcessID: frontField.pid, focus: frontField.focus(),
+                frontProcessID: gestureHostPID ?? frontField.pid, focus: frontField.focus(),
                 contextForSource: { contexts[$0] }))
         }
 
@@ -124,9 +126,17 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
             let execution = CombinedShiftExecutionContext(focus: request.focus!,
                 inputRevision: request.inputRevision,
                 currentInputRevision: { [unowned self] in monitor.inputRevision })
+            if gestureHostPID != nil && !execution.isValid() {
+                // AppDelegate.runNativeCombinedShift performs this entry check
+                // before calling the production transaction.
+                return .init(outcome: .stopped, failureNotice: .noSafeEdit,
+                    pendingSourceTargetID: nil, confirmedAutomaticUndo: nil)
+            }
             let platform = CombinedShiftTransaction.Platform(
                 currentSourceID: { [unowned self] in sourceID },
-                frontProcessID: { [unowned self] in frontField.pid },
+                frontProcessID: { [unowned self] in
+                    currentTargetPID.map { $0() } ?? frontField.pid
+                },
                 secureInputActive: { [unowned self] in frontField.secure },
                 beginLease: { [unowned self] pid in fence.begin(processID: pid, maximumDuration: 0.250) },
                 leaseIsCurrent: { [unowned self] lease in fence.isCurrent(lease) },
@@ -392,6 +402,96 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
             .confirmed(resultID: rig.enToRu.targetLayoutID))
         XCTAssertEqual(second.text, "привет")
         XCTAssertEqual(first.text, "ghbdtn привет привет MacSwitcher ghbdtn")
+    }
+
+    @MainActor
+    func testOverlayBoundRepeatedManualEditsAndChangedTargetRefuseBeforeQueue() throws {
+        let hostPID: Int32 = 6201
+        let overlayPID: Int32 = 6202
+        let field = Field(pid: overlayPID, text: "ghbdtn")
+        let rig = try Rig(fields: [field])
+        let window = SearchOverlayTargetPolicy.WindowEvidence(processID: overlayPID,
+            windowID: 8101, bundleID: "com.example.search", ownerName: "Search")
+        var frontPID = hostPID
+        var systemPID = overlayPID
+        var systemElement = field.element
+        var visibleWindows = [window]
+        let probe = SearchOverlayTarget.Probe(now: { 0 }, frontPID: { frontPID },
+            bundleID: { _ in "com.example.search" },
+            systemFocus: { _ in (systemPID, systemElement) },
+            directFocus: { _, _ in CombinedShiftFocus(processID: overlayPID, element: field.element) },
+            editable: { _, _ in true }, windows: { _ in visibleWindows },
+            focusedWindowBounds: { _, _ in nil }, selection: { _, _ in field.selectedRange() })
+        let initialCapture = try XCTUnwrap({ () -> CombinedShiftFocus? in
+            if case .verified(let focus) = SearchOverlayTarget.capture(hostPID: hostPID, probe: probe) {
+                return focus
+            }
+            return nil
+        }())
+        let initialBinding = try XCTUnwrap(initialCapture.searchOverlay)
+        rig.gestureHostPID = hostPID
+        rig.currentTargetPID = { [probe] in
+            SearchOverlayTarget.currentProcessID(for: initialBinding, probe: probe)
+        }
+        func boundFocus() throws -> CombinedShiftFocus {
+            let captured = try XCTUnwrap({ () -> CombinedShiftFocus? in
+                if case .verified(let focus) = SearchOverlayTarget.capture(hostPID: hostPID, probe: probe) {
+                    return focus
+                }
+                return nil
+            }())
+            let binding = try XCTUnwrap(captured.searchOverlay)
+            return CombinedShiftFocus(processID: captured.processID, element: captured.element,
+                initialSelection: captured.initialSelection,
+                fieldBoundary: CombinedShiftFieldBoundary(validationFailure: {
+                    guard field.valid,
+                          SearchOverlayTarget.isCurrent(captured, binding: binding, probe: probe) else {
+                        return .focusChanged
+                    }
+                    return nil
+                }, selectionRange: { field.selectedRange() }, text: { field.substring($0) }),
+                searchOverlay: binding)
+        }
+        try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+        rig.sourceID = rig.enToRu.targetLayoutID
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu, firstFocus: boundFocus()),
+            direction: rig.enToRu).outcome, .confirmed(resultID: rig.enToRu.targetLayoutID))
+        XCTAssertEqual(field.text, "привет")
+
+        rig.sourceID = rig.ruToEn.targetLayoutID
+        XCTAssertEqual(rig.run(try rig.request(rig.ruToEn, firstFocus: boundFocus()),
+            direction: rig.ruToEn).outcome, .confirmed(resultID: rig.ruToEn.targetLayoutID))
+        XCTAssertEqual(field.text, "ghbdtn")
+        rig.sourceID = rig.enToRu.targetLayoutID
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu, firstFocus: boundFocus()),
+            direction: rig.enToRu).outcome, .confirmed(resultID: rig.enToRu.targetLayoutID))
+        XCTAssertEqual(field.text, "привет")
+
+        field.type(" ghbdtn")
+        rig.monitor.handleKeyDown(keyCode: KC.space, flags: [],
+            renderedSourceLayoutID: rig.enToRu.sourceLayoutID)
+        try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+        rig.sourceID = rig.enToRu.targetLayoutID
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu, firstFocus: boundFocus()),
+            direction: rig.enToRu).outcome, .confirmed(resultID: rig.enToRu.targetLayoutID))
+        XCTAssertEqual(field.text, "привет привет")
+
+        let queued = field.queuedText
+        let disappearing = try rig.request(rig.ruToEn, firstFocus: boundFocus())
+        visibleWindows = []
+        XCTAssertEqual(rig.run(disappearing, direction: rig.ruToEn).outcome, .stopped)
+        XCTAssertEqual(field.queuedText, queued)
+        visibleWindows = [window]
+        let changedHost = try rig.request(rig.ruToEn, firstFocus: boundFocus())
+        frontPID = 9999
+        XCTAssertEqual(rig.run(changedHost, direction: rig.ruToEn).outcome, .stopped)
+        XCTAssertEqual(field.queuedText, queued)
+        frontPID = hostPID
+        let changedFocus = try rig.request(rig.ruToEn, firstFocus: boundFocus())
+        systemPID = hostPID
+        systemElement = AXUIElementCreateApplication(hostPID)
+        XCTAssertEqual(rig.run(changedFocus, direction: rig.ruToEn).outcome, .stopped)
+        XCTAssertEqual(field.queuedText, queued)
     }
 
     @MainActor

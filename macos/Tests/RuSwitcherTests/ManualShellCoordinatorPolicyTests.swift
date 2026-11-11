@@ -85,6 +85,24 @@ final class ManualShellCoordinatorPolicyTests: XCTestCase {
     }
 
     @MainActor
+    func testReconvertDoesNotRestoreWholeBufferAfterZLESelectionChanges() throws {
+        let context = try layoutPair()
+        let converter = TextConverter(selectionPreferences: { (true, false) })
+        let coordinator = ManualShellCoordinator()
+        let before = snapshot("echo ghbdtn")
+        let after = snapshot("echo привет")
+        coordinator.recordConfirmed(before: before, after: after)
+        let selected = GenericShellEditorSnapshot(sessionPID: after.sessionPID, tty: after.tty,
+            lineNonce: after.lineNonce, buffer: after.buffer, cursor: after.cursor,
+            mark: 8, regionActive: 1)
+        let plan = try XCTUnwrap(coordinator.makeProposal(snapshot: selected,
+            request: request(context.reversed, reconvert: true), context: context.reversed,
+            converter: converter, externalSelection: .collapsed, convertWholeLine: false))
+        XCTAssertEqual(plan.proposal.replacementBuffer, "echo приdtn")
+        XCTAssertEqual(plan.proposal.replacementCursor, 11)
+    }
+
+    @MainActor
     func testDefaultDisabledAndDisableKeepsRecoveryState() {
         let coordinator = ManualShellCoordinator()
         XCTAssertFalse(coordinator.isEnabled)

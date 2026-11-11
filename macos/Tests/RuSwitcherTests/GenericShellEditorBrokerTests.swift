@@ -200,6 +200,7 @@ final class GenericShellEditorBrokerTests: XCTestCase {
         XCTAssertThrowsError(try broker.query(sessionPID: 456, tty: "/dev/ttys999"))
     }
 
+    @MainActor
     func testZshPTYRoundTripAndNoCommandExecution() throws {
         var master: Int32 = -1, slave: Int32 = -1
         guard openpty(&master, &slave, nil, nil, nil) == 0,
@@ -218,6 +219,14 @@ final class GenericShellEditorBrokerTests: XCTestCase {
         setopt KSH_ARRAYS SH_WORD_SPLIT
         typeset -g _ms_bridge_socket=\(String(reflecting: directory.appendingPathComponent("editor.sock").path))
         source \(String(reflecting: resource.path))
+        _ms_test_reconnect() {
+          _ms_bridge_disconnect
+          _ms_bridge_line_init
+          _ms_bridge_connect
+          zle -R
+        }
+        zle -N _ms_test_reconnect
+        bindkey '^X' _ms_test_reconnect
         typeset test_buffer=ghbdtn
         vared -c test_buffer
         """
@@ -250,14 +259,45 @@ final class GenericShellEditorBrokerTests: XCTestCase {
         guard let prepared else { return XCTFail("ZLE did not register an active prompt") }
         let before = try live.queryPrepared(prepared)
         XCTAssertEqual(before.buffer, "ghbdtn")
-        let proposal = GenericShellEditorProposal(expected: before,
-            replacementBuffer: "привет", replacementCursor: 6, requestID: UUID())
+        let layouts = LayoutSwitcher.installedLayouts()
+        let en = try XCTUnwrap(layouts.first { LayoutSwitcher.languageCode($0) == "en" })
+        let ru = try XCTUnwrap(layouts.first { LayoutSwitcher.languageCode($0) == "ru" })
+        let context = CombinedShiftContext(sourceLayoutID: LayoutSwitcher.sourceID(en),
+            targetLayoutID: LayoutSwitcher.sourceID(ru))
+        let converter = TextConverter(selectionPreferences: { (true, false) })
+        let coordinator = ManualShellCoordinator()
+        func request(_ direction: CombinedShiftContext) -> CombinedShiftRequest {
+            CombinedShiftRequest(action: .convert(direction), wordContext: direction,
+                wordKeys: [], prevWordKeys: [], lineKeys: [], lineSourceLayoutID: nil,
+                boundaryCount: 0, reconvert: true, inputRevision: 1,
+                frontProcessID: process.processIdentifier, focus: nil)
+        }
+        let firstPlan = try XCTUnwrap(coordinator.makeProposal(snapshot: before,
+            request: request(context), context: context, converter: converter,
+            externalSelection: .collapsed, convertWholeLine: false))
+        let proposal = firstPlan.proposal
         let outcome = live.commit(proposal, timeout: 1.0)
         guard case .confirmed(let after) = outcome else { return XCTFail("No confirmed ZLE CAS: \(outcome)") }
         XCTAssertEqual(after.buffer, "привет")
         XCTAssertEqual(after.cursor, 6)
+        coordinator.recordConfirmed(before: before, after: after)
         let repeated = live.commit(proposal, timeout: 1.0)
         XCTAssertEqual(repeated, .confirmed(after)) // cached outcome; no second write
+        XCTAssertThrowsError(try live.queryPrepared(prepared)) // first-tap buffer is stale after CAS
+        let undo = try XCTUnwrap(coordinator.makeProposal(snapshot: after,
+            request: request(context.reversed), context: context.reversed,
+            converter: converter, externalSelection: .collapsed, convertWholeLine: false))
+        guard case .confirmed(let undone) = live.commit(undo.proposal, timeout: 1.0) else {
+            return XCTFail("Repeated manual gesture could not undo the verified shell line")
+        }
+        coordinator.recordConfirmed(before: after, after: undone)
+        let redo = try XCTUnwrap(coordinator.makeProposal(snapshot: undone,
+            request: request(context), context: context,
+            converter: converter, externalSelection: .collapsed, convertWholeLine: false))
+        guard case .confirmed(let redone) = live.commit(redo.proposal, timeout: 1.0) else {
+            return XCTFail("Repeated manual gesture could not redo the verified shell line")
+        }
+        XCTAssertEqual(redone, after)
         XCTAssertEqual(try live.query(sessionPID: process.processIdentifier, tty: tty).buffer, "привет")
         let stale = GenericShellEditorProposal(expected: before,
             replacementBuffer: "другой", replacementCursor: 6, requestID: UUID())
@@ -325,6 +365,61 @@ final class GenericShellEditorBrokerTests: XCTestCase {
             return XCTFail("Fragmented socket frame did not commit")
         }
         XCTAssertEqual(largeState.buffer, longLine)
+        let nextLine = GenericShellEditorProposal(expected: largeState,
+            replacementBuffer: "echo ghbdtn  ", replacementCursor: 13, requestID: UUID())
+        guard case .confirmed(let nextState) = live.commit(nextLine, timeout: 1.0) else {
+            return XCTFail("Could not prepare next synthetic word")
+        }
+        let wordRange = try XCTUnwrap(GenericShellEditorPlanner.exactWordRange(nextState,
+            word: "ghbdtn", trailingSpaces: 2, externalSelection: .collapsed))
+        let nextCorrection = try XCTUnwrap(GenericShellEditorPlanner.proposal(snapshot: nextState,
+            range: wordRange, replacement: "привет"))
+        guard case .confirmed(let correctedNext) = live.commit(nextCorrection, timeout: 1.0) else {
+            return XCTFail("Next word after trailing spaces did not commit")
+        }
+        XCTAssertEqual(correctedNext.buffer, "echo привет  ")
+        XCTAssertEqual(correctedNext.cursor, 13)
+        let lostACK = GenericShellEditorProposal(expected: correctedNext,
+            replacementBuffer: "echo привет  ghbdtn", replacementCursor: 19,
+            requestID: UUID())
+        XCTAssertEqual(live.commit(lostACK, timeout: 0), .uncertain)
+        // The same socket orders E before Q. Q skips the late tagged R reply;
+        // it observes state without sending a second edit request.
+        let observed = try live.query(sessionPID: process.processIdentifier, tty: tty, timeout: 1.0)
+        guard case .confirmed = GenericShellEditorReconciliation.classify(before: correctedNext,
+            proposal: lostACK, observed: observed) else {
+            return XCTFail("Lost ACK did not reconcile from read-only ZLE state")
+        }
+        let staleOriginal = GenericShellEditorProposal(expected: correctedNext,
+            replacementBuffer: "stale original", replacementCursor: 14, requestID: UUID())
+        guard case .refused = live.commit(staleOriginal, timeout: 1.0) else {
+            return XCTFail("Old original CAS changed the reconciled line")
+        }
+        XCTAssertEqual(try live.query(sessionPID: process.processIdentifier, tty: tty).buffer,
+            lostACK.replacementBuffer)
+        let oldHandle = try live.prepareFocused(timeout: 1.0)
+        let beforeReconnect = try live.queryPrepared(oldHandle, timeout: 1.0)
+        live.stop()
+        try live.start()
+        var reconnectKey: UInt8 = 0x18 // fixture-owned Ctrl-X widget; no Enter or command execution
+        XCTAssertEqual(Darwin.write(master, &reconnectKey, 1), 1)
+        var newHandle: GenericShellPreparedHandle?
+        for _ in 0..<30 {
+            newHandle = try? live.prepareFocused(timeout: 0.1)
+            if newHandle != nil { break }
+            usleep(50_000)
+        }
+        let reconnected = try XCTUnwrap(newHandle)
+        XCTAssertNotEqual(reconnected.lineNonce, oldHandle.lineNonce)
+        XCTAssertThrowsError(try live.queryPrepared(oldHandle, timeout: 0.2))
+        let newSnapshot = try live.queryPrepared(reconnected, timeout: 1.0)
+        XCTAssertEqual(newSnapshot.buffer, beforeReconnect.buffer)
+        let afterReconnect = GenericShellEditorProposal(expected: newSnapshot,
+            replacementBuffer: "echo привет  готово", replacementCursor: 19, requestID: UUID())
+        guard case .confirmed(let newState) = live.commit(afterReconnect, timeout: 1.0) else {
+            return XCTFail("New CAS did not commit after fixture-only reconnect")
+        }
+        XCTAssertEqual(newState.buffer, afterReconnect.replacementBuffer)
         // Once zsh closes, the off-input prune must remove the stale peer
         // before any selected-tab focus proof is attempted.
         Darwin.kill(process.processIdentifier, SIGKILL)
