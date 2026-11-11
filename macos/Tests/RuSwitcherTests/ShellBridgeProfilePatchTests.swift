@@ -10,6 +10,79 @@ final class ShellBridgeProfilePatchTests: XCTestCase {
         XCTAssertNotNil(ShellBridgeProfilePatch.packagedResourceURL)
     }
 
+    func testPackagedAppUsesOnlyItsOwnShellResource() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ms-resource-Пример \(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = root.appendingPathComponent("My Switcher.app")
+        let packaged = app.appendingPathComponent(
+            "Contents/Resources/RuSwitcher_RuSwitcher.bundle/terminal-zle.zsh")
+        let development = root.appendingPathComponent(".build/terminal-zle.zsh")
+        try FileManager.default.createDirectory(at: packaged.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: development.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try Data("packaged".utf8).write(to: packaged)
+        try Data("development".utf8).write(to: development)
+
+        XCTAssertEqual(ShellBridgeProfilePatch.resolvePackagedResourceURL(
+            mainBundleURL: app, swiftPMResourceURL: development), packaged)
+        try FileManager.default.removeItem(at: packaged)
+        XCTAssertNil(ShellBridgeProfilePatch.resolvePackagedResourceURL(
+            mainBundleURL: app, swiftPMResourceURL: development))
+        XCTAssertEqual(ShellBridgeProfilePatch.resolvePackagedResourceURL(
+            mainBundleURL: root, swiftPMResourceURL: development), development)
+    }
+
+    func testPackagedAppWithoutNestedBundleDoesNotUseDevelopmentResource() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ms-resource-missing-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = root.appendingPathComponent("MacSwitcher.app")
+        let development = root.appendingPathComponent("terminal-zle.zsh")
+        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        try Data("development".utf8).write(to: development)
+
+        XCTAssertNil(ShellBridgeProfilePatch.resolvePackagedResourceURL(
+            mainBundleURL: app, swiftPMResourceURL: development))
+    }
+
+    func testPackagedAppRejectsShellResourceSymlinkOutsideApp() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ms-resource-leaf-link-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = root.appendingPathComponent("MacSwitcher.app")
+        let packaged = app.appendingPathComponent(
+            "Contents/Resources/RuSwitcher_RuSwitcher.bundle/terminal-zle.zsh")
+        let external = root.appendingPathComponent("external-terminal-zle.zsh")
+        try FileManager.default.createDirectory(at: packaged.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try Data("external".utf8).write(to: external)
+        try FileManager.default.createSymbolicLink(at: packaged, withDestinationURL: external)
+
+        XCTAssertNil(ShellBridgeProfilePatch.resolvePackagedResourceURL(
+            mainBundleURL: app, swiftPMResourceURL: external))
+    }
+
+    func testPackagedAppRejectsNestedBundleSymlinkOutsideApp() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ms-resource-bundle-link-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = root.appendingPathComponent("MacSwitcher.app")
+        let resources = app.appendingPathComponent("Contents/Resources")
+        let externalBundle = root.appendingPathComponent("external.bundle")
+        try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: externalBundle, withIntermediateDirectories: true)
+        let external = externalBundle.appendingPathComponent("terminal-zle.zsh")
+        try Data("external".utf8).write(to: external)
+        try FileManager.default.createSymbolicLink(
+            at: resources.appendingPathComponent("RuSwitcher_RuSwitcher.bundle"),
+            withDestinationURL: externalBundle)
+
+        XCTAssertNil(ShellBridgeProfilePatch.resolvePackagedResourceURL(
+            mainBundleURL: app, swiftPMResourceURL: external))
+    }
+
     func testPreviewRoundTripPreservesOriginalBytes() throws {
         for original in ["", "export LANG=ru_RU.UTF-8", "export LANG=ru_RU.UTF-8\n",
                          "# комментарий\nexport X='a b'\n", "# строка\r\nexport X='тест'\r\n",

@@ -120,3 +120,9 @@ v3.4.0 и ранее разработанный native combined-Shift режим
 - Tap retry: максимум5 failed starts/episode,3с; обычный poll не обнуляет exhausted. Shell retry: только перечисленные typed transient errno, максимум3/30с; unsafe/active/unknown failure требует действия. Нет forcedquit, auto TCC/profile edits, скрытого ввода или повтора неизвестной замены.
 - Lease/CAS откладывает restart, сохранённые исходники/line locks не чистятся. Обычный клавиатурный callback при healthy tap/fence подтверждает уже наблюдённое возобновление ДО новой буквы; поздний профилактический restart не стирает свежий контекст. Mouse/scroll не являются таким ACK. Пропущенный для буфера физический key всё равно отзывает input revision/shell permit.
 - Полностью не наблюдавшийся интервал защиты/блокировки между опросами не выводится из отсутствия событий. Реальные OS sleep/wake/TCC/keyboard остаются отдельной приёмкой. Два раунда health-критики выполнены; R2 BLOCK исправлен и проверен targeted-regression главным агентом, третьего раунда не запускали.
+
+## Packaged shell resource · приёмка 11.11.2026
+
+- Live preview первого31/62dced1 обнаружил Bundle.module build fallback. Установка shell отменена до записи; новые права не запрашивались, shell OFF. Само приложение31 работает, UI selfcheck4/4, настройки/хеши данных/200мс сохранены.
+- Исправление: ShellBridgeProfilePatch в `.app` возвращает только canonical читаемый regular resource внутри собственного nested bundle; build fallback допустим только вне `.app`. main --self-test-resources проверяет фактический shell URL.
+- Канон: docs/plans/2026-11-11-packaged-shell-resource.md. R2 review PASS; full646 и реальные cold packaged CLI positive0/negative2 (dev fallback доступен) PASS. Это причина дополнительного финального CI/нового signed artifact; прежний62dced1 и его receipt не перезаписывать.

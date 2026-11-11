@@ -26,7 +26,33 @@ enum ShellBridgeProfilePatch {
     }
 
     static var packagedResourceURL: URL? {
-        Bundle.module.url(forResource: "terminal-zle", withExtension: "zsh")
+        let mainBundleURL = Bundle.main.bundleURL
+        let swiftPMResourceURL = mainBundleURL.pathExtension.lowercased() == "app"
+            ? nil : Bundle.module.url(forResource: "terminal-zle", withExtension: "zsh")
+        return resolvePackagedResourceURL(mainBundleURL: mainBundleURL,
+            swiftPMResourceURL: swiftPMResourceURL)
+    }
+
+    /// A distributed app must resolve its own nested SwiftPM bundle. The
+    /// generated Bundle.module fallback can still point at the build machine.
+    static func resolvePackagedResourceURL(mainBundleURL: URL,
+                                           swiftPMResourceURL: URL?) -> URL? {
+        guard mainBundleURL.pathExtension.lowercased() == "app" else {
+            return swiftPMResourceURL
+        }
+        let app = mainBundleURL.resolvingSymlinksInPath().standardizedFileURL
+        let resourceBundle = app.appendingPathComponent(
+            "Contents/Resources/RuSwitcher_RuSwitcher.bundle")
+            .resolvingSymlinksInPath().standardizedFileURL
+        guard resourceBundle.path.hasPrefix(app.path + "/"),
+              (try? resourceBundle.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+        else { return nil }
+        let resource = resourceBundle.appendingPathComponent("terminal-zle.zsh")
+            .resolvingSymlinksInPath().standardizedFileURL
+        guard resource.path.hasPrefix(resourceBundle.path + "/"),
+              (try? resource.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
+              FileManager.default.isReadableFile(atPath: resource.path) else { return nil }
+        return resource
     }
 
     private static func originalEnding(_ data: Data) -> OriginalEnding {
