@@ -8,10 +8,18 @@ import XCTest
 /// test; it never launches a shell or touches the user's terminal/profile.
 private final class ForegroundPTYFixture {
     private static let script = #"""
-import os, pty, signal, sys
+import os, pty, signal, sys, time
 def stop(_signal, _frame):
     raise SystemExit
 signal.signal(signal.SIGTERM, stop)
+mode = sys.argv[1] if len(sys.argv) > 1 else ''
+if mode == 'delayed-start':
+    time.sleep(3.2)
+if mode in ('hot-stdout', 'hot-stderr'):
+    stream = 1 if mode == 'hot-stdout' else 2
+    while True:
+        os.write(stream, b'x' * 128)
+print('python-ready', flush=True)
 command_read, command_write = os.pipe()
 reply_read, reply_write = os.pipe()
 shell, master = pty.fork()
@@ -20,6 +28,12 @@ if shell == 0:
     os.close(reply_read)
     child = None
     try:
+        if mode in ('child-error', 'child-hang', 'child-stubborn'):
+            if mode == 'child-error':
+                raise RuntimeError('injected PTY child error')
+            if mode == 'child-stubborn':
+                signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            signal.pause()
         os.write(reply_write, f'{os.getpid()} {os.ttyname(0)}\n'.encode())
         if os.read(command_read, 1) == b'b':
             child = os.fork()
@@ -31,24 +45,39 @@ if shell == 0:
             os.tcsetpgrp(0, child)
             os.write(reply_write, f'{child}\n'.encode())
         signal.pause()
+    except Exception as exc:
+        os.write(reply_write, f'child-error {type(exc).__name__}: {exc}\n'.encode())
+        raise
     finally:
-        if child:
-            os.kill(child, signal.SIGKILL)
+        if child and child > 0:
+            try:
+                os.kill(child, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                os.waitpid(child, 0)
+            except ChildProcessError:
+                pass
     os._exit(0)
 os.close(command_read)
 os.close(reply_write)
+print(f'spawned {shell}', flush=True)
 background = None
 try:
-    print(os.read(reply_read, 256).decode().strip(), flush=True)
+    greeting = os.read(reply_read, 256)
+    if not greeting:
+        raise RuntimeError('PTY child exited before ready')
+    print(greeting.decode().strip(), flush=True)
     for command in sys.stdin:
         if command.strip() == 'background':
             os.write(command_write, b'b')
             background = int(os.read(reply_read, 256).decode().strip())
             print(background, flush=True)
 finally:
-    if background:
-        os.kill(background, signal.SIGKILL)
-    os.kill(shell, signal.SIGTERM)
+    try:
+        os.kill(shell, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
     os.waitpid(shell, 0)
     os.close(master)
 """#
@@ -58,65 +87,248 @@ finally:
     private let process: Process
     private let input: Pipe
     private let output: Pipe
+    private let stderr: Pipe
+    private let terminated: DispatchSemaphore
+    private var pendingOutput = Data()
+    private var diagnostics = Data()
+    private var backgroundPID: pid_t?
 
-    init() throws {
+    private struct Failure: Error, CustomStringConvertible {
+        let phase: String
+        let reason: String
+        let diagnostics: String
+        let exitStatus: String
+
+        var description: String {
+            "PTY fixture \(phase): \(reason); process \(exitStatus); stderr: \(diagnostics)"
+        }
+    }
+
+    init(mode: String = "", timeout: TimeInterval = 8,
+         onSpawn: ((pid_t) -> Void)? = nil) throws {
         let process = Process()
-        let input = Pipe(), output = Pipe()
+        let input = Pipe(), output = Pipe(), stderr = Pipe()
+        let terminated = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in terminated.signal() }
         process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-        process.arguments = ["-c", Self.script]
+        process.arguments = ["-c", Self.script, mode]
         process.standardInput = input
         process.standardOutput = output
-        process.standardError = Pipe()
+        process.standardError = stderr
         try process.run()
+        let deadline = DispatchTime.now().uptimeNanoseconds + UInt64(timeout * 1_000_000_000)
+        var pendingOutput = Data(), diagnostics = Data()
+        var spawnedPID: pid_t?
         let parts: [Substring]
         let validatedPID: pid_t
         do {
-            parts = try Self.readReply(from: output).split(separator: " ")
+            guard try Self.readReply(from: output, stderr: stderr, process: process,
+                                     pending: &pendingOutput, diagnostics: &diagnostics,
+                                     deadline: deadline, phase: "Python startup") == "python-ready" else {
+                throw POSIXError(.EIO)
+            }
+            let spawned = try Self.readReply(from: output, stderr: stderr, process: process,
+                                             pending: &pendingOutput, diagnostics: &diagnostics,
+                                             deadline: deadline, phase: "PTY fork").split(separator: " ")
+            guard spawned.count == 2, spawned[0] == "spawned",
+                  let pid = pid_t(spawned[1]), pid > 0 else { throw POSIXError(.EIO) }
+            spawnedPID = pid
+            onSpawn?(pid)
+            let childReply = try Self.readReply(from: output, stderr: stderr, process: process,
+                                                pending: &pendingOutput, diagnostics: &diagnostics,
+                                                deadline: deadline, phase: "PTY child ready")
+            if childReply.hasPrefix("child-error ") {
+                throw Self.failure(phase: "PTY child ready", reason: childReply,
+                                   process: process, diagnostics: diagnostics)
+            }
+            parts = childReply.split(separator: " ")
             guard parts.count == 2, let pid = pid_t(parts[0]), pid > 0,
-                  parts[1].hasPrefix("/dev/ttys") else { throw POSIXError(.EIO) }
+                  pid == spawnedPID, parts[1].hasPrefix("/dev/ttys") else { throw POSIXError(.EIO) }
             validatedPID = pid
         } catch {
-            input.fileHandleForWriting.closeFile()
-            if process.isRunning { process.terminate() }
-            process.waitUntilExit()
+            Self.cleanup(process: process, input: input, terminated: terminated,
+                         shellPID: spawnedPID, backgroundPID: nil)
             throw error
         }
         self.process = process
         self.input = input
         self.output = output
+        self.stderr = stderr
+        self.terminated = terminated
+        self.pendingOutput = pendingOutput
+        self.diagnostics = diagnostics
         shellPID = validatedPID
         tty = String(parts[1])
     }
 
     func moveShellToBackground() throws {
         try input.fileHandleForWriting.write(contentsOf: Data("background\n".utf8))
-        guard let pid = pid_t(try Self.readReply(from: output)), pid > 0 else {
+        let deadline = DispatchTime.now().uptimeNanoseconds + 8_000_000_000
+        guard let pid = pid_t(try Self.readReply(from: output, stderr: stderr, process: process,
+                                                pending: &pendingOutput, diagnostics: &diagnostics,
+                                                deadline: deadline, phase: "background job")), pid > 0 else {
             throw POSIXError(.EIO)
+        }
+        backgroundPID = pid
+    }
+
+    private static func readReply(from output: Pipe, stderr: Pipe, process: Process,
+                                  pending: inout Data, diagnostics: inout Data,
+                                  deadline: UInt64, phase: String) throws -> String {
+        var stderrOpen = true
+        while true {
+            let now = DispatchTime.now().uptimeNanoseconds
+            if now >= deadline {
+                throw failure(phase: phase, reason: "deadline exceeded",
+                              process: process, diagnostics: diagnostics)
+            }
+            if pending.count > 256 {
+                throw failure(phase: phase, reason: "reply exceeds 256 bytes",
+                              process: process, diagnostics: diagnostics)
+            }
+            if let newline = pending.firstIndex(of: 10) {
+                let line = pending.prefix(upTo: newline)
+                pending.removeSubrange(...newline)
+                guard let value = String(data: line, encoding: .utf8) else { throw POSIXError(.EIO) }
+                return value
+            }
+            let remaining = Int32(min((deadline - now + 999_999) / 1_000_000,
+                                      UInt64(Int32.max)))
+            var descriptors = [pollfd(fd: output.fileHandleForReading.fileDescriptor,
+                                      events: Int16(POLLIN | POLLHUP), revents: 0),
+                               pollfd(fd: stderrOpen ? stderr.fileHandleForReading.fileDescriptor : -1,
+                                      events: Int16(POLLIN | POLLHUP), revents: 0)]
+            let result = poll(&descriptors, nfds_t(descriptors.count), remaining)
+            if result < 0 {
+                if errno == EINTR { continue }
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            if descriptors.contains(where: { $0.revents & Int16(POLLERR | POLLNVAL) != 0 }) {
+                throw failure(phase: phase, reason: "pipe poll error",
+                              process: process, diagnostics: diagnostics)
+            }
+            if descriptors[1].revents & Int16(POLLIN) != 0 {
+                var bytes = [UInt8](repeating: 0, count: 1024)
+                let count = read(descriptors[1].fd, &bytes, bytes.count)
+                if count > 0, diagnostics.count < 4096 {
+                    diagnostics.append(contentsOf: bytes[..<min(count, 4096 - diagnostics.count)])
+                }
+            }
+            if descriptors[1].revents & Int16(POLLHUP) != 0,
+               descriptors[1].revents & Int16(POLLIN) == 0 { stderrOpen = false }
+            if descriptors[0].revents & Int16(POLLIN | POLLHUP) != 0 {
+                var bytes = [UInt8](repeating: 0, count: 256)
+                let count = read(descriptors[0].fd, &bytes, bytes.count)
+                if count > 0 {
+                    pending.append(contentsOf: bytes[..<count])
+                    continue
+                }
+                if count < 0, errno == EINTR { continue }
+                throw failure(phase: phase, reason: "stdout closed before reply",
+                              process: process, diagnostics: diagnostics)
+            }
+            if result == 0 {
+                throw failure(phase: phase, reason: "deadline exceeded",
+                              process: process, diagnostics: diagnostics)
+            }
         }
     }
 
-    private static func readReply(from output: Pipe) throws -> String {
-        let fd = output.fileHandleForReading.fileDescriptor
-        var waiting = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
-        guard poll(&waiting, 1, 3_000) == 1, waiting.revents & Int16(POLLIN) != 0 else {
-            throw POSIXError(.ETIMEDOUT)
+    private static func failure(phase: String, reason: String, process: Process,
+                                diagnostics: Data) -> Failure {
+        let status = process.isRunning ? "still running" : "exited (status \(process.terminationStatus))"
+        return Failure(phase: phase, reason: reason,
+                       diagnostics: String(decoding: diagnostics, as: UTF8.self), exitStatus: status)
+    }
+
+    private static func cleanup(process: Process, input: Pipe, terminated: DispatchSemaphore,
+                                shellPID: pid_t?, backgroundPID: pid_t?) {
+        input.fileHandleForWriting.closeFile()
+        if process.isRunning { process.terminate() }
+        if terminated.wait(timeout: .now() + 1) == .timedOut {
+            if let backgroundPID, let shellPID, isChild(backgroundPID, of: shellPID) {
+                _ = Darwin.kill(backgroundPID, SIGKILL)
+            }
+            if let shellPID, isChild(shellPID, of: process.processIdentifier) {
+                _ = Darwin.kill(shellPID, SIGKILL)
+            }
+            if terminated.wait(timeout: .now() + 1) == .timedOut, process.isRunning {
+                _ = Darwin.kill(process.processIdentifier, SIGKILL)
+            }
         }
-        var bytes = [UInt8](repeating: 0, count: 256)
-        let count = read(fd, &bytes, bytes.count)
-        guard count > 0, let line = String(bytes: bytes[..<count], encoding: .utf8)?.split(separator: "\n").first else {
-            throw POSIXError(.EIO)
-        }
-        return String(line)
+        process.waitUntilExit()
+    }
+
+    private static func isChild(_ pid: pid_t, of parent: pid_t) -> Bool {
+        var mib = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        return sysctl(&mib, u_int(mib.count), &info, &size, nil, 0) == 0 &&
+            size == MemoryLayout<kinfo_proc>.stride && info.kp_eproc.e_ppid == parent
     }
 
     deinit {
-        input.fileHandleForWriting.closeFile()
-        if process.isRunning { process.terminate() }
-        process.waitUntilExit()
+        Self.cleanup(process: process, input: input, terminated: terminated,
+                     shellPID: shellPID, backgroundPID: backgroundPID)
     }
 }
 
 final class ScriptableSelectedTTYTests: XCTestCase {
+    func testPTYFixtureAcceptsDelayedInterpreterStartup() throws {
+        let fixture = try ForegroundPTYFixture(mode: "delayed-start")
+        XCTAssertTrue(ScriptableShellFocusProof.shellIsForeground(fixture.shellPID, tty: fixture.tty))
+    }
+
+    func testPTYFixtureBoundsUnterminatedHotStdout() {
+        XCTAssertThrowsError(try ForegroundPTYFixture(mode: "hot-stdout", timeout: 0.5)) { error in
+            XCTAssertTrue(String(describing: error).contains("reply exceeds 256 bytes"))
+        }
+    }
+
+    func testPTYFixtureDeadlineSurvivesHotStderr() {
+        XCTAssertThrowsError(try ForegroundPTYFixture(mode: "hot-stderr", timeout: 0.5)) { error in
+            XCTAssertTrue(String(describing: error).contains("Python startup: deadline exceeded"))
+        }
+    }
+
+    func testPTYFixtureReportsChildErrorAndReapsIt() {
+        var childPID: pid_t = 0
+        XCTAssertThrowsError(try ForegroundPTYFixture(mode: "child-error", onSpawn: { childPID = $0 })) { error in
+            XCTAssertTrue(String(describing: error).contains("injected PTY child error"))
+        }
+        XCTAssertGreaterThan(childPID, 0)
+        if childPID > 0 {
+            XCTAssertEqual(Darwin.kill(childPID, 0), -1)
+            XCTAssertEqual(errno, ESRCH)
+        }
+    }
+
+    func testPTYFixtureTimeoutReapsStalledChild() {
+        var childPID: pid_t = 0
+        XCTAssertThrowsError(try ForegroundPTYFixture(mode: "child-hang", timeout: 0.5,
+                                                      onSpawn: { childPID = $0 })) { error in
+            XCTAssertTrue(String(describing: error).contains("PTY child ready: deadline exceeded"))
+        }
+        XCTAssertGreaterThan(childPID, 0)
+        if childPID > 0 {
+            XCTAssertEqual(Darwin.kill(childPID, 0), -1)
+            XCTAssertEqual(errno, ESRCH)
+        }
+    }
+
+    func testPTYFixtureForcedChildCleanupLetsPythonReapBeforeExit() {
+        var childPID: pid_t = 0
+        XCTAssertThrowsError(try ForegroundPTYFixture(mode: "child-stubborn", timeout: 0.5,
+                                                      onSpawn: { childPID = $0 })) { error in
+            XCTAssertTrue(String(describing: error).contains("PTY child ready: deadline exceeded"))
+        }
+        XCTAssertGreaterThan(childPID, 0)
+        if childPID > 0 {
+            XCTAssertEqual(Darwin.kill(childPID, 0), -1)
+            XCTAssertEqual(errno, ESRCH)
+        }
+    }
+
     func testForegroundProofUsesShellControllingTTYFromNonControllingParent() throws {
         let fixture = try ForegroundPTYFixture()
         let selectedFD = Darwin.open(fixture.tty, O_RDONLY | O_NOCTTY | O_NONBLOCK)
