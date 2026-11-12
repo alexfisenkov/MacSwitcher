@@ -96,6 +96,7 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         var unknownNotices = 0
         var onApplication: (() -> Void)?
         var captureAvailable = true
+        var selectionAvailable = true
         var captureFocusCount = 0
         var searchOverlayActive = false
 
@@ -110,7 +111,15 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
             secureInputActive: { [unowned self] in currentField.secure },
             captureFocus: { [unowned self] pid in
                 captureFocusCount += 1
-                return captureAvailable && pid == currentField.pid ? currentField.focus() : nil
+                guard captureAvailable && pid == currentField.pid else { return nil }
+                let focus = currentField.focus()
+                guard let boundary = focus.fieldBoundary else { return focus }
+                let guarded = CombinedShiftFieldBoundary(
+                    validationFailure: boundary.validationFailure,
+                    selectionRange: { [unowned self] in selectionAvailable ? boundary.selectionRange() : nil },
+                    text: boundary.text, secureSubrole: boundary.secureSubrole)
+                return CombinedShiftFocus(processID: focus.processID, element: focus.element,
+                    initialSelection: focus.initialSelection, fieldBoundary: guarded)
             },
             focusIsCurrent: { [unowned self] focus in
                 currentField.pid == focus.processID && currentField.valid
@@ -678,6 +687,108 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         XCTAssertEqual(rig.probe.completionCount(for: evaluationID), 1)
         XCTAssertEqual(field.text, "ghbX")
         XCTAssertEqual(field.queuedText, 0)
+    }
+
+    @MainActor
+    func testResolvedAnchorRecoversAfterPersistentOneUnitDriftAndLongWindow() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2111, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        _ = rig.coordinator
+        rig.deliver("ghbd")
+        rig.settle(expected: .applied)
+        XCTAssertEqual(field.text, "прив")
+
+        // One packet represents a long same-field typing session. The input
+        // buffer trims its text, while the event offset remains cumulative.
+        let longWindow = String(repeating: "а ", count: 1_001)
+        rig.deliver(longWindow)
+        rig.settle()
+        field.insert("x") // External same-field edit is absent from the event offset.
+        rig.deliver("руддщ")
+        rig.settle(expected: .renderRetryExhausted)
+        XCTAssertEqual(field.queuedText, 1)
+
+        rig.deliver("т") // Never re-anchor the still open, partly typed token.
+        rig.settle()
+        XCTAssertEqual(field.text, "прив" + longWindow + "xруддщт")
+        XCTAssertEqual(field.queuedText, 1)
+        rig.deliver(" ")
+        rig.settle(expected: .notScheduled)
+        rig.deliver("руддщ")
+        rig.settle(expected: .applied)
+        XCTAssertEqual(field.text, "прив" + longWindow + "xруддщт hello")
+        XCTAssertEqual(field.queuedText, 2)
+        XCTAssertFalse(rig.converter.hasUnconfirmedAXEdit)
+    }
+
+    @MainActor
+    func testBoundaryArrivingDuringRenderRetryRetiresDriftBeforeNextWord() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2112, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        _ = rig.coordinator
+        rig.deliver("ghbd")
+        let first = try XCTUnwrap(rig.probe.latestSubmitted)
+        field.text = "ghbX" // Same location, but the rendered source disagrees.
+        rig.probe.onRetryScheduled = { [unowned rig] evaluationID in
+            if evaluationID == first, rig.probe.retryCount(for: first) == 1 {
+                rig.deliver(" ") // The old retry is now stale; this is the real boundary.
+            }
+        }
+        rig.settle()
+        rig.probe.onRetryScheduled = nil
+        XCTAssertEqual(rig.probe.completionCount(for: first), 1)
+        XCTAssertEqual(rig.probe.outcome(for: first), .cancelledBeforeEvaluation)
+        XCTAssertEqual(rig.probe.lastOutcome, .notScheduled)
+        XCTAssertEqual(field.text, "ghbX ")
+        XCTAssertEqual(field.queuedText, 0)
+
+        rig.deliver("ghbd")
+        rig.settle(expected: .applied)
+        XCTAssertEqual(field.text, "ghbX прив")
+        XCTAssertEqual(field.queuedText, 1)
+    }
+
+    @MainActor
+    func testTransientRenderLagStillUsesOriginalAnchor() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2113, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        _ = rig.coordinator
+        rig.deliver("ghbd")
+        field.text = "ghbX"
+        rig.probe.onRetryScheduled = { _ in
+            field.text = "ghbd" // The original event becomes visible before retry.
+        }
+        rig.settle(expected: .applied)
+        XCTAssertEqual(field.text, "прив")
+        XCTAssertEqual(field.queuedText, 1)
+        XCTAssertEqual(rig.captureFocusCount, 1)
+    }
+
+    @MainActor
+    func testRepeatedSelectionUnavailableRecoversOnlyAfterBoundary() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2114, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        _ = rig.coordinator
+        rig.deliver("ghbd")
+        rig.selectionAvailable = false // Initial capture succeeded; later AX reads fail.
+        rig.settle(expected: .renderRetryExhausted)
+        XCTAssertEqual(field.text, "ghbd")
+        XCTAssertEqual(field.queuedText, 0)
+        rig.selectionAvailable = true
+        rig.deliver("tn")
+        rig.settle()
+        XCTAssertEqual(field.text, "ghbdtn")
+        XCTAssertEqual(field.queuedText, 0)
+        rig.deliver(" ")
+        rig.settle(expected: .notScheduled)
+        rig.deliver("ghbd")
+        rig.settle(expected: .applied)
+        XCTAssertEqual(field.text, "ghbdtn прив")
+        XCTAssertEqual(field.queuedText, 1)
     }
 
     @MainActor

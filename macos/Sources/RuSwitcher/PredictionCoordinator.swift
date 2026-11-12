@@ -40,6 +40,7 @@ final class PredictionCoordinator {
     private var anchorSessionID: UInt64?
     private var anchorFocus: CombinedShiftFocus?
     private var pendingCaretAnchor: PredictionPendingCaretAnchor?
+    private var anchorProofDeferred = false
     private let correctionReceipts: ConfirmedCorrectionReceipts
     private let receiptNow: () -> UInt64
     private var confirmedAdaptiveUndo: (id: UUID, original: String, replacement: String,
@@ -192,14 +193,23 @@ final class PredictionCoordinator {
         let route = platform.route(bundleID, snapshot.suffix, snapshot.sourceLayoutID)
         guard route != .blocked, !platform.deniedApp(bundleID) || route == .nativeCanary else {
             anchorSessionID = nil; anchorFocus = nil; pendingCaretAnchor = nil
+            anchorProofDeferred = false
             if let evaluationID { reportEvaluationFinished(evaluationID, .notScheduled) }
             return // blocked editors must not incur a synchronous AX capture
+        }
+        if anchorProofDeferred, anchorSessionID == snapshot.sessionID, snapshot.atBoundary {
+            // A newer physical separator superseded an unresolved render retry.
+            // Do not let its cancelled task keep this word's event-time anchor.
+            retireFailedCaretAnchor(snapshot, fromBoundaryEvent: true)
+            if let evaluationID { reportEvaluationFinished(evaluationID, .notScheduled) }
+            return
         }
         if anchorSessionID != snapshot.sessionID {
             RuntimeDiagnostics.record(.autoAnchorSessionChanged)
             anchorSessionID = snapshot.sessionID
             anchorFocus = nil
             pendingCaretAnchor = nil
+            anchorProofDeferred = false
             captureOriginalAnchor(snapshot)
         }
         if anchorFocus == nil, snapshot.atBoundary {
@@ -265,6 +275,30 @@ final class PredictionCoordinator {
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(15), execute: work)
         if let evaluationID { onRenderRetryScheduled?(evaluationID) }
         return true
+    }
+
+    private func retireFailedCaretAnchor(_ snapshot: PredictionSnapshot,
+                                         fromBoundaryEvent: Bool = false) {
+        // A bounded proof failure cannot authorize edits in this session. Keep
+        // the open token unscored, and only let a later physical separator (or
+        // this already observed separator) start a new event-time capture.
+        guard anchorSessionID == snapshot.sessionID else { return }
+        if fromBoundaryEvent {
+            // A newer event can be submitted synchronously from the old retry
+            // callback. That callback cancels its own task during invalidate(),
+            // so Task.isCancelled says nothing about the newer physical event.
+            guard snapshot.sessionID == monitor.predictionSessionID,
+                  snapshot.isCurrent(processID: platform.frontmost().processID,
+                      revision: monitor.inputRevision, generation: monitor.predictionGeneration) else { return }
+        } else {
+            guard isCurrent(snapshot) else { return }
+        }
+        anchorFocus = nil
+        pendingCaretAnchor = nil
+        anchorProofDeferred = false
+        RuntimeDiagnostics.record(.autoAnchorStale)
+        RuntimeDiagnostics.record(.autoAnchorRetired)
+        if snapshot.atBoundary { monitor.resetPredictionContext() }
     }
 
     private func isCurrent(_ snapshot: PredictionSnapshot) -> Bool {
@@ -338,8 +372,18 @@ final class PredictionCoordinator {
             pendingCaretAnchor = nil
             RuntimeDiagnostics.record(.autoFocusMismatch); return
         }
-        guard var pending = pendingCaretAnchor, let currentSelection = originalFocus.selectionRange() else {
+        guard var pending = pendingCaretAnchor else {
             RuntimeDiagnostics.record(.autoCaretUnavailable); return
+        }
+        guard let currentSelection = originalFocus.selectionRange() else {
+            RuntimeDiagnostics.record(.autoCaretUnavailable)
+            anchorProofDeferred = true
+            retryScheduled = retryRenderVerification(snapshot, attempt: renderAttempt, evaluationID: evaluationID)
+            if !retryScheduled && renderAttempt >= 3 {
+                outcome = .renderRetryExhausted
+                retireFailedCaretAnchor(snapshot)
+            }
+            return
         }
         // Retain the first session's field identity; only its current collapsed
         // caret is refreshed. A same-PID different field is never a new baseline.
@@ -352,16 +396,22 @@ final class PredictionCoordinator {
         if pending.isCancelled {
             anchorFocus = nil
             pendingCaretAnchor = nil
+            anchorProofDeferred = false
             RuntimeDiagnostics.record(.autoFocusMismatch)
             return
         }
         pendingCaretAnchor = pending
         guard resolved != nil else {
             RuntimeDiagnostics.record(.autoCaretMismatch)
+            anchorProofDeferred = true
             retryScheduled = retryRenderVerification(snapshot, attempt: renderAttempt, evaluationID: evaluationID)
-            if !retryScheduled && renderAttempt >= 3 { outcome = .renderRetryExhausted }
+            if !retryScheduled && renderAttempt >= 3 {
+                outcome = .renderRetryExhausted
+                retireFailedCaretAnchor(snapshot)
+            }
             return
         }
+        anchorProofDeferred = false
         guard isCurrent(snapshot) else { outcome = .stale; RuntimeDiagnostics.record(.autoEvaluationStale); return }
         // The converter must preserve an unknown edit in this exact AX field.
         // Refuse before opening another input lease or recording a source window;

@@ -29,4 +29,18 @@ final class RuntimeDiagnosticsTests: XCTestCase {
         XCTAssertFalse(seen.insert(.focusReadCannotComplete))
         XCTAssertFalse(seen.insert(.autoEngineReady))
     }
+
+    func testLateAutomaticMilestonesRepeatOnlyAfterExistingInterval() {
+        for event: RuntimeDiagnosticEvent in [.autoNoProposal, .autoTextConfirmed, .autoAnchorRetired] {
+            var clock: UInt64 = 1
+            let seen = RuntimeDiagnostics.SeenEvents(now: { clock })
+            XCTAssertTrue(seen.shouldEmit(event))
+            XCTAssertFalse(seen.shouldEmit(event))
+            clock += 4_999_999_999
+            XCTAssertFalse(seen.shouldEmit(event))
+            clock += 1
+            XCTAssertTrue(seen.shouldEmit(event))
+            XCTAssertFalse(seen.shouldEmit(event))
+        }
+    }
 }

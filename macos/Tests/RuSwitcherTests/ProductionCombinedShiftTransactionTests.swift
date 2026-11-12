@@ -30,6 +30,23 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         }
     }
 
+    private final class HeadroomValidationProbe: @unchecked Sendable {
+        private let lock = NSLock()
+        private var calls = 0
+        private var capacityReleased = false
+
+        var validationCalls: Int { lock.lock(); defer { lock.unlock() }; return calls }
+        func releaseCapacity() { lock.lock(); capacityReleased = true; lock.unlock() }
+        func validate(_ id: UUID, _ receipt: RecoveryArchive.Receipt) throws -> String {
+            lock.lock()
+            calls += 1
+            let unexpectedRepeat = calls > 9 && !capacityReleased
+            lock.unlock()
+            if unexpectedRepeat { throw RecoveryArchive.Failure.verificationFailed }
+            return try RecoveryArchive.original(id: id, receipt: receipt)
+        }
+    }
+
     @MainActor
     private final class Rig {
         let monitor = KeyboardMonitor()
@@ -754,6 +771,84 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         controller.requestManual()
         await fulfillment(of: [alreadySaved], timeout: 3)
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path).count, 1)
+    }
+
+    @MainActor
+    func testControllerStopsAtArchivedFieldLimitAndResumesAfterCapacityRelease() async throws {
+        let fields = (0..<264).map { Field(pid: 5800 + Int32($0), text: "ghbdtn") }
+        fields.forEach { $0.dropInsertion = true }
+        let rig = try Rig(fields: fields)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let lockDirectory = directory.appendingPathComponent("locks")
+        let finalDirectory = directory.appendingPathComponent("final")
+
+        func retainUnknown(_ field: Field) throws {
+            rig.frontField = field
+            rig.monitor.resetCombinedShift()
+            try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+            rig.sourceID = rig.enToRu.targetLayoutID
+            XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome, .stopped)
+            XCTAssertEqual(field.queuedText, 1)
+        }
+
+        for field in fields.prefix(8) { try retainUnknown(field) }
+        let firstBatch = rig.converter.unbackedOriginals.map { RecoveryArchive.Source(id: $0.id, text: $0.text) }
+        XCTAssertTrue(rig.converter.markArchived(try RecoveryArchive.saveVerified(firstBatch, in: lockDirectory)))
+        for index in 0..<256 {
+            if index > 0 {
+                try retainUnknown(fields[index + 7])
+                let latest = rig.converter.unbackedOriginals.map { RecoveryArchive.Source(id: $0.id, text: $0.text) }
+                XCTAssertEqual(latest.count, 1)
+                XCTAssertTrue(rig.converter.markArchived(try RecoveryArchive.saveVerified(latest, in: lockDirectory)))
+            }
+            let oldest = try XCTUnwrap(rig.converter.backedOriginals.first)
+            XCTAssertEqual(try RecoveryArchive.original(id: oldest.id, receipt: oldest.archive), oldest.text)
+            XCTAssertTrue(rig.converter.evictValidatedBacking(id: oldest.id, receipt: oldest.archive))
+        }
+        try retainUnknown(fields[263])
+        let final = rig.converter.unbackedOriginals.map { RecoveryArchive.Source(id: $0.id, text: $0.text) }
+        XCTAssertEqual(final.count, 1)
+        XCTAssertTrue(rig.converter.markArchived(try RecoveryArchive.saveVerified(final, in: finalDirectory)))
+        XCTAssertEqual(rig.converter.archivedOriginals.count, 256)
+        XCTAssertEqual(rig.converter.backedOriginals.count, 8)
+
+        let probe = HeadroomValidationProbe()
+        let firstHeadroomRead = expectation(description: "first headroom archive validation")
+        let controller = RecoveryArchiveController(converter: rig.converter,
+            enabled: { true }, directory: { finalDirectory },
+            validate: { id, receipt in
+                let text = try probe.validate(id, receipt)
+                if probe.validationCalls == 9 { firstHeadroomRead.fulfill() }
+                return text
+            })
+        var preparedCount = 0
+        var failureCount = 0
+        controller.onHeadroomPrepared = { preparedCount += 1 }
+        controller.onFailure = { _, _ in failureCount += 1 }
+        controller.requestManual()
+        await fulfillment(of: [firstHeadroomRead], timeout: 5)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(probe.validationCalls, 9, "A full archived-field budget must not revalidate the same RAM original")
+        XCTAssertEqual(preparedCount, 0, "No capacity was released")
+        XCTAssertEqual(failureCount, 0, "A valid archive must not be invalidated by a capacity limit")
+        XCTAssertEqual(rig.converter.backedOriginals.count, 8)
+        XCTAssertEqual(rig.converter.archivedOriginals.count, 256)
+        XCTAssertTrue(rig.converter.hasUnconfirmedAXEdit(in: fields[0].focus()))
+        controller.requestAutomatic()
+        controller.requestAutomatic()
+        XCTAssertEqual(probe.validationCalls, 9, "Automatic polling has no new unsaved source to process")
+
+        rig.converter.releaseArchivedLocks(forTerminatedProcessID: fields[0].pid)
+        probe.releaseCapacity()
+        let resumed = expectation(description: "headroom prepared after lock release")
+        controller.onHeadroomPrepared = { preparedCount += 1; resumed.fulfill() }
+        controller.requestManual()
+        await fulfillment(of: [resumed], timeout: 5)
+        XCTAssertEqual(preparedCount, 1)
+        XCTAssertEqual(rig.converter.backedOriginals.count, 7)
+        XCTAssertEqual(rig.converter.archivedOriginals.count, 256)
+        XCTAssertFalse(rig.converter.hasUnconfirmedAXEdit(in: fields[0].focus()))
     }
 
     @MainActor
