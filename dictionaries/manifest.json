@@ -44,15 +44,15 @@
   },
   "protected_terms": {
     "source": "dictionaries/protected-terms-source.tsv",
-    "source_sha256": "d0619b3e1b238b3fa5c996a30956a2e9fb918b8aea77f8f5c84e8bff104df133",
+    "source_sha256": "7c74a1421672c936f114a2564167ea05b2dd216422a00c0d4d70b64f195c1d86",
     "output": "macos/Sources/RuSwitcher/Resources/protected-terms.tsv",
-    "output_sha256": "1d9b7b09343483f35ad51098f99d070f3cad02f6da6bb0139d599ad90d9fdb89",
-    "entries": 2435,
+    "output_sha256": "8824c6501bebc78382d27894b16db3b726d080a8a0cfd64c04e9bba49671f756",
+    "entries": 2442,
     "counts": {
       "ru": 872,
-      "en": 1563
+      "en": 1570
     },
-    "bytes": 45739,
+    "bytes": 45854,
     "provenance": "Project-curated public spellings of brands, technology, common given/family names, IT words and place names; no personal contacts or user text",
     "license": "CC0-1.0",
     "license_url": "https://creativecommons.org/publicdomain/zero/1.0/"
@@ -115,11 +115,11 @@
     },
     "modern_source": {
       "path": "dictionaries/modern-spellings-source.tsv",
-      "sha256": "435eb0875367d56bf94e1e8b4b8ffa5f99ea2f0ac81d447565be72b29683ab0a",
-      "entries": 636,
+      "sha256": "831abf9c58d2311aceadcf59d8a9cbb4565a382fc0155b80c4f7c3b40f1b3445",
+      "entries": 731,
       "counts": {
-        "ru": 427,
-        "en": 209
+        "ru": 487,
+        "en": 244
       },
       "license": "CC0-1.0",
       "license_url": "https://creativecommons.org/publicdomain/zero/1.0/"
@@ -127,31 +127,31 @@
     "languages": {
       "ru": {
         "output": "macos/Sources/RuSwitcher/Resources/ru-spellings.sqlite",
-        "output_sha256": "719c5c8768ecf35d6b757f5c21158117edcc4cee4ef5d199452bcfe99d313355",
+        "output_sha256": "6914fdd27b90732856ed9d94d2044e43cb907ed6cfd7140faef4ffc7d612e7a4",
         "bytes": 85639168,
         "schema": 1,
         "storage": "SQLite spellings(word TEXT PRIMARY KEY NOT NULL) WITHOUT ROWID; metadata; user_version=1",
-        "entries": 3064053,
+        "entries": 3064113,
         "source_accepted_rows": 5137804,
         "source_unique_entries": 3063822,
-        "modern_new_entries": 231,
+        "modern_new_entries": 291,
         "overlap_with_frequency": 491570,
-        "new_unique_against_frequency": 2572483,
-        "union_with_frequency": 3751016
+        "new_unique_against_frequency": 2572543,
+        "union_with_frequency": 3751076
       },
       "en": {
         "output": "macos/Sources/RuSwitcher/Resources/en-spellings.sqlite",
-        "output_sha256": "71ec3966e1482d041fa7f99eba210418056b7e8097cc74daf307febb682fbf0b",
+        "output_sha256": "cf998ad9d75d7dde26228a671a6d5875ef8c1cb7f073a81654c66a5743756d5d",
         "bytes": 2387968,
         "schema": 1,
         "storage": "SQLite spellings(word TEXT PRIMARY KEY NOT NULL) WITHOUT ROWID; metadata; user_version=1",
-        "entries": 171040,
+        "entries": 171075,
         "source_accepted_rows": 676543,
         "source_unique_entries": 170997,
-        "modern_new_entries": 43,
+        "modern_new_entries": 78,
         "overlap_with_frequency": 111030,
-        "new_unique_against_frequency": 60010,
-        "union_with_frequency": 1447392
+        "new_unique_against_frequency": 60045,
+        "union_with_frequency": 1447427
       }
     }
   }

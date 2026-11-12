@@ -71,6 +71,19 @@ SQLite без морфологических записей. Для чтения
 частоты этим написаниям не назначаются. Хеш источника и итоговые размеры,
 пересечения и объединения зафиксированы в manifest.
 
+Редакция от 2026-11-13 добавила 60 русских и 35 английских современных
+разговорных и технических написаний, включая варианты из лексики AI и
+разработки. Источник теперь содержит 731 строку: 487 RU и 244 EN. Семь
+написаний компаний и продуктов добавлены отдельно в защищённый список с
+категорией `brand`. Оба набора остаются редакционными данными под CC0 1.0;
+частоты новым словам не назначаются, а включение названия не означает связи
+или одобрения его владельцем. Это редакционный отбор публичных написаний;
+написания сверены по официальным страницам: [Tabnine](https://www.tabnine.com/ai-code-assistant/),
+[Qodo](https://www.qodo.ai/), [Lovart](https://www.lovart.ai/statement/about-us),
+[Mureka](https://www.mureka.ai/), [Genmo](https://www.genmo.ai/about),
+[Pippit](https://www.pippit.ai/) и
+[Sourcegraph](https://sourcegraph.com/blog/sunsetting-cody-future-of-code-intelligence).
+
 Воспроизведение — два явных этапа: сначала существующий частотный импорт
 `python3 script/import_dictionaries.py --download`, затем
 `python3 script/import_spelling_dictionaries.py --download`. Второй этап

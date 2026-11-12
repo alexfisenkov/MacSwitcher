@@ -69,7 +69,7 @@ final class SupplementalSpellingTests: XCTestCase {
 
     func testBundledModernFormsCorrectAtBoundaryAndPreserveValidSources() async throws {
         let lexicon = try await bundled()
-        XCTAssertEqual(lexicon.spellingWordCounts, ["ru": 3_064_053, "en": 171_040])
+        XCTAssertEqual(lexicon.spellingWordCounts, ["ru": 3_064_113, "en": 171_075])
         let engine = PredictionEngine(lexicon: lexicon)
         let cases: [(wrong: String, source: String, correct: String, target: String)] = [
             ("hfcrkflrb", "en", "раскладки", "ru"),
