@@ -164,26 +164,42 @@ final class MonitoringTapRecoveryTests: XCTestCase {
     func testActualAsyncRetryWaitsForLeaseAndRunsOnceAfterSafePoll() async throws {
         var safe = true
         var attempts = 0
+        var scheduledCount = 0
+        var callbackCount = 0
+        var retryTask: Task<Void, Never>?
+        defer { retryTask?.cancel() }
+        let retryFired = expectation(description: "delayed tap retry callback fired")
         let recovery = MonitoringTapRecovery(retryInterval: 0.015,
             isActive: { true }, mayReconfigure: { safe }, reconfigure: {
                 attempts += 1
                 return attempts == 2
             }, schedule: { delay, action in
-                Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                scheduledCount += 1
+                retryTask = Task { @MainActor in
+                    // Delay delivery beyond the former 50 ms assumption while
+                    // still exercising the real asynchronous callback path.
+                    do {
+                        try await Task.sleep(nanoseconds: max(
+                            UInt64(delay * 1_000_000_000), 75_000_000))
+                    } catch { return }
                     action()
+                    callbackCount += 1
+                    retryFired.fulfill()
                 }
             })
         recovery.poll(needsRecovery: true)
         XCTAssertEqual(attempts, 1)
         safe = false // synthetic active edit when the real scheduled task fires
-        try await Task.sleep(nanoseconds: 50_000_000)
+        await fulfillment(of: [retryFired], timeout: 2)
+        XCTAssertEqual(callbackCount, 1)
+        XCTAssertEqual(scheduledCount, 1)
         XCTAssertEqual(attempts, 1)
         XCTAssertFalse(recovery.retryScheduled)
         safe = true
         recovery.poll(needsRecovery: true)
         XCTAssertEqual(attempts, 2)
-        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(scheduledCount, 1)
+        recovery.poll(needsRecovery: false)
         XCTAssertEqual(attempts, 2)
         XCTAssertFalse(recovery.retryScheduled)
     }
