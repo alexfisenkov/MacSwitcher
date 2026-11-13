@@ -2,6 +2,149 @@ import Foundation
 
 /// Локализация интерфейса на 16 языков (вкомпилированные строки)
 enum L10n {
+    static var nativeInstructionsTab: String { native(0) }
+    static var nativeWordsTab: String { native(1) }
+    static var nativeSettingsTab: String { native(2) }
+    static var nativeSingleShift: String { native(3) }
+    static var nativeDoubleShift: String { native(4) }
+    static var nativeDoubleShiftWholeLine: String { nativeReview(0) }
+    static var nativeUndo: String { native(5) }
+    static var nativeAutoHint: String { native(6) }
+    static var nativeMigrationPending: String { native(7) }
+    static var nativeShellEnabled: String { nativeOperation(0) }
+    static var nativeShellSetup: String { nativeOperation(1) }
+    static var nativeRuntimeCheck: String { nativeOperation(2) }
+    static var nativeShiftInterval: String { nativeOperation(3) }
+    static var nativeAutoTitle: String { nativeDetail(0) }
+    static var nativeDictionaryEntry: String { nativeDetail(1) }
+    static var nativeLearningEntry: String { nativeDetail(2) }
+    static var nativeStartupGroup: String { nativeDetail(3) }
+    static var nativeLanguagesGroup: String { nativeDetail(4) }
+    static var nativeWordsNever: String { nativeReview(1) }
+    static var nativeWordsAlways: String { nativeReview(2) }
+    static var nativeWordsApps: String { nativeReview(3) }
+    static var nativeBackupUnavailable: String { nativeReview(4) }
+    static var nativeChooseLayout: String { nativeSupport(0) }
+    static var nativeOpenOriginals: String { nativeSupport(1) }
+    static var nativeOpenArchive: String { nativeSupport(2) }
+    static var nativeNoOriginals: String { nativeSupport(3) }
+    static var nativeSupportEntry: String { nativeSupport(4) }
+
+    private static func native(_ index: Int) -> String {
+        nativeCopy[currentLang]?[index] ?? nativeCopy["en"]![index]
+    }
+
+    private static func nativeOperation(_ index: Int) -> String {
+        nativeOperationCopy[currentLang]?[index] ?? nativeOperationCopy["en"]![index]
+    }
+
+    private static func nativeDetail(_ index: Int) -> String {
+        nativeDetailCopy[currentLang]?[index] ?? nativeDetailCopy["en"]![index]
+    }
+
+    private static func nativeReview(_ index: Int) -> String {
+        nativeReviewCopy[currentLang]?[index] ?? nativeReviewCopy["en"]![index]
+    }
+
+    private static func nativeSupport(_ index: Int) -> String {
+        nativeSupportCopy[currentLang]?[index] ?? nativeSupportCopy["en"]![index]
+    }
+
+    private static let nativeSupportCopy: [String: [String]] = [
+        "en": ["Choose input source…", "Original texts after an issue…", "Open original-text archive", "No originals are waiting for recovery.", "Help and maintenance…"],
+        "ru": ["Выбрать раскладку…", "Исходные тексты после сбоя…", "Открыть архив исходников", "Исходных текстов для восстановления сейчас нет.", "Помощь и обслуживание…"],
+        "de": ["Eingabequelle wählen…", "Originaltexte nach einem Problem…", "Originaltext-Archiv öffnen", "Keine Originaltexte warten auf Wiederherstellung.", "Hilfe und Wartung…"],
+        "fr": ["Choisir la source de saisie…", "Textes originaux après un problème…", "Ouvrir l’archive des originaux", "Aucun texte original n’attend de restauration.", "Aide et maintenance…"],
+        "es": ["Elegir fuente de entrada…", "Textos originales tras un problema…", "Abrir archivo de originales", "No hay textos originales pendientes de recuperación.", "Ayuda y mantenimiento…"],
+        "pt": ["Escolher fonte de entrada…", "Textos originais após um problema…", "Abrir arquivo de originais", "Não há textos originais à espera de recuperação.", "Ajuda e manutenção…"],
+        "zh": ["选择输入法…", "出错后的原文…", "打开原文存档", "当前没有待恢复的原文。", "帮助与维护…"],
+        "ja": ["入力ソースを選ぶ…", "問題後の元のテキスト…", "元のテキストの保存先を開く", "復元待ちの元のテキストはありません。", "ヘルプとメンテナンス…"],
+        "ko": ["입력 소스 선택…", "문제 발생 후 원본 텍스트…", "원본 텍스트 보관함 열기", "복구할 원본 텍스트가 없습니다.", "도움말 및 유지 관리…"],
+        "uk": ["Вибрати джерело введення…", "Початкові тексти після збою…", "Відкрити архів початкових текстів", "Зараз немає текстів, що очікують відновлення.", "Допомога й обслуговування…"],
+        "pl": ["Wybierz źródło wprowadzania…", "Oryginalne teksty po problemie…", "Otwórz archiwum oryginałów", "Brak oryginalnych tekstów oczekujących na odzyskanie.", "Pomoc i konserwacja…"],
+        "be": ["Выбраць крыніцу ўводу…", "Зыходныя тэксты пасля збою…", "Адкрыць архіў зыходных тэкстаў", "Зараз няма тэкстаў для аднаўлення.", "Дапамога і абслугоўванне…"],
+        "el": ["Επιλογή πηγής εισαγωγής…", "Αρχικά κείμενα μετά από πρόβλημα…", "Άνοιγμα αρχείου αρχικών κειμένων", "Δεν υπάρχουν αρχικά κείμενα για ανάκτηση.", "Βοήθεια και συντήρηση…"],
+        "bg": ["Избор на източник на въвеждане…", "Оригинални текстове след проблем…", "Отваряне на архива с оригинали", "Няма оригинални текстове за възстановяване.", "Помощ и поддръжка…"],
+        "hy": ["Ընտրել մուտքագրման աղբյուրը…", "Խնդրից հետո սկզբնական տեքստերը…", "Բացել սկզբնական տեքստերի արխիվը", "Վերականգնման սպասող սկզբնական տեքստեր չկան։", "Օգնություն և սպասարկում…"],
+        "ka": ["შეყვანის წყაროს არჩევა…", "საწყისი ტექსტები ხარვეზის შემდეგ…", "საწყისი ტექსტების არქივის გახსნა", "აღსადგენი საწყისი ტექსტები ამჟამად არ არის.", "დახმარება და მოვლა…"]
+    ]
+
+    private static let nativeReviewCopy: [String: [String]] = [
+        "en": ["Press Shift twice quickly to fix the current line up to the cursor or selected text.", "Never correct automatically", "Always correct automatically", "Excluded apps", "The old-shortcut backup is unavailable. Current settings still work; a verified copy is needed for rollback."],
+        "ru": ["Дважды быстро нажмите Shift, чтобы исправить строку до курсора или выделенный текст.", "Не исправлять автоматически", "Всегда исправлять автоматически", "Приложения-исключения", "Резервная копия прежних сочетаний недоступна. Текущие настройки работают; для отката нужна проверенная копия."],
+        "de": ["Zweimal schnell Umschalt drücken, um die Zeile bis zum Cursor oder markierten Text zu korrigieren.", "Nie automatisch korrigieren", "Immer automatisch korrigieren", "Ausgenommene Apps", "Die Sicherung alter Kürzel ist nicht verfügbar. Aktuelle Einstellungen funktionieren; zum Zurücksetzen ist eine geprüfte Kopie nötig."],
+        "fr": ["Appuyez rapidement deux fois sur Maj pour corriger la ligne jusqu’au curseur ou le texte sélectionné.", "Ne jamais corriger automatiquement", "Toujours corriger automatiquement", "Apps exclues", "La sauvegarde des anciens raccourcis est indisponible. Les réglages actuels fonctionnent ; le retour arrière exige une copie vérifiée."],
+        "es": ["Pulsa Mayús dos veces rápidamente para corregir la línea hasta el cursor o el texto seleccionado.", "No corregir automáticamente", "Corregir siempre automáticamente", "Apps excluidas", "No está disponible la copia de los atajos anteriores. Los ajustes actuales funcionan; volver atrás requiere una copia verificada."],
+        "pt": ["Prima Shift duas vezes rapidamente para corrigir a linha até ao cursor ou o texto selecionado.", "Nunca corrigir automaticamente", "Corrigir sempre automaticamente", "Apps excluídas", "A cópia dos atalhos antigos não está disponível. As definições atuais funcionam; reverter exige uma cópia verificada."],
+        "zh": ["快速按两次 Shift，修正光标前的当前行或选中的文字。", "不自动纠错", "始终自动纠错", "排除的应用", "旧快捷键备份不可用。当前设置仍可使用；回退需要经过验证的备份。"],
+        "ja": ["Shift を素早く2回押すと、カーソルまでの行や選択した文字を修正します。", "自動修正しない", "常に自動修正する", "対象外のアプリ", "旧ショートカットのバックアップが使えません。現在の設定は動作します。元に戻すには確認済みのコピーが必要です。"],
+        "ko": ["Shift를 빠르게 두 번 누르면 커서 앞의 현재 줄이나 선택한 텍스트를 수정합니다.", "자동 수정하지 않음", "항상 자동 수정", "제외된 앱", "이전 단축키 백업을 사용할 수 없습니다. 현재 설정은 작동하며 되돌리려면 검증된 사본이 필요합니다."],
+        "uk": ["Швидко натисніть Shift двічі, щоб виправити рядок до курсора або виділений текст.", "Не виправляти автоматично", "Завжди виправляти автоматично", "Винятки для програм", "Копія старих сполучень недоступна. Поточні налаштування працюють; для відкату потрібна перевірена копія."],
+        "pl": ["Naciśnij szybko Shift dwa razy, aby poprawić wiersz do kursora lub zaznaczony tekst.", "Nigdy nie poprawiaj automatycznie", "Zawsze poprawiaj automatycznie", "Wykluczone aplikacje", "Kopia dawnych skrótów jest niedostępna. Bieżące ustawienia działają; cofnięcie wymaga zweryfikowanej kopii."],
+        "be": ["Хутка націсніце Shift двойчы, каб выправіць радок да курсора або вылучаны тэкст.", "Не выпраўляць аўтаматычна", "Заўсёды выпраўляць аўтаматычна", "Выключаныя праграмы", "Копія ранейшых спалучэнняў недаступная. Бягучыя налады працуюць; для адкату патрэбна правераная копія."],
+        "el": ["Πατήστε γρήγορα δύο φορές Shift για διόρθωση της γραμμής ως τον δρομέα ή επιλεγμένου κειμένου.", "Ποτέ αυτόματη διόρθωση", "Πάντα αυτόματη διόρθωση", "Εξαιρούμενες εφαρμογές", "Το αντίγραφο παλιών συντομεύσεων δεν είναι διαθέσιμο. Οι τρέχουσες ρυθμίσεις λειτουργούν· η επαναφορά απαιτεί ελεγμένο αντίγραφο."],
+        "bg": ["Натиснете бързо Shift два пъти, за да поправите реда до курсора или избрания текст.", "Без автоматична поправка", "Винаги автоматична поправка", "Изключени приложения", "Копието на старите комбинации е недостъпно. Текущите настройки работят; връщането изисква проверено копие."],
+        "hy": ["Արագ երկու անգամ սեղմեք Shift՝ մինչև կուրսորը տողը կամ ընտրված տեքստը ուղղելու համար։", "Չուղղել ավտոմատ", "Միշտ ուղղել ավտոմատ", "Բացառված հավելվածներ", "Հին դյուրանցումների պահուստը հասանելի չէ։ Ընթացիկ կարգավորումներն աշխատում են, իսկ հետադարձի համար պետք է ստուգված պատճեն։"],
+        "ka": ["სწრაფად ორჯერ დააჭირეთ Shift-ს, რომ შეასწოროთ ხაზი კურსორამდე ან მონიშნული ტექსტი.", "არ გასწორდეს ავტომატურად", "ყოველთვის გასწორდეს ავტომატურად", "გამონაკლისი აპები", "ძველი მალსახმობების ასლი მიუწვდომელია. მიმდინარე პარამეტრები მუშაობს; დაბრუნებისთვის საჭიროა შემოწმებული ასლი."]
+    ]
+
+    private static let nativeDetailCopy: [String: [String]] = [
+        "en": ["Automatic correction", "Personal words and phrases", "Remembered corrections", "Startup and updates", "Keyboard languages"],
+        "ru": ["Автокоррекция", "Личные слова и фразы", "Запомненные исправления", "Запуск и обновления", "Языки клавиатуры"],
+        "de": ["Automatische Korrektur", "Eigene Wörter und Ausdrücke", "Gemerkte Korrekturen", "Start und Updates", "Tastatursprachen"],
+        "fr": ["Correction automatique", "Mots et expressions personnels", "Corrections mémorisées", "Démarrage et mises à jour", "Langues du clavier"],
+        "es": ["Corrección automática", "Palabras y frases personales", "Correcciones guardadas", "Inicio y actualizaciones", "Idiomas del teclado"],
+        "pt": ["Correção automática", "Palavras e frases pessoais", "Correções memorizadas", "Arranque e atualizações", "Idiomas do teclado"],
+        "zh": ["自动纠错", "个人词语和短语", "记住的修正", "启动与更新", "键盘语言"],
+        "ja": ["自動修正", "個人の単語と語句", "記憶した修正", "起動と更新", "キーボード言語"],
+        "ko": ["자동 수정", "개인 단어와 구문", "기억한 수정", "시작 및 업데이트", "키보드 언어"],
+        "uk": ["Автовиправлення", "Власні слова й фрази", "Запам’ятовані виправлення", "Запуск і оновлення", "Мови клавіатури"],
+        "pl": ["Autokorekta", "Własne słowa i zwroty", "Zapamiętane poprawki", "Uruchamianie i aktualizacje", "Języki klawiatury"],
+        "be": ["Аўтавыпраўленне", "Асабістыя словы і фразы", "Запомненыя выпраўленні", "Запуск і абнаўленні", "Мовы клавіятуры"],
+        "el": ["Αυτόματη διόρθωση", "Προσωπικές λέξεις και φράσεις", "Αποθηκευμένες διορθώσεις", "Εκκίνηση και ενημερώσεις", "Γλώσσες πληκτρολογίου"],
+        "bg": ["Автокорекция", "Лични думи и фрази", "Запомнени поправки", "Стартиране и обновления", "Езици на клавиатурата"],
+        "hy": ["Ավտոմատ ուղղում", "Անձնական բառեր և արտահայտություններ", "Հիշված ուղղումներ", "Մեկնարկ և թարմացումներ", "Ստեղնաշարի լեզուներ"],
+        "ka": ["ავტომატური შესწორება", "პირადი სიტყვები და ფრაზები", "დამახსოვრებული შესწორებები", "გაშვება და განახლებები", "კლავიატურის ენები"]
+    ]
+
+    private static let nativeOperationCopy: [String: [String]] = [
+        "en": ["Correct zsh input (setup required)", "Set up zsh…", "Check operation…", "Double Shift interval"],
+        "ru": ["Исправлять ввод в zsh (после настройки)", "Настроить zsh…", "Проверить работу…", "Интервал двух Shift"],
+        "de": ["Eingaben in zsh korrigieren (Einrichtung nötig)", "zsh einrichten…", "Funktion prüfen…", "Intervall für doppeltes Shift"],
+        "fr": ["Corriger la saisie dans zsh (configuration requise)", "Configurer zsh…", "Vérifier le fonctionnement…", "Intervalle du double Maj"],
+        "es": ["Corregir en zsh (requiere configuración)", "Configurar zsh…", "Comprobar funcionamiento…", "Intervalo de doble Mayús"],
+        "pt": ["Corrigir entrada no zsh (requer configuração)", "Configurar zsh…", "Verificar funcionamento…", "Intervalo do duplo Shift"],
+        "zh": ["修正 zsh 输入（需要设置）", "设置 zsh…", "检查运行状态…", "双击 Shift 间隔"],
+        "ja": ["zsh の入力を修正（設定が必要）", "zsh を設定…", "動作を確認…", "Shift 2回の間隔"],
+        "ko": ["zsh 입력 수정(설정 필요)", "zsh 설정…", "작동 확인…", "Shift 두 번 누르기 간격"],
+        "uk": ["Виправляти введення в zsh (потрібне налаштування)", "Налаштувати zsh…", "Перевірити роботу…", "Інтервал двох Shift"],
+        "pl": ["Poprawiaj wpisywanie w zsh (wymaga konfiguracji)", "Skonfiguruj zsh…", "Sprawdź działanie…", "Odstęp podwójnego Shift"],
+        "be": ["Выпраўляць увод у zsh (патрэбна наладка)", "Наладзіць zsh…", "Праверыць працу…", "Інтэрвал двух Shift"],
+        "el": ["Διόρθωση εισαγωγής στο zsh (απαιτείται ρύθμιση)", "Ρύθμιση zsh…", "Έλεγχος λειτουργίας…", "Διάστημα διπλού Shift"],
+        "bg": ["Поправяне на въвеждането в zsh (изисква настройка)", "Настройка на zsh…", "Проверка на работата…", "Интервал за двоен Shift"],
+        "hy": ["Ուղղել zsh-ի մուտքագրումը (պահանջվում է կարգավորում)", "Կարգավորել zsh-ը…", "Ստուգել աշխատանքը…", "Կրկնակի Shift-ի միջակայք"],
+        "ka": ["zsh-ში შეყვანის შესწორება (საჭიროა დაყენება)", "zsh-ის დაყენება…", "მუშაობის შემოწმება…", "ორმაგი Shift-ის შუალედი"]
+    ]
+
+    // Each supported interface language has the same eight short instruction strings.
+    private static let nativeCopy: [String: [String]] = [
+        "en": ["How to use", "Words & exceptions", "Settings", "Press either Shift once to change the input language.", "Press Shift twice quickly to fix the last word or selected text.", "Immediately press Shift twice again, without changing text or cursor, to restore the original.", "Automatic correction works separately from Shift.", "The new Shift setup was not applied. Previous shortcuts remain active."],
+        "ru": ["Как пользоваться", "Слова и исключения", "Настройки", "Нажмите любой Shift один раз, чтобы сменить раскладку.", "Дважды быстро нажмите Shift, чтобы исправить последнее слово или выделенный текст.", "Сразу ещё дважды нажмите Shift, не меняя текст и курсор, чтобы вернуть исходное.", "Автоисправление работает отдельно от Shift.", "Новый режим Shift не применён. Прежние сочетания продолжают работать."],
+        "de": ["Verwendung", "Wörter & Ausnahmen", "Einstellungen", "Einmal eine der Umschalttasten drücken, um die Eingabesprache zu wechseln.", "Zweimal schnell Umschalt drücken, um das letzte Wort oder markierten Text zu korrigieren.", "Sofort erneut zweimal Umschalt drücken, ohne Text oder Cursor zu ändern, um das Original wiederherzustellen.", "Die automatische Korrektur funktioniert unabhängig von Umschalt.", "Der neue Umschaltmodus wurde nicht angewendet. Bisherige Kürzel bleiben aktiv."],
+        "fr": ["Mode d’emploi", "Mots et exceptions", "Réglages", "Appuyez une fois sur une touche Maj pour changer de langue de saisie.", "Appuyez rapidement deux fois sur Maj pour corriger le dernier mot ou le texte sélectionné.", "Appuyez aussitôt deux fois sur Maj, sans changer le texte ni le curseur, pour rétablir l’original.", "La correction automatique fonctionne indépendamment de Maj.", "Le nouveau mode Maj n’a pas été appliqué. Les anciens raccourcis restent actifs."],
+        "es": ["Cómo usar", "Palabras y excepciones", "Ajustes", "Pulsa una vez cualquier tecla Mayús para cambiar el idioma de entrada.", "Pulsa Mayús dos veces rápidamente para corregir la última palabra o el texto seleccionado.", "Pulsa enseguida Mayús dos veces más, sin cambiar el texto ni el cursor, para recuperar el original.", "La corrección automática funciona por separado de Mayús.", "No se aplicó el nuevo modo Mayús. Los atajos anteriores siguen activos."],
+        "pt": ["Como usar", "Palavras e exceções", "Definições", "Prima uma vez qualquer tecla Shift para mudar o idioma de entrada.", "Prima Shift duas vezes rapidamente para corrigir a última palavra ou o texto selecionado.", "Prima logo Shift mais duas vezes, sem alterar o texto nem o cursor, para repor o original.", "A correção automática funciona separadamente do Shift.", "O novo modo Shift não foi aplicado. Os atalhos anteriores continuam ativos."],
+        "zh": ["使用方法", "词语与例外", "设置", "按一次任意 Shift 键切换输入语言。", "快速按两次 Shift，修正上一个词或选中的文字。", "立即再按两次 Shift，不更改文字或光标，即可恢复原文。", "自动纠错与 Shift 操作相互独立。", "新的 Shift 模式未启用。原有快捷键仍然有效。"],
+        "ja": ["使い方", "単語と例外", "設定", "左右どちらかの Shift を1回押すと入力言語を切り替えます。", "Shift を素早く2回押すと、直前の単語や選択した文字を修正します。", "文字やカーソルを動かさず、すぐに Shift をもう2回押すと元に戻せます。", "自動修正は Shift 操作とは別に動作します。", "新しい Shift 設定は適用されていません。以前のショートカットが有効です。"],
+        "ko": ["사용 방법", "단어 및 예외", "설정", "어느 쪽 Shift든 한 번 누르면 입력 언어가 바뀝니다.", "Shift를 빠르게 두 번 누르면 마지막 단어나 선택한 텍스트를 수정합니다.", "텍스트나 커서를 바꾸지 말고 즉시 Shift를 다시 두 번 누르면 원래대로 돌아갑니다.", "자동 수정은 Shift와 별도로 작동합니다.", "새 Shift 모드가 적용되지 않았습니다. 기존 단축키가 유지됩니다."],
+        "uk": ["Як користуватися", "Слова й винятки", "Налаштування", "Натисніть будь-який Shift один раз, щоб змінити мову введення.", "Швидко натисніть Shift двічі, щоб виправити останнє слово або виділений текст.", "Одразу ще двічі натисніть Shift, не змінюючи текст і курсор, щоб повернути початкове.", "Автовиправлення працює окремо від Shift.", "Новий режим Shift не застосовано. Попередні сполучення залишаються активними."],
+        "pl": ["Jak używać", "Słowa i wyjątki", "Ustawienia", "Naciśnij dowolny Shift raz, aby zmienić język pisania.", "Naciśnij szybko Shift dwa razy, aby poprawić ostatnie słowo lub zaznaczony tekst.", "Od razu naciśnij Shift ponownie dwa razy, bez zmiany tekstu i kursora, aby przywrócić oryginał.", "Autokorekta działa niezależnie od Shift.", "Nowy tryb Shift nie został zastosowany. Poprzednie skróty nadal działają."],
+        "be": ["Як карыстацца", "Словы і выключэнні", "Налады", "Націсніце любы Shift адзін раз, каб змяніць мову ўводу.", "Хутка націсніце Shift двойчы, каб выправіць апошняе слова або вылучаны тэкст.", "Адразу зноў націсніце Shift двойчы, не змяняючы тэкст і курсор, каб вярнуць зыходнае.", "Аўтавыпраўленне працуе асобна ад Shift.", "Новы рэжым Shift не ўжыты. Ранейшыя спалучэнні застаюцца актыўнымі."],
+        "el": ["Οδηγίες χρήσης", "Λέξεις και εξαιρέσεις", "Ρυθμίσεις", "Πατήστε μία φορά οποιοδήποτε Shift για αλλαγή γλώσσας εισαγωγής.", "Πατήστε γρήγορα δύο φορές Shift για διόρθωση της τελευταίας λέξης ή επιλεγμένου κειμένου.", "Πατήστε αμέσως ξανά δύο φορές Shift, χωρίς αλλαγή κειμένου ή δρομέα, για επαναφορά του αρχικού.", "Η αυτόματη διόρθωση λειτουργεί ανεξάρτητα από το Shift.", "Η νέα λειτουργία Shift δεν εφαρμόστηκε. Οι παλιές συντομεύσεις παραμένουν ενεργές."],
+        "bg": ["Как се използва", "Думи и изключения", "Настройки", "Натиснете който и да е Shift веднъж, за да смените езика на въвеждане.", "Натиснете бързо Shift два пъти, за да поправите последната дума или избрания текст.", "Веднага натиснете Shift още два пъти, без да променяте текста или курсора, за да върнете оригинала.", "Автоматичната корекция работи отделно от Shift.", "Новият режим Shift не е приложен. Старите клавишни комбинации остават активни."],
+        "hy": ["Ինչպես օգտվել", "Բառեր և բացառություններ", "Կարգավորումներ", "Սեղմեք Shift ստեղներից որևէ մեկը մեկ անգամ՝ մուտքագրման լեզուն փոխելու համար։", "Արագ երկու անգամ սեղմեք Shift՝ վերջին բառը կամ ընտրված տեքստը ուղղելու համար։", "Անմիջապես նորից երկու անգամ սեղմեք Shift՝ առանց տեքստը կամ կուրսորը փոխելու, բնօրինակը վերադարձնելու համար։", "Ավտոմատ ուղղումն աշխատում է Shift-ից անկախ։", "Shift-ի նոր ռեժիմը չի կիրառվել։ Նախորդ դյուրանցումները գործում են։"],
+        "ka": ["გამოყენება", "სიტყვები და გამონაკლისები", "პარამეტრები", "შეყვანის ენის შესაცვლელად ერთხელ დააჭირეთ ნებისმიერ Shift-ს.", "ბოლო სიტყვის ან მონიშნული ტექსტის შესასწორებლად სწრაფად ორჯერ დააჭირეთ Shift-ს.", "დაუყოვნებლივ ისევ ორჯერ დააჭირეთ Shift-ს, ტექსტისა და კურსორის შეუცვლელად, საწყისის დასაბრუნებლად.", "ავტომატური შესწორება Shift-ისგან დამოუკიდებლად მუშაობს.", "Shift-ის ახალი რეჟიმი არ გამოიყენება. ძველი მალსახმობები აქტიურია."]
+    ]
     // MARK: - Меню
     static var menuAutoSwitch: String { s("menu.autoSwitch") }
     static var menuCheckPermissions: String { s("menu.checkPermissions") }

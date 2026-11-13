@@ -1,17 +1,22 @@
 import AppKit
 import Carbon
 
-/// Окно настроек с боковой навигацией и прокруткой длинных разделов.
+/// Native AppKit settings with three top tabs and scrollable long forms.
 @MainActor
 final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDataSource, NSTableViewDelegate, NSSplitViewDelegate {
     private var window: NSWindow?
     private var settingsTabView: NSTabView?
+    private var topButtons: [NSButton] = []
+    private var wordsSections: NSTabView?
+    private var settingsSections: NSTabView?
+    private var displayedNativeShiftApplied = false
     private var navigationTable: NSTableView?
     private var autoSwitchCheckbox: NSButton?
     private var launchAtLoginCheckbox: NSButton?
     private var checkUpdatesCheckbox: NSButton?
     private var caretFlagCheckbox: NSButton?
-    private var autoConvertCheckbox: NSButton?      // #4: синк тумблера меню → окно настроек
+    private var autoConvertCheckboxes: [NSButton] = []
+    private var autoConvertSwitch: NSSwitch?
     private var remoteDesktopCheckbox: NSButton?    // #5: то же (опционален — за фичефлагом)
     private var layout1Popup: NSPopUpButton?
     private var layout2Popup: NSPopUpButton?
@@ -19,6 +24,7 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
     private var switchHotkeyPopup: NSPopUpButton?   // issue #20/#3: пере-populate при смене триггера
     private var caseHotkeyPopup: NSPopUpButton?     // issue #29
     private var exceptionEditors: [ExceptionListEditor] = []
+    private var exceptionHeaders: [NSView] = []
     private var intervalValueLabel: NSTextField?
 
     /// Callback для обновления меню
@@ -35,16 +41,23 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
     var onHideIconChanged: ((Bool) -> Void)?
     var onPredictionPreferencesChanged: (() -> Void)?
     var onRecoveryArchiveChanged: ((Bool) -> Void)?
+    var onStatusAppearanceChanged: (() -> Void)?
+    var onPermissionCheckRequested: (() -> Void)?
+    var onUpdateCheckRequested: (() -> Void)?
+    var onInputSourceRequested: (() -> Void)?
+    var onRecoveryOriginalsRequested: (() -> Void)?
+    var onRecoveryArchiveFolderRequested: (() -> Void)?
 
     func showWindow() {
         if let window {
+            settingsTabView?.selectTabViewItem(at: 0)
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
         }
 
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 700, height: 680),
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 520),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -53,35 +66,368 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
         win.center()
         win.isReleasedWhenClosed = false
 
-        let tabView = NSTabView(frame: win.contentView!.bounds)
-        tabView.autoresizingMask = [.width, .height]
-
-        tabView.addTabViewItem(createGeneralTab())
-        tabView.addTabViewItem(createAdvancedTab())     // «Расширенные» — сразу после «Основных»
-        tabView.addTabViewItem(createExceptionsTab())
-        tabView.addTabViewItem(createPersonalDictionaryTab())
-        tabView.addTabViewItem(createAdaptiveRulesTab())
-        tabView.addTabViewItem(createAboutTab())
-        tabView.tabViewType = .noTabsNoBorder
-        tabView.delegate = self
+        let tabView = makeNativeTabs()
 
         let root = makeSettingsContent(tabView: tabView)
         win.contentView = root
-        navigationTable?.reloadData()
-        // A consistent window size keeps navigation stable; long forms scroll inside
-        // their pane and remain usable on short displays.
+        // Long forms scroll inside their pane and remain usable on short displays.
         let screen = NSScreen.main
         win.setContentSize(fittedSettingsWindowSize(visibleFrame: screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 760, height: 740)))
         win.center()
-        navigationTable?.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
-        if let navigationTable { win.initialFirstResponder = navigationTable }
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
         window = win
     }
 
+    func showWords() {
+        showWindow()
+        settingsTabView?.selectTabViewItem(at: 1)
+        wordsSections?.selectTabViewItem(at: 0)
+    }
+
+    func showSettings() {
+        showWindow()
+        settingsTabView?.selectTabViewItem(at: 2)
+    }
+
+    func makeNativeTabs(
+        nativeShiftApplied: Bool = SettingsManager.shared.nativeShiftMigrationApplied,
+        wholeLine: Bool = SettingsManager.shared.convertWholeLine,
+        backupVerified: Bool = SettingsManager.shared.nativeShiftBackupVerified
+    ) -> NSTabView {
+        displayedNativeShiftApplied = nativeShiftApplied
+        autoConvertCheckboxes.removeAll()
+        let tabs = NSTabView(frame: NSRect(x: 0, y: 0, width: 600, height: 520))
+        tabs.autoresizingMask = [.width, .height]
+        tabs.tabViewType = .noTabsNoBorder
+        tabs.delegate = self
+        tabs.addTabViewItem(createInstructionsTab(
+            nativeShiftApplied: nativeShiftApplied, wholeLine: wholeLine))
+        tabs.addTabViewItem(createWordsTab())
+        tabs.addTabViewItem(createNativeSettingsTab(
+            nativeShiftApplied: nativeShiftApplied, backupVerified: backupVerified))
+        tabs.selectTabViewItem(at: 0)
+        return tabs
+    }
+
+    private func createInstructionsTab(nativeShiftApplied: Bool, wholeLine: Bool) -> NSTabViewItem {
+        let item = NSTabViewItem(identifier: "native.instructions")
+        item.label = L10n.nativeInstructionsTab
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 540, height: 450))
+        if !nativeShiftApplied {
+            let warning = NSTextField(wrappingLabelWithString: L10n.nativeMigrationPending)
+            warning.font = .systemFont(ofSize: 16)
+            warning.textColor = .systemOrange
+            warning.frame = NSRect(x: 24, y: 326, width: 490, height: 80)
+            view.addSubview(warning)
+            let settings = NSButton(title: L10n.nativeSettingsTab,
+                target: self, action: #selector(openLegacySettingsTab))
+            settings.frame = NSRect(x: 24, y: 275, width: 200, height: 32)
+            view.addSubview(settings)
+            item.view = topAligned(view)
+            return item
+        }
+
+        let heading = NSTextField(labelWithString: "MacSwitcher")
+        heading.font = .boldSystemFont(ofSize: 21)
+        heading.frame = NSRect(x: 24, y: 406, width: 490, height: 28)
+        view.addSubview(heading)
+
+        func gestureRow(y: CGFloat, title: String, subtitle: String, keycap: String) {
+            let group = nativeGroup(NSRect(x: 20, y: y, width: 500, height: 74))
+            let titleLabel = NSTextField(labelWithString: title)
+            titleLabel.font = .boldSystemFont(ofSize: 14)
+            titleLabel.frame = NSRect(x: 16, y: 43, width: 350, height: 20)
+            group.contentView?.addSubview(titleLabel)
+            let detail = NSTextField(wrappingLabelWithString: subtitle)
+            detail.font = .systemFont(ofSize: 12)
+            detail.textColor = .secondaryLabelColor
+            detail.frame = NSRect(x: 16, y: 7, width: 365, height: 36)
+            group.contentView?.addSubview(detail)
+            let cap = nativeGroup(NSRect(x: 393, y: 23, width: 92, height: 28), fill: .windowBackgroundColor)
+            let text = NSTextField(labelWithString: keycap)
+            text.alignment = .center
+            text.font = .systemFont(ofSize: 12, weight: .medium)
+            text.frame = NSRect(x: 4, y: 5, width: 84, height: 18)
+            cap.contentView?.addSubview(text)
+            group.contentView?.addSubview(cap)
+            view.addSubview(group)
+        }
+        gestureRow(y: 316, title: "Shift", subtitle: L10n.nativeSingleShift, keycap: "⇧ Shift")
+        gestureRow(y: 231, title: "Shift × 2", subtitle: wholeLine
+            ? L10n.nativeDoubleShiftWholeLine : L10n.nativeDoubleShift, keycap: "⇧ ×2")
+
+        let undo = NSTextField(wrappingLabelWithString: L10n.nativeUndo)
+        undo.font = .systemFont(ofSize: 12)
+        undo.textColor = .secondaryLabelColor
+        undo.frame = NSRect(x: 28, y: 191, width: 484, height: 31)
+        view.addSubview(undo)
+
+        let example = nativeGroup(NSRect(x: 20, y: 128, width: 500, height: 54))
+        let exampleText = NSTextField(labelWithString: "ghbdtn → привет")
+        exampleText.font = .monospacedSystemFont(ofSize: 18, weight: .medium)
+        exampleText.frame = NSRect(x: 16, y: 14, width: 464, height: 26)
+        example.contentView?.addSubview(exampleText)
+        view.addSubview(example)
+
+        let automatic = nativeGroup(NSRect(x: 20, y: 38, width: 500, height: 78))
+        let autoTitle = NSTextField(labelWithString: L10n.nativeAutoTitle)
+        autoTitle.font = .boldSystemFont(ofSize: 14)
+        autoTitle.frame = NSRect(x: 16, y: 45, width: 390, height: 20)
+        automatic.contentView?.addSubview(autoTitle)
+        let autoCaption = NSTextField(wrappingLabelWithString: L10n.nativeAutoHint)
+        autoCaption.font = .systemFont(ofSize: 12)
+        autoCaption.textColor = .secondaryLabelColor
+        autoCaption.frame = NSRect(x: 16, y: 10, width: 390, height: 35)
+        automatic.contentView?.addSubview(autoCaption)
+        let toggle = NSSwitch(frame: NSRect(x: 438, y: 25, width: 48, height: 28))
+        toggle.state = SettingsManager.shared.automaticTextEnabled ? .on : .off
+        toggle.target = self
+        toggle.action = #selector(autoConvertSwitchChanged(_:))
+        automatic.contentView?.addSubview(toggle)
+        autoConvertSwitch = toggle
+        view.addSubview(automatic)
+        item.view = topAligned(view)
+        return item
+    }
+
+    private func nativeGroup(_ frame: NSRect, fill: NSColor = .controlBackgroundColor) -> NSBox {
+        let box = NSBox(frame: frame)
+        box.boxType = .custom
+        box.titlePosition = .noTitle
+        box.borderColor = .separatorColor
+        box.fillColor = fill
+        box.cornerRadius = 9
+        box.contentViewMargins = .zero
+        return box
+    }
+
+    @objc private func openLegacySettingsTab() {
+        settingsTabView?.selectTabViewItem(at: 2)
+    }
+
+    private func refreshInstructionsTab() {
+        guard let tabs = settingsTabView, tabs.numberOfTabViewItems >= 1 else { return }
+        let old = tabs.tabViewItem(at: 0)
+        let selected = tabs.selectedTabViewItem
+        let replacement = createInstructionsTab(nativeShiftApplied: displayedNativeShiftApplied,
+            wholeLine: SettingsManager.shared.convertWholeLine)
+        tabs.removeTabViewItem(old)
+        tabs.insertTabViewItem(replacement, at: 0)
+        if selected === old { tabs.selectTabViewItem(replacement) }
+        else if let selected { tabs.selectTabViewItem(selected) }
+    }
+
+    private func createWordsTab() -> NSTabViewItem {
+        let item = NSTabViewItem(identifier: "native.words")
+        item.label = L10n.nativeWordsTab
+        let sections = NSTabView(frame: NSRect(x: 0, y: 0, width: 540, height: 450))
+        sections.autoresizingMask = [.width, .height]
+        sections.tabViewType = .noTabsNoBorder
+        let overview = NSTabViewItem(identifier: "words.overview")
+        overview.view = createWordsOverview()
+        sections.addTabViewItem(overview)
+        sections.addTabViewItem(wrapWordEditor(createPersonalDictionaryTab()))
+        sections.addTabViewItem(wrapWordEditor(createExceptionsTab()))
+        sections.addTabViewItem(wrapWordEditor(createAdaptiveRulesTab()))
+        sections.selectTabViewItem(at: 0)
+        wordsSections = sections
+        item.view = sections
+        return item
+    }
+
+    private func createWordsOverview() -> NSView {
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 540, height: 450))
+        let heading = NSTextField(labelWithString: L10n.nativeWordsTab)
+        heading.font = .boldSystemFont(ofSize: 20)
+        heading.frame = NSRect(x: 24, y: 402, width: 490, height: 28)
+        view.addSubview(heading)
+        let rows = [L10n.nativeDictionaryEntry, L10n.nativeWordsNever,
+            L10n.nativeWordsAlways, L10n.nativeWordsApps,
+            L10n.nativeLearningEntry]
+        for (index, title) in rows.enumerated() {
+            let group = nativeGroup(NSRect(x: 20, y: 325 - CGFloat(index) * 62,
+                width: 500, height: 54))
+            let button = NSButton(title: title, target: self, action: #selector(openWordEditor(_:)))
+            button.isBordered = false
+            button.alignment = .left
+            button.font = .systemFont(ofSize: 14, weight: .medium)
+            button.attributedTitle = NSAttributedString(string: title, attributes: [
+                .font: NSFont.systemFont(ofSize: 14, weight: .medium),
+                .foregroundColor: NSColor.labelColor
+            ])
+            button.frame = NSRect(x: 16, y: 7, width: 445, height: 39)
+            button.tag = index
+            group.contentView?.addSubview(button)
+            let chevron = NSTextField(labelWithString: "›")
+            chevron.font = .systemFont(ofSize: 22)
+            chevron.textColor = .tertiaryLabelColor
+            chevron.frame = NSRect(x: 465, y: 13, width: 20, height: 30)
+            group.contentView?.addSubview(chevron)
+            view.addSubview(group)
+        }
+        return view
+    }
+
+    private func wrapWordEditor(_ editor: NSTabViewItem) -> NSTabViewItem {
+        let wrapped = NSTabViewItem(identifier: editor.identifier)
+        wrapped.label = editor.label
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 540, height: 450))
+        let back = NSButton(title: "‹  \(L10n.nativeWordsTab)", target: self,
+            action: #selector(backToWordsOverview))
+        back.isBordered = false
+        back.alignment = .left
+        back.frame = NSRect(x: 20, y: 409, width: 480, height: 30)
+        view.addSubview(back)
+        if let content = editor.view {
+            content.frame = NSRect(x: 20, y: 0, width: 500, height: 398)
+            content.autoresizingMask = [.width, .height]
+            view.addSubview(content)
+        }
+        wrapped.view = view
+        return wrapped
+    }
+
+    @objc private func openWordEditor(_ sender: NSButton) {
+        let targets = [1, 2, 2, 2, 3]
+        guard (0..<targets.count).contains(sender.tag) else { return }
+        wordsSections?.selectTabViewItem(at: targets[sender.tag])
+        let headerIndex: Int? = [nil, 1, 2, 0, nil][sender.tag]
+        if let headerIndex, exceptionHeaders.indices.contains(headerIndex) {
+            let header = exceptionHeaders[headerIndex]
+            DispatchQueue.main.async { header.scrollToVisible(header.bounds) }
+        }
+    }
+
+    @objc private func backToWordsOverview() {
+        wordsSections?.selectTabViewItem(at: 0)
+    }
+
+    private func createNativeSettingsTab(nativeShiftApplied: Bool, backupVerified: Bool) -> NSTabViewItem {
+        let item = NSTabViewItem(identifier: "native.settings")
+        item.label = L10n.nativeSettingsTab
+        let sections = NSTabView(frame: NSRect(x: 0, y: 0, width: 540, height: 450))
+        sections.autoresizingMask = [.width, .height]
+        if nativeShiftApplied { sections.tabViewType = .noTabsNoBorder }
+        sections.addTabViewItem(nativeShiftApplied
+            ? createDailySettingsPane() : createGeneralTab())
+        sections.addTabViewItem(nativeShiftApplied
+            ? wrapSupportSettings(createAdvancedTab(showBackupWarning: !backupVerified,
+                showNativePerApp: true))
+            : createAdvancedTab(showBackupWarning: false, showNativePerApp: false))
+        sections.addTabViewItem(nativeShiftApplied
+            ? wrapSupportSettings(createAboutTab()) : createAboutTab())
+        sections.selectTabViewItem(at: 0)
+        settingsSections = sections
+        item.view = sections
+        return item
+    }
+
+    private func createDailySettingsPane() -> NSTabViewItem {
+        let item = NSTabViewItem(identifier: "settings.general")
+        item.label = L10n.settingsTabGeneral
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 540, height: 450))
+        let heading = NSTextField(labelWithString: L10n.nativeSettingsTab)
+        heading.font = .boldSystemFont(ofSize: 20)
+        heading.frame = NSRect(x: 24, y: 406, width: 490, height: 28)
+        view.addSubview(heading)
+
+        let startup = nativeGroup(NSRect(x: 20, y: 294, width: 500, height: 100))
+        let startupLabel = NSTextField(labelWithString: L10n.nativeStartupGroup)
+        startupLabel.font = .boldSystemFont(ofSize: 13)
+        startupLabel.frame = NSRect(x: 16, y: 73, width: 465, height: 20)
+        startup.contentView?.addSubview(startupLabel)
+        let login = NSButton(checkboxWithTitle: L10n.settingsLaunchAtLogin,
+            target: self, action: #selector(launchAtLoginChanged))
+        login.frame = NSRect(x: 16, y: 43, width: 468, height: 23)
+        login.state = SettingsManager.shared.launchAtLogin ? .on : .off
+        startup.contentView?.addSubview(login)
+        launchAtLoginCheckbox = login
+        let updates = NSButton(checkboxWithTitle: L10n.settingsCheckUpdates,
+            target: self, action: #selector(checkUpdatesEnabledChanged))
+        updates.frame = NSRect(x: 16, y: 14, width: 468, height: 23)
+        updates.state = SettingsManager.shared.checkUpdatesEnabled ? .on : .off
+        startup.contentView?.addSubview(updates)
+        checkUpdatesCheckbox = updates
+        view.addSubview(startup)
+
+        let languages = nativeGroup(NSRect(x: 20, y: 67, width: 500, height: 214))
+        let languagesLabel = NSTextField(labelWithString: L10n.nativeLanguagesGroup)
+        languagesLabel.font = .boldSystemFont(ofSize: 13)
+        languagesLabel.frame = NSRect(x: 16, y: 183, width: 465, height: 20)
+        languages.contentView?.addSubview(languagesLabel)
+        func popupRow(_ title: String, y: CGFloat, action: Selector,
+                      populate: (NSPopUpButton) -> Void) -> NSPopUpButton {
+            let label = NSTextField(labelWithString: title)
+            label.font = .systemFont(ofSize: 12)
+            label.frame = NSRect(x: 16, y: y + 4, width: 163, height: 24)
+            languages.contentView?.addSubview(label)
+            let popup = NSPopUpButton(frame: NSRect(x: 185, y: y, width: 298, height: 30))
+            populate(popup)
+            popup.target = self
+            popup.action = action
+            languages.contentView?.addSubview(popup)
+            return popup
+        }
+        languagePopup = popupRow(L10n.settingsLanguage, y: 136,
+            action: #selector(languageChanged), populate: populateLanguagePopup)
+        layout1Popup = popupRow(L10n.settingsLayout1, y: 82,
+            action: #selector(layout1Changed)) { popup in
+            populateLayoutPopup(popup, selectedID: SettingsManager.shared.layout1ID)
+        }
+        layout2Popup = popupRow(L10n.settingsLayout2, y: 28,
+            action: #selector(layout2Changed)) { popup in
+            populateLayoutPopup(popup, selectedID: SettingsManager.shared.layout2ID)
+        }
+        view.addSubview(languages)
+
+        let support = NSButton(title: L10n.nativeSupportEntry,
+            target: self, action: #selector(openSupportSettings))
+        support.frame = NSRect(x: 20, y: 17, width: 500, height: 32)
+        view.addSubview(support)
+        item.view = topAligned(view)
+        return item
+    }
+
+    @objc private func openSupportSettings() {
+        settingsSections?.selectTabViewItem(at: 1)
+    }
+
+    @objc private func backToDailySettings() {
+        settingsSections?.selectTabViewItem(at: 0)
+    }
+
+    @objc private func openAboutSettings() {
+        settingsSections?.selectTabViewItem(at: 2)
+    }
+
+    private func wrapSupportSettings(_ support: NSTabViewItem) -> NSTabViewItem {
+        let wrapped = NSTabViewItem(identifier: support.identifier)
+        wrapped.label = support.label
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 540, height: 450))
+        let back = NSButton(title: "‹  " + L10n.nativeSettingsTab,
+            target: self, action: #selector(backToDailySettings))
+        back.isBordered = false
+        back.alignment = .left
+        back.frame = NSRect(x: 20, y: 409, width: 480, height: 30)
+        view.addSubview(back)
+        if let content = support.view {
+            content.frame = NSRect(x: 20, y: 0, width: 500, height: 398)
+            content.autoresizingMask = [.width, .height]
+            view.addSubview(content)
+        }
+        wrapped.view = view
+        return wrapped
+    }
+
     func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
+        if tabView === settingsTabView,
+           let tabViewItem, let index = tabView.tabViewItems.firstIndex(of: tabViewItem) {
+            for (buttonIndex, button) in topButtons.enumerated() {
+                button.state = buttonIndex == index ? .on : .off
+            }
+        }
         if let tabViewItem, let index = tabView.tabViewItems.firstIndex(of: tabViewItem),
            navigationTable?.selectedRow != index {
             navigationTable?.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
@@ -89,43 +435,49 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
         resizeSettingsWindow(for: tabView)
     }
 
-    /// Builds the navigation shell separately so its structure can be inspected without
-    /// opening or activating a window.
+    /// Builds the production tab shell without opening or activating a window.
     func makeSettingsContent(tabView: NSTabView) -> NSView {
-        // Set the pane source before NSTableView requests rows or cell labels.
         settingsTabView = tabView
-        let splitView = NSSplitView(frame: NSRect(x: 0, y: 0, width: 700, height: 600))
-        splitView.isVertical = true
-        splitView.dividerStyle = .thin
-        splitView.autoresizingMask = [.width, .height]
-        splitView.delegate = self
+        let root = SettingsRootView(frame: NSRect(x: 0, y: 0, width: 600, height: 520))
+        tabView.frame = NSRect(x: 0, y: 0, width: 600, height: 470)
+        tabView.autoresizingMask = [.width, .height]
+        root.addSubview(tabView)
+        let tabs = NSStackView()
+        tabs.orientation = .horizontal
+        tabs.distribution = .fillEqually
+        tabs.spacing = 8
+        tabs.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(tabs)
+        NSLayoutConstraint.activate([
+            tabs.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 20),
+            tabs.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -20),
+            tabs.topAnchor.constraint(equalTo: root.topAnchor, constant: 10),
+            tabs.heightAnchor.constraint(equalToConstant: 32)
+        ])
+        topButtons = tabView.tabViewItems.enumerated().map { index, item in
+            let button = NSButton(title: item.label, target: self, action: #selector(topButtonChanged(_:)))
+            button.setButtonType(.pushOnPushOff)
+            button.bezelStyle = .rounded
+            button.tag = index
+            button.state = index == 0 ? .on : .off
+            tabs.addArrangedSubview(button)
+            return button
+        }
+        tabView.selectTabViewItem(at: 0)
+        return root
+    }
 
-        let navigation = NSTableView(frame: NSRect(x: 0, y: 0, width: 160, height: 600))
-        navigation.headerView = nil
-        navigation.rowSizeStyle = .medium
-        navigation.selectionHighlightStyle = .sourceList
-        navigation.style = .sourceList
-        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("settings-section"))
-        column.width = 160
-        column.resizingMask = .autoresizingMask
-        navigation.addTableColumn(column)
-        navigation.dataSource = self
-        navigation.delegate = self
+    @objc private func topButtonChanged(_ sender: NSButton) {
+        guard let settingsTabView, sender.tag >= 0,
+              sender.tag < settingsTabView.numberOfTabViewItems else { return }
+        settingsTabView.selectTabViewItem(at: sender.tag)
+    }
 
-        let navigationScroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 160, height: 600))
-        navigationScroll.autoresizingMask = [.width, .height]
-        navigationScroll.hasVerticalScroller = false
-        navigationScroll.borderType = .noBorder
-        navigationScroll.drawsBackground = true
-        navigationScroll.backgroundColor = .underPageBackgroundColor
-        navigationScroll.documentView = navigation
-
-        splitView.addSubview(navigationScroll)
-        splitView.addSubview(tabView)
-        splitView.setPosition(160, ofDividerAt: 0)
-        navigationTable = navigation
-        navigation.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
-        return splitView
+    private final class SettingsRootView: NSView {
+        override func draw(_ dirtyRect: NSRect) {
+            NSColor.windowBackgroundColor.setFill()
+            dirtyRect.fill()
+        }
     }
 
     func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat,
@@ -139,8 +491,8 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
     }
 
     func fittedSettingsWindowSize(visibleFrame: NSRect) -> NSSize {
-        NSSize(width: min(700, max(1, visibleFrame.width - 60)),
-               height: min(680, max(1, visibleFrame.height - 60)))
+        NSSize(width: min(600, max(1, visibleFrame.width - 60)),
+               height: min(520, max(1, visibleFrame.height - 40)))
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int {
@@ -199,7 +551,8 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
 
     /// #4/#5: синхронизировать чекбоксы с переключением из меню-бара.
     func updateAutoConvertState(_ enabled: Bool) {
-        autoConvertCheckbox?.state = enabled ? .on : .off
+        for checkbox in autoConvertCheckboxes { checkbox.state = enabled ? .on : .off }
+        autoConvertSwitch?.state = enabled ? .on : .off
     }
     func updateRemoteDesktopState(_ enabled: Bool) {
         remoteDesktopCheckbox?.state = enabled ? .on : .off
@@ -640,13 +993,14 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
         let view = NSView(frame: NSRect(x: 0, y: 0, width: 460, height: 600))
         var y: CGFloat = 586          // y — верх следующего элемента, идём сверху вниз
         exceptionEditors.removeAll()
+        exceptionHeaders.removeAll()
 
         // Авто-конвертация
         let autoConvert = NSButton(checkboxWithTitle: L10n.settingsAutoConvert, target: self, action: #selector(autoConvertChanged))
         autoConvert.frame = NSRect(x: 20, y: y - 22, width: 420, height: 22)
-        autoConvert.state = SettingsManager.shared.autoConvert ? .on : .off
+        autoConvert.state = SettingsManager.shared.automaticTextEnabled ? .on : .off
         view.addSubview(autoConvert)
-        autoConvertCheckbox = autoConvert
+        autoConvertCheckboxes.append(autoConvert)
         y -= 24
         let acHint = NSTextField(wrappingLabelWithString: L10n.settingsAutoConvertHint)
         acHint.frame = NSRect(x: 40, y: y - 32, width: 400, height: 32)
@@ -701,6 +1055,7 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
             header.font = .boldSystemFont(ofSize: 11)
             header.lineBreakMode = .byTruncatingTail
             view.addSubview(header)
+            exceptionHeaders.append(header)
             let contH: CGFloat = 96
             let cont = editor.makeContainer(frame: NSRect(x: 20, y: y - 22 - contH, width: 420, height: contH))
             view.addSubview(cont)
@@ -814,12 +1169,88 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
 
     // MARK: - Advanced Tab
 
-    private func createAdvancedTab() -> NSTabViewItem {
+    private func createAdvancedTab(showBackupWarning: Bool, showNativePerApp: Bool) -> NSTabViewItem {
         let item = NSTabViewItem()
         item.label = L10n.settingsTabAdvanced
 
-        let view = NSView(frame: NSRect(x: 0, y: 0, width: 460, height: 595))
-        var y: CGFloat = 545
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 460, height: 860))
+        var y: CGFloat = 808
+        if showBackupWarning {
+            let status = NSTextField(wrappingLabelWithString: L10n.nativeBackupUnavailable)
+            status.font = .systemFont(ofSize: 12)
+            status.textColor = .secondaryLabelColor
+            status.frame = NSRect(x: 20, y: y - 52, width: 420, height: 52)
+            view.addSubview(status)
+            y -= 65
+        }
+        if showNativePerApp {
+            let perApp = NSButton(checkboxWithTitle: L10n.settingsPerAppLayout,
+                target: self, action: #selector(perAppLayoutChanged))
+            perApp.frame = NSRect(x: 20, y: y, width: 420, height: 24)
+            perApp.state = SettingsManager.shared.perAppBackgroundEnabled ? .on : .off
+            view.addSubview(perApp)
+            y -= 36
+        }
+
+        let shell = NSButton(checkboxWithTitle: L10n.nativeShellEnabled,
+            target: self, action: #selector(shellBridgeChanged))
+        shell.frame = NSRect(x: 20, y: y, width: 420, height: 24)
+        shell.state = SettingsManager.shared.shellBridgeEnabled ? .on : .off
+        view.addSubview(shell)
+        y -= 39
+        let setup = NSButton(title: L10n.nativeShellSetup,
+            target: self, action: #selector(shellBridgeSetupRequested))
+        setup.frame = NSRect(x: 20, y: y, width: 190, height: 28)
+        view.addSubview(setup)
+        let check = NSButton(title: L10n.nativeRuntimeCheck,
+            target: self, action: #selector(runtimeCheckRequested))
+        check.frame = NSRect(x: 220, y: y, width: 220, height: 28)
+        view.addSubview(check)
+        y -= 45
+        let intervalTitle = NSTextField(labelWithString: L10n.nativeShiftInterval)
+        intervalTitle.frame = NSRect(x: 20, y: y, width: 165, height: 22)
+        view.addSubview(intervalTitle)
+        let interval = NSSlider(frame: NSRect(x: 190, y: y - 2, width: 165, height: 25))
+        interval.minValue = 80
+        interval.maxValue = 400
+        interval.integerValue = SettingsManager.shared.doubleShiftIntervalMilliseconds
+        interval.target = self
+        interval.action = #selector(doubleShiftIntervalChanged)
+        view.addSubview(interval)
+        let value = NSTextField(labelWithString: "\(interval.integerValue) ms")
+        value.frame = NSRect(x: 365, y: y, width: 75, height: 22)
+        view.addSubview(value)
+        intervalValueLabel = value
+        y -= 45
+        let permissions = NSButton(title: L10n.menuCheckPermissions,
+            target: self, action: #selector(permissionCheckRequested))
+        permissions.frame = NSRect(x: 20, y: y, width: 200, height: 28)
+        view.addSubview(permissions)
+        let updatesNow = NSButton(title: L10n.menuCheckUpdates,
+            target: self, action: #selector(updateCheckRequested))
+        updatesNow.frame = NSRect(x: 230, y: y, width: 210, height: 28)
+        view.addSubview(updatesNow)
+        y -= 50
+        let about = NSButton(title: L10n.settingsTabAbout,
+            target: self, action: #selector(openAboutSettings))
+        about.frame = NSRect(x: 20, y: y, width: 420, height: 28)
+        view.addSubview(about)
+        y -= 45
+
+        let inputSource = NSButton(title: L10n.nativeChooseLayout,
+            target: self, action: #selector(inputSourceRequested))
+        inputSource.frame = NSRect(x: 20, y: y, width: 420, height: 28)
+        view.addSubview(inputSource)
+        y -= 42
+        let originals = NSButton(title: L10n.nativeOpenOriginals,
+            target: self, action: #selector(recoveryOriginalsRequested))
+        originals.frame = NSRect(x: 20, y: y, width: 200, height: 28)
+        view.addSubview(originals)
+        let archiveFolder = NSButton(title: L10n.nativeOpenArchive,
+            target: self, action: #selector(recoveryArchiveFolderRequested))
+        archiveFolder.frame = NSRect(x: 230, y: y, width: 210, height: 28)
+        view.addSubview(archiveFolder)
+        y -= 48
 
         // Бета-версии (пред-релизы) — для тестировщиков; по умолчанию ВЫКЛ.
         let betaCheckbox = NSButton(checkboxWithTitle: L10n.settingsBetaChannel,
@@ -927,6 +1358,18 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
         view.addSubview(hideIconHint)
         y -= 47
 
+        let sound = NSButton(checkboxWithTitle: L10n.menuKeySound,
+            target: self, action: #selector(keySoundChanged))
+        sound.frame = NSRect(x: 20, y: y, width: 420, height: 22)
+        sound.state = SettingsManager.shared.keySound ? .on : .off
+        view.addSubview(sound)
+        y -= 32
+        let monochrome = NSButton(checkboxWithTitle: L10n.menuMonoIcon,
+            target: self, action: #selector(monochromeIconChanged))
+        monochrome.frame = NSRect(x: 20, y: y, width: 420, height: 22)
+        monochrome.state = SettingsManager.shared.monochromeIcon ? .on : .off
+        view.addSubview(monochrome)
+
         fitToText(view)
         item.view = topAligned(view)
         return item
@@ -950,6 +1393,15 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
         }
         SettingsManager.shared.hideMenuBarIcon = hide
         onHideIconChanged?(hide)
+    }
+
+    @objc private func keySoundChanged(_ sender: NSButton) {
+        SettingsManager.shared.keySound = sender.state == .on
+    }
+
+    @objc private func monochromeIconChanged(_ sender: NSButton) {
+        SettingsManager.shared.monochromeIcon = sender.state == .on
+        onStatusAppearanceChanged?()
     }
 
     @objc private func recoveryArchiveChanged(_ sender: NSButton) {
@@ -1097,7 +1549,7 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
 
     @objc private func perAppLayoutChanged(_ sender: NSButton) {
         let enabled = sender.state == .on
-        SettingsManager.shared.perAppLayout = enabled
+        SettingsManager.shared.perAppBackgroundEnabled = enabled
         onPerAppLayoutChanged?(enabled)
     }
 
@@ -1129,6 +1581,26 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
         onRuntimeCheckRequested?()
     }
 
+    @objc private func permissionCheckRequested() {
+        onPermissionCheckRequested?()
+    }
+
+    @objc private func updateCheckRequested() {
+        onUpdateCheckRequested?()
+    }
+
+    @objc private func inputSourceRequested() {
+        onInputSourceRequested?()
+    }
+
+    @objc private func recoveryOriginalsRequested() {
+        onRecoveryOriginalsRequested?()
+    }
+
+    @objc private func recoveryArchiveFolderRequested() {
+        onRecoveryArchiveFolderRequested?()
+    }
+
 
     private func refreshGeneralTabPresentation() {
         refreshGeneralTabPresentation { createGeneralTab() }
@@ -1139,7 +1611,8 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
     /// Replace the general pane while keeping its selected state and the sidebar in sync.
     /// The factory also gives UI tests a way to exercise refresh without reading user settings.
     func refreshGeneralTabPresentation(makeReplacement: () -> NSTabViewItem) {
-        guard let tabView = settingsTabView,
+        let tabView = (settingsTabView?.tabViewItems.last?.view as? NSTabView) ?? settingsTabView
+        guard let tabView,
               let oldItem = tabView.tabViewItems.first(where: { ($0.identifier as? String) == "settings.general" }) else { return }
         let selectedGeneral = tabView.selectedTabViewItem === oldItem
         let index = tabView.indexOfTabViewItem(oldItem)
@@ -1278,9 +1751,18 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
     }
 
     @objc private func autoConvertChanged(_ sender: NSButton) {
-        let enabled = sender.state == .on
-        SettingsManager.shared.autoConvert = enabled
-        onAutoConvertChanged?(enabled)
+        setAutomaticText(sender.state == .on)
+    }
+
+    @objc private func autoConvertSwitchChanged(_ sender: NSSwitch) {
+        setAutomaticText(sender.state == .on)
+    }
+
+    private func setAutomaticText(_ enabled: Bool) {
+        SettingsManager.shared.automaticTextEnabled = enabled
+        let effective = SettingsManager.shared.automaticTextEnabled
+        updateAutoConvertState(effective)
+        onAutoConvertChanged?(effective)
     }
 
     @objc private func remoteDesktopChanged(_ sender: NSButton) {
@@ -1310,6 +1792,7 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
 
     @objc private func convertWholeLineChanged(_ sender: NSButton) {
         SettingsManager.shared.convertWholeLine = sender.state == .on
+        refreshInstructionsTab()
     }
 
     @objc private func secureNoticeChanged(_ sender: NSButton) {

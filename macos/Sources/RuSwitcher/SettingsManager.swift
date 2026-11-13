@@ -9,6 +9,8 @@ final class SettingsManager: @unchecked Sendable {
     private let defaults: UserDefaults
     private let combinedShiftDefault: Bool
     private let nativeRolloutAccepted: Bool
+    private var verifiedNativeShift = false
+    private var verifiedNativeShiftBackup = false
 
     private enum Keys {
         static let autoSwitch = "com.ruswitcher.autoSwitch"
@@ -84,6 +86,52 @@ final class SettingsManager: @unchecked Sendable {
     var autoSwitchEnabled: Bool {
         get { defaults.object(forKey: Keys.autoSwitch) as? Bool ?? true }
         set { defaults.set(newValue, forKey: Keys.autoSwitch) }
+    }
+
+    /// Cache is set once at startup, before any keyboard monitor is configured.
+    @discardableResult
+    func activateNativeShift(backupDirectory: URL) -> Bool {
+        let result = ShiftBehaviorPolicy.activate(defaults: defaults, directory: backupDirectory)
+        verifiedNativeShift = result.applied
+        verifiedNativeShiftBackup = result.backupVerified
+        return verifiedNativeShift
+    }
+
+    var nativeShiftMigrationApplied: Bool { verifiedNativeShift }
+    var nativeShiftBackupVerified: Bool { verifiedNativeShiftBackup }
+    var legacyGestureBindingsEnabled: Bool { !verifiedNativeShift }
+    var manualShiftEnabled: Bool { verifiedNativeShift || autoSwitchEnabled }
+    var monitorLifecycleEnabled: Bool { verifiedNativeShift || autoSwitchEnabled }
+
+    var automaticTextEnabled: Bool {
+        get {
+            guard verifiedNativeShift else { return autoSwitchEnabled && autoConvert }
+            return defaults.object(forKey: ShiftBehaviorPolicy.automaticOverrideKey) as? Bool
+                ?? defaults.bool(forKey: ShiftBehaviorPolicy.automaticBaselineKey)
+        }
+        set {
+            if verifiedNativeShift {
+                defaults.set(newValue, forKey: ShiftBehaviorPolicy.automaticOverrideKey)
+                if newValue { nativeAutoEnabled = true }
+            } else {
+                autoConvert = newValue
+            }
+        }
+    }
+
+    var perAppBackgroundEnabled: Bool {
+        get {
+            guard verifiedNativeShift else { return autoSwitchEnabled && perAppLayout }
+            return defaults.object(forKey: ShiftBehaviorPolicy.perAppOverrideKey) as? Bool
+                ?? defaults.bool(forKey: ShiftBehaviorPolicy.perAppBaselineKey)
+        }
+        set {
+            if verifiedNativeShift {
+                defaults.set(newValue, forKey: ShiftBehaviorPolicy.perAppOverrideKey)
+            } else {
+                perAppLayout = newValue
+            }
+        }
     }
 
     /// ID первой раскладки (пустая строка = авто-определение)

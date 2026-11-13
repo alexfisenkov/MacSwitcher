@@ -73,6 +73,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static let sourceRecoveryItemTag = 71004
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let backupDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("MacSwitcher/SettingsMigration", isDirectory: true)
+        let migrationApplied = SettingsManager.shared.activateNativeShift(backupDirectory: backupDirectory)
+        if !migrationApplied { rslog("Native Shift migration unavailable; legacy settings retained") }
+        else if !SettingsManager.shared.nativeShiftBackupVerified {
+            rslog("Native Shift remains active; rollback backup requires attention")
+        }
         textConverter.onUnconfirmedSourceRetained = { [weak self] in
             self?.recoveryArchiveController.scheduleAutomaticAfterCurrentEvent()
         }
@@ -174,6 +181,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.resetCombinedShiftAfterPause()
             self?.syncElectronAccessibilityBridge()
             self?.configureShellBridge()
+            self?.settingsController.updateAutoConvertState(SettingsManager.shared.automaticTextEnabled)
             // Не адресуем пункт по индексу: меню группирует пункты по назначению,
             // а recovery и раскладки появляются динамически. Пересборка — как у соседних колбэков.
             self?.rebuildMenu()
@@ -205,6 +213,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         settingsController.onRuntimeCheckRequested = { [weak self] in
             self?.showRuntimeCheck()
         }
+        settingsController.onPermissionCheckRequested = { [weak self] in
+            self?.recheckPermissions()
+        }
+        settingsController.onUpdateCheckRequested = { [weak self] in
+            self?.checkUpdates()
+        }
+        settingsController.onInputSourceRequested = { [weak self] in
+            self?.openInputSources()
+        }
+        settingsController.onRecoveryOriginalsRequested = { [weak self] in
+            self?.openRecoveryOriginals()
+        }
+        settingsController.onRecoveryArchiveFolderRequested = { [weak self] in
+            self?.openRecoveryArchiveFolder()
+        }
         settingsController.onAutoConvertChanged = { [weak self] _ in
             self?.predictionCoordinator.invalidate()
             self?.keyboardMonitor.resetPredictionContext()
@@ -228,6 +251,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         settingsController.onHideIconChanged = { [weak self] hide in
             self?.statusItem.isVisible = !hide
         }
+        settingsController.onStatusAppearanceChanged = { [weak self] in
+            self?.updateStatusIcon()
+        }
     }
 
     private func configurePredictionPreferences() {
@@ -241,8 +267,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func configureShellBridge() {
         shellCoordinator.configure(enabled: SettingsManager.shared.shellBridgeEnabled
-            && SettingsManager.shared.combinedShiftEnabled
-            && SettingsManager.shared.autoSwitchEnabled)
+            && (SettingsManager.shared.nativeShiftMigrationApplied || SettingsManager.shared.combinedShiftEnabled)
+            && SettingsManager.shared.manualShiftEnabled)
         if shellCoordinator.isRequested {
             let gate = shellAuthorizationGate
             keyboardMonitor.onInputRevisionAdvanced = { _ = gate.next() }
@@ -252,7 +278,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     /// Explicit setup only. Showing this preview does not change the profile.
-    private func showShellBridgeSetup() {
+    @objc private func showShellBridgeSetup() {
         guard let resource = ShellBridgeProfilePatch.packagedResourceURL else {
             showShellBridgeSetupResult(success: false, detail: L10n.languageCode == "ru"
                 ? "Ресурс подключения отсутствует в приложении."
@@ -492,10 +518,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func openRecoveryOriginals() {
-        guard textConverter.hasUnconfirmedAXEdit,
-              let parent = statusItem.menu?.item(withTag: Self.recoveryCopyItemTag) else { return }
+        guard let parent = statusItem.menu?.item(withTag: Self.recoveryCopyItemTag) else { return }
         refreshRecoveryMenu(parent)
+        guard !parent.isHidden else {
+            let alert = NSAlert()
+            alert.messageText = L10n.nativeNoOriginals
+            alert.runModal()
+            return
+        }
         _ = parent.submenu?.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+    }
+
+    private func openInputSources() {
+        guard let item = statusItem.menu?.item(withTag: Self.inputSourceMenuTag) else { return }
+        refreshInputSourceMenu(item)
+        _ = item.submenu?.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
     }
 
     private func startPerAppLayout() {
@@ -654,7 +691,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if !keyboardMonitor.start(
             onAltTap: { [weak self] in
                 guard let self else { return }
-                guard SettingsManager.shared.autoSwitchEnabled else { return }
+                guard SettingsManager.shared.manualShiftEnabled else { return }
                 // Приватность: в защищённом поле (пароль) ничего не делаем — ставим ДО
                 // remote-defer, чтобы поведение точно совпадало с handleAutoConvert.
                 guard !AutoSwitchPolicy.secureInputActive else { rslog("trigger: bail secure-input"); self.notifySecureInputPaused(); return }
@@ -719,7 +756,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             },
             onAltReconvert: { [weak self] in
                 guard let self else { return }
-                guard SettingsManager.shared.autoSwitchEnabled else { return }
+                guard SettingsManager.shared.manualShiftEnabled else { return }
                 guard !AutoSwitchPolicy.secureInputActive else { rslog("reconvert: bail secure-input"); self.notifySecureInputPaused(); return }
                 if AutoSwitchPolicy.shouldDeferToRemoteClient {
                     // Удалёнка: текст конвертит офисный инстанс по реальным проброшенным символам
@@ -806,7 +843,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // issue #14: хоткей чистого переключения раскладки (без конверсии). Буфер после
         // явной смены раскладки неактуален — тот же паттерн, что per-app restore и меню.
         keyboardMonitor.onSwitchHotkey = { [weak self] in
-            guard let self, SettingsManager.shared.autoSwitchEnabled else { return }
+            guard let self, SettingsManager.shared.manualShiftEnabled else { return }
             if AutoSwitchPolicy.shouldDeferToRemoteClient {
                 // Удалёнка (фокус в клиенте Screen Sharing): переключаем только СВОЮ
                 // раскладку, как defer-ветка триггера. markConverted/clearState тут лишние —
@@ -871,7 +908,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         rslog("Monitoring started successfully")
 
-        if SettingsManager.shared.perAppLayout {
+        if SettingsManager.shared.perAppBackgroundEnabled {
             startPerAppLayout()
         }
 
@@ -891,7 +928,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let isDouble: Bool
         if case .convert = request.action { isDouble = true; RuntimeDiagnostics.record(.doubleReceived) }
         else { isDouble = false; RuntimeDiagnostics.record(.soloReceived) }
-        guard SettingsManager.shared.combinedShiftEnabled, SettingsManager.shared.autoSwitchEnabled else {
+        guard (SettingsManager.shared.nativeShiftMigrationApplied || SettingsManager.shared.combinedShiftEnabled),
+              SettingsManager.shared.manualShiftEnabled else {
             if isDouble { RuntimeDiagnostics.record(.doubleDisabled) }; return
         }
         guard !AutoSwitchPolicy.secureInputActive else {
@@ -936,8 +974,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             converter: textConverter, isCurrent: { [weak self] in
                 guard let self else { return false }
                 return SettingsManager.shared.shellBridgeEnabled
-                    && SettingsManager.shared.combinedShiftEnabled
-                    && SettingsManager.shared.autoSwitchEnabled
+                    && (SettingsManager.shared.nativeShiftMigrationApplied || SettingsManager.shared.combinedShiftEnabled)
+                    && SettingsManager.shared.manualShiftEnabled
                     && self.keyboardMonitor.inputRevision == request.inputRevision
                     && NSWorkspace.shared.frontmostApplication?.processIdentifier == request.frontProcessID
                     && LayoutSwitcher.currentLayoutID() == context.targetLayoutID
@@ -1138,7 +1176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         pendingNativeSelection = nil
         predictionCoordinator.invalidate()
         keyboardMonitor.resetPredictionContext()
-        guard SettingsManager.shared.combinedShiftEnabled else { return }
+        guard SettingsManager.shared.nativeShiftMigrationApplied || SettingsManager.shared.combinedShiftEnabled else { return }
         keyboardMonitor.resetCombinedShift()
         textConverter.clearState()
     }
@@ -1180,11 +1218,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alert.addButton(withTitle: L10n.wizardNo)
 
         if alert.runModal() == .alertFirstButtonReturn {
-            settings.autoConvert = true
+            settings.automaticTextEnabled = true
             rebuildMenu()  // синхронизировать галочку «Автоматическая конверсия» в меню
             rslog("User enabled auto-convert at onboarding")
         } else {
-            settings.autoConvert = false
+            settings.automaticTextEnabled = false
             predictionCoordinator.invalidate()
             keyboardMonitor.resetPredictionContext()
             rebuildMenu()
@@ -1227,94 +1265,95 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Собирает меню статус-бара. Вызывается заново при смене языка интерфейса,
     /// иначе пункты меню остаются на старом языке.
     private func rebuildMenu() {
+        statusItem.menu = makeStatusMenu()
+    }
+
+    /// Production menu factory is also inspectable offscreen without a status item.
+    func makeStatusMenu(
+        nativeShiftApplied: Bool = SettingsManager.shared.nativeShiftMigrationApplied,
+        automaticEnabled: Bool = SettingsManager.shared.automaticTextEnabled
+    ) -> NSMenu {
         let menu = NSMenu()
+        if !nativeShiftApplied {
+            let legacy = NSMenuItem(title: L10n.menuAutoSwitch,
+                action: #selector(toggleAutoSwitch), keyEquivalent: "")
+            legacy.target = self
+            legacy.state = SettingsManager.shared.autoSwitchEnabled ? .on : .off
+            menu.addItem(legacy)
+        }
+        let automatic = NSMenuItem(title: L10n.menuAutoConvert,
+            action: #selector(toggleAutoConvert), keyEquivalent: "")
+        automatic.target = self
+        automatic.state = automaticEnabled ? .on : .off
+        menu.addItem(automatic)
 
-        let autoItem = NSMenuItem(title: L10n.menuAutoSwitch, action: #selector(toggleAutoSwitch), keyEquivalent: "")
-        autoItem.target = self
-        autoItem.state = SettingsManager.shared.autoSwitchEnabled ? .on : .off
-        menu.addItem(autoItem)
+        let instructions = NSMenuItem(title: L10n.nativeInstructionsTab,
+            action: #selector(openInstructions), keyEquivalent: "")
+        instructions.target = self
+        menu.addItem(instructions)
+        let words = NSMenuItem(title: L10n.nativeWordsTab,
+            action: #selector(openWords), keyEquivalent: "")
+        words.target = self
+        menu.addItem(words)
+        let settings = NSMenuItem(title: L10n.menuSettings,
+            action: #selector(openSettings), keyEquivalent: ",")
+        settings.target = self
+        menu.addItem(settings)
+        let conditionalSeparator = NSMenuItem.separator()
+        conditionalSeparator.tag = Self.conditionalRecoverySeparatorTag
+        menu.addItem(conditionalSeparator)
 
-        let autoConvertItem = NSMenuItem(title: L10n.menuAutoConvert, action: #selector(toggleAutoConvert), keyEquivalent: "")
-        autoConvertItem.target = self
-        autoConvertItem.state = SettingsManager.shared.autoConvert ? .on : .off
-        menu.addItem(autoConvertItem)
-
-        let recovery = NSMenuItem(title: L10n.languageCode == "ru"
-            ? "Исходные тексты после сбоя"
-            : "Original texts after unconfirmed edits", action: nil, keyEquivalent: "")
-        recovery.target = self
-        recovery.tag = Self.recoveryCopyItemTag
-        menu.addItem(recovery)
-        refreshRecoveryMenu(recovery)
-        let archiveFolder = NSMenuItem(title: L10n.languageCode == "ru"
-            ? "Открыть папку архивов исходников"
-            : "Open original-text archive folder", action: #selector(openRecoveryArchiveFolder), keyEquivalent: "")
-        archiveFolder.target = self
-        menu.addItem(archiveFolder)
-        menu.addItem(NSMenuItem.separator())
-
-        let inputSource = NSMenuItem(title: L10n.menuInputSource, action: nil, keyEquivalent: "")
+        let inputSource = NSMenuItem(title: L10n.menuInputSource,
+            action: nil, keyEquivalent: "")
         inputSource.tag = Self.inputSourceMenuTag
         let inputSourceMenu = NSMenu()
         for item in layoutMenuItems() { inputSourceMenu.addItem(item) }
         inputSource.submenu = inputSourceMenu
+        inputSource.isHidden = nativeShiftApplied && keyboardMonitor.pendingInputSourceTargetID == nil
         menu.addItem(inputSource)
-
         let sourceRecovery = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         sourceRecovery.tag = Self.sourceRecoveryItemTag
         sourceRecovery.isEnabled = false
         menu.addItem(sourceRecovery)
         refreshSourceRecoveryMenu(sourceRecovery)
 
-        let more = NSMenuItem(title: L10n.menuMore, action: nil, keyEquivalent: "")
-        let moreMenu = NSMenu()
-        let keySoundItem = NSMenuItem(title: L10n.menuKeySound, action: #selector(toggleKeySound), keyEquivalent: "")
-        keySoundItem.target = self
-        keySoundItem.state = SettingsManager.shared.keySound ? .on : .off
-        moreMenu.addItem(keySoundItem)
-
-        let caretFlagItem = NSMenuItem(title: L10n.menuCaretFlag, action: #selector(toggleCaretFlag), keyEquivalent: "")
-        caretFlagItem.target = self
-        caretFlagItem.state = SettingsManager.shared.caretFlag ? .on : .off
-        moreMenu.addItem(caretFlagItem)
-
-        // Единый стиль меню-бара (Sequoia): монохромная плашка вместо цветного флага.
-        let monoIconItem = NSMenuItem(title: L10n.menuMonoIcon, action: #selector(toggleMonoIcon), keyEquivalent: "")
-        monoIconItem.target = self
-        monoIconItem.state = SettingsManager.shared.monochromeIcon ? .on : .off
-        moreMenu.addItem(monoIconItem)
-
-        // Режим удалённого стола отложен в 2.5 — тумблер скрыт за флагом (для тестирования).
-        if SettingsManager.shared.showRemoteDesktopBeta {
-            let remoteDesktopItem = NSMenuItem(title: L10n.menuRemoteDesktop, action: #selector(toggleRemoteDesktop), keyEquivalent: "")
-            remoteDesktopItem.target = self
-            remoteDesktopItem.state = SettingsManager.shared.remoteDesktopMode ? .on : .off
-            moreMenu.addItem(remoteDesktopItem)
+        let recovery = NSMenuItem(title: L10n.languageCode == "ru"
+            ? "Исходные тексты после сбоя" : "Original texts after unconfirmed edits",
+            action: nil, keyEquivalent: "")
+        recovery.tag = Self.recoveryCopyItemTag
+        menu.addItem(recovery)
+        refreshRecoveryMenu(recovery)
+        conditionalSeparator.isHidden = nativeShiftApplied && inputSource.isHidden
+            && sourceRecovery.isHidden && recovery.isHidden
+        if !nativeShiftApplied {
+            let archives = NSMenuItem(title: L10n.languageCode == "ru"
+                ? "Папка архивов исходников" : "Original-text archive folder",
+                action: #selector(openRecoveryArchiveFolder), keyEquivalent: "")
+            archives.target = self
+            menu.addItem(archives)
+            let permissions = NSMenuItem(title: L10n.menuCheckPermissions,
+                action: #selector(recheckPermissions), keyEquivalent: "")
+            permissions.target = self
+            menu.addItem(permissions)
+            let runtime = NSMenuItem(title: L10n.nativeRuntimeCheck,
+                action: #selector(showRuntimeCheck), keyEquivalent: "")
+            runtime.target = self
+            menu.addItem(runtime)
+            let shellSetup = NSMenuItem(title: L10n.nativeShellSetup,
+                action: #selector(showShellBridgeSetup), keyEquivalent: "")
+            shellSetup.target = self
+            menu.addItem(shellSetup)
+            let update = NSMenuItem(title: L10n.menuCheckUpdates,
+                action: #selector(checkUpdates), keyEquivalent: "")
+            update.target = self
+            menu.addItem(update)
         }
-
-        let permItem = NSMenuItem(title: L10n.menuCheckPermissions, action: #selector(recheckPermissions), keyEquivalent: "")
-        permItem.target = self
-        moreMenu.addItem(NSMenuItem.separator())
-        moreMenu.addItem(permItem)
-        let updateItem = NSMenuItem(title: L10n.menuCheckUpdates, action: #selector(checkUpdates), keyEquivalent: "")
-        updateItem.target = self
-        moreMenu.addItem(updateItem)
-        more.submenu = moreMenu
-
-        let settingsItem = NSMenuItem(title: L10n.menuSettings, action: #selector(openSettings), keyEquivalent: ",")
-        settingsItem.target = self
-        menu.addItem(settingsItem)
-        menu.addItem(more)
-
-        menu.addItem(NSMenuItem.separator())
-
-        let quitItem = NSMenuItem(title: L10n.menuQuit, action: #selector(quit), keyEquivalent: "q")
-        quitItem.target = self
-        menu.addItem(quitItem)
-
+        menu.addItem(.separator())
+        let quit = NSMenuItem(title: L10n.menuQuit, action: #selector(quit), keyEquivalent: "q")
+        quit.target = self
+        menu.addItem(quit)
         menu.delegate = self
-        statusItem.menu = menu
-        rslog("Menu (re)built with \(menu.items.count) items")
+        return menu
     }
 
     // MARK: - Layout list in menu
@@ -1322,6 +1361,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Метка пунктов-раскладок, чтобы находить и обновлять их группу в меню.
     private static let layoutItemTag = 741
     private static let inputSourceMenuTag = 742
+    private static let conditionalRecoverySeparatorTag = 743
 
     /// Пункты списка раскладок: «флаг + локализованное имя», галочка на текущей.
     private func layoutMenuItems() -> [NSMenuItem] {
@@ -1346,7 +1386,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard menu === statusItem.menu else { return }
         if let recovery = menu.item(withTag: Self.recoveryCopyItemTag) { refreshRecoveryMenu(recovery) }
         if let recovery = menu.item(withTag: Self.sourceRecoveryItemTag) { refreshSourceRecoveryMenu(recovery) }
-        guard let layoutMenu = menu.item(withTag: Self.inputSourceMenuTag)?.submenu else { return }
+        if let inputSource = menu.item(withTag: Self.inputSourceMenuTag) {
+            refreshInputSourceMenu(inputSource)
+            inputSource.isHidden = SettingsManager.shared.nativeShiftMigrationApplied
+                && keyboardMonitor.pendingInputSourceTargetID == nil
+        }
+        if let separator = menu.item(withTag: Self.conditionalRecoverySeparatorTag) {
+            separator.isHidden = SettingsManager.shared.nativeShiftMigrationApplied
+                && (menu.item(withTag: Self.inputSourceMenuTag)?.isHidden ?? true)
+                && (menu.item(withTag: Self.sourceRecoveryItemTag)?.isHidden ?? true)
+                && (menu.item(withTag: Self.recoveryCopyItemTag)?.isHidden ?? true)
+        }
+    }
+
+    private func refreshInputSourceMenu(_ item: NSMenuItem) {
+        guard let layoutMenu = item.submenu else { return }
         for old in layoutMenu.items where old.tag == Self.layoutItemTag { layoutMenu.removeItem(old) }
         for item in layoutMenuItems() { layoutMenu.addItem(item) }
     }
@@ -1506,7 +1560,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func syncElectronAccessibilityBridge() {
         if ElectronAccessibilityBridge.shouldRun(monitoringActive: monitoringActive,
-                autoSwitchEnabled: SettingsManager.shared.autoSwitchEnabled) {
+                autoSwitchEnabled: SettingsManager.shared.monitorLifecycleEnabled) {
             electronAccessibilityBridge.start()
         } else {
             electronAccessibilityBridge.stop()
@@ -1523,15 +1577,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let enabled = SettingsManager.shared.autoSwitchEnabled
         sender.state = enabled ? .on : .off
         settingsController.updateAutoSwitchState(enabled)
+        settingsController.updateAutoConvertState(SettingsManager.shared.automaticTextEnabled)
+        rebuildMenu()
     }
 
     @objc private func toggleAutoConvert(_ sender: NSMenuItem) {
-        SettingsManager.shared.autoConvert.toggle()
+        SettingsManager.shared.automaticTextEnabled.toggle()
         predictionCoordinator.invalidate()
         keyboardMonitor.resetPredictionContext()
         reconfigureTap()
-        sender.state = SettingsManager.shared.autoConvert ? .on : .off
-        settingsController.updateAutoConvertState(SettingsManager.shared.autoConvert)   // #4
+        sender.state = SettingsManager.shared.automaticTextEnabled ? .on : .off
+        settingsController.updateAutoConvertState(SettingsManager.shared.automaticTextEnabled)
     }
 
     private func refreshRecoveryMenu(_ parent: NSMenuItem) {
@@ -1671,7 +1727,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func runtimeHealthSnapshot() -> RuntimeHealthSnapshot {
         RuntimeHealthSnapshot(monitoring: monitoringActive,
-            masterEnabled: SettingsManager.shared.autoSwitchEnabled,
+            masterEnabled: SettingsManager.shared.monitorLifecycleEnabled,
             accessibilityGranted: AXIsProcessTrusted(),
             inputMonitoringGranted: CGPreflightListenEventAccess(),
             secureInput: AutoSwitchPolicy.secureInputActive,
@@ -1698,7 +1754,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         runtimeHealth.poll(reason: .wake)
     }
 
-    private func showRuntimeCheck() {
+    @objc private func showRuntimeCheck() {
         let report = runtimeHealth.runManualCheck()
         let ru = L10n.languageCode == "ru"
         let summary: String
@@ -1743,7 +1799,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func openSettings() {
+        settingsController.showSettings()
+    }
+
+    @objc private func openInstructions() {
         settingsController.showWindow()
+    }
+
+    @objc private func openWords() {
+        settingsController.showWords()
     }
 
     @objc private func checkUpdates() {

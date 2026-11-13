@@ -97,8 +97,10 @@ struct TriggerConfig {
     var isCapsLock: Bool { if case .capsLock = kind { return true } else { return false } }
     var isShift: Bool { if case .modifier(.maskShift, _, _) = kind { return true } else { return false } }
 
-    static func current() -> TriggerConfig {
-        let s = SettingsManager.shared
+    static func current(settings s: SettingsManager = .shared) -> TriggerConfig {
+        if s.nativeShiftMigrationApplied {
+            return parse(key: "shift", rightOnly: false, doubleTap: false)
+        }
         return parse(key: s.triggerKey, rightOnly: s.triggerRightOnly, doubleTap: s.triggerDoubleTap)
     }
 
@@ -106,11 +108,11 @@ struct TriggerConfig {
     /// Совпадение с триггером конверсии игнорируем (иначе один тап делал бы оба действия).
     /// Белый список обязателен: parse() маппит неизвестные строки в Option — рукописный
     /// мусор в defaults дублировал бы дефолтный триггер (ревью-находка).
-    static func switchHotkey() -> TriggerConfig? {
+    static func switchHotkey(settings s: SettingsManager = .shared) -> TriggerConfig? {
         let known: Set<String> = ["option", "command", "control", "shift",
                                   "command+shift", "control+shift", "command+option", "control+option",
                                   "option+shift"]
-        let s = SettingsManager.shared
+        if s.nativeShiftMigrationApplied { return nil }
         let key = s.switchHotkey
         guard known.contains(key), key != s.triggerKey else { return nil }
         return parse(key: key, rightOnly: s.switchRightOnly, doubleTap: s.switchDoubleTap)
@@ -118,11 +120,11 @@ struct TriggerConfig {
 
     /// issue #29: конфиг хоткея смены регистра (nil — выключен). Должен отличаться и от триггера
     /// конверсии, и от хоткея смены раскладки — иначе один тап делал бы два действия.
-    static func caseHotkey() -> TriggerConfig? {
+    static func caseHotkey(settings s: SettingsManager = .shared) -> TriggerConfig? {
         let known: Set<String> = ["option", "command", "control", "shift",
                                   "command+shift", "control+shift", "command+option", "control+option",
                                   "option+shift"]
-        let s = SettingsManager.shared
+        if s.nativeShiftMigrationApplied { return nil }
         let key = s.caseHotkey
         guard known.contains(key), key != s.triggerKey, key != s.switchHotkey else { return nil }
         return parse(key: key, rightOnly: s.caseRightOnly, doubleTap: s.caseDoubleTap)
@@ -190,7 +192,8 @@ final class KeyboardMonitor: @unchecked Sendable {
     private var onAltReconvert: (() -> Void)?
     /// Native mode owns BOTH Shift gestures; the vendor conversion/switch handlers never compete.
     var onCombinedShift: (@MainActor (CombinedShiftRequest) -> Void)?
-    private var combinedShiftEnabled = SettingsManager.shared.combinedShiftEnabled
+    private var combinedShiftEnabled = SettingsManager.shared.nativeShiftMigrationApplied
+        || SettingsManager.shared.combinedShiftEnabled
     private var combinedShiftGesture = CombinedShiftGesture()
     private var combinedShiftProcessID: Int32?
     private var combinedShiftFirstRequest: CombinedShiftRequest?
@@ -406,7 +409,8 @@ final class KeyboardMonitor: @unchecked Sendable {
         triggerConfig = TriggerConfig.current()
         switchConfig = TriggerConfig.switchHotkey()
         caseConfig = TriggerConfig.caseHotkey()   // issue #29
-        combinedShiftEnabled = SettingsManager.shared.combinedShiftEnabled
+        combinedShiftEnabled = SettingsManager.shared.nativeShiftMigrationApplied
+            || SettingsManager.shared.combinedShiftEnabled
         combinedShiftGesture.interrupt()
         if combinedShiftEnabled { fullReset(); keysTypedSinceConversion = true }
         rslog("Attempting to create event tap... (trigger=\(SettingsManager.shared.triggerKey) switch=\(SettingsManager.shared.switchHotkey.isEmpty ? "off" : SettingsManager.shared.switchHotkey) capsLock=\(triggerConfig.isCapsLock))")
@@ -426,7 +430,7 @@ final class KeyboardMonitor: @unchecked Sendable {
         let wantsNativeGate = CommandLine.arguments.contains("--diagnostic-native-canary")
             && CommandLine.arguments.contains("--diagnostic-panel")
         let options: CGEventTapOptions = triggerConfig.isCapsLock || wantsNativeGate || combinedShiftEnabled
-            || SettingsManager.shared.autoConvert ? .defaultTap : .listenOnly
+            || SettingsManager.shared.automaticTextEnabled ? .defaultTap : .listenOnly
 
         // Режим удалённого стола: session-уровень видит проброшенные Screen Sharing
         // нажатия (они инжектятся через CGEventPost, а HID-tap их не видит).
@@ -654,7 +658,7 @@ final class KeyboardMonitor: @unchecked Sendable {
     /// performs one bounded original-field capture before deferred prediction.
     private func recordPredictionKey(keyCode: UInt16, flags: CGEventFlags, renderedText: String?,
                                      renderedSourceLayoutID: String?) {
-        if SettingsManager.shared.autoSwitchEnabled, SettingsManager.shared.autoConvert,
+        if SettingsManager.shared.automaticTextEnabled,
            !AutoSwitchPolicy.secureInputActive,
            flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskSecondaryFn]).isEmpty,
            keyCode != KC.backspace, keyCode != KC.enter, keyCode != KC.tab,
@@ -662,7 +666,7 @@ final class KeyboardMonitor: @unchecked Sendable {
             RuntimeDiagnostics.record(.autoInputEligible)
             RuntimeDiagnostics.record(renderedText?.isEmpty == false ? .autoUnicodePresent : .autoUnicodeMissing)
         }
-        guard SettingsManager.shared.autoSwitchEnabled, SettingsManager.shared.autoConvert,
+        guard SettingsManager.shared.automaticTextEnabled,
               !AutoSwitchPolicy.secureInputActive,
               flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskSecondaryFn]).isEmpty,
               keyCode != KC.backspace, keyCode != KC.enter, keyCode != KC.tab,
@@ -847,7 +851,7 @@ final class KeyboardMonitor: @unchecked Sendable {
 
     private func handleCombinedShift(flags: CGEventFlags, keyCode: UInt16, clock: KeyboardInputClock) {
         let otherModifiers: CGEventFlags = [.maskCommand, .maskControl, .maskAlternate, .maskSecondaryFn]
-        guard SettingsManager.shared.autoSwitchEnabled, !AutoSwitchPolicy.secureInputActive,
+        guard SettingsManager.shared.manualShiftEnabled, !AutoSwitchPolicy.secureInputActive,
               flags.intersection(otherModifiers).isEmpty,
               keyCode == KC.leftShift || keyCode == KC.rightShift else {
             interruptCombinedShift()
