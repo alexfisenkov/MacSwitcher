@@ -249,8 +249,9 @@ final class ManualShellCoordinator {
                         anchor.isCurrent()
                         && (mouseProof?.isCurrent() ?? true)
                         && SettingsManager.shared.shellBridgeEnabled
-                        && SettingsManager.shared.combinedShiftEnabled
-                        && SettingsManager.shared.autoSwitchEnabled
+                        && (SettingsManager.shared.nativeShiftMigrationApplied
+                            || SettingsManager.shared.combinedShiftEnabled)
+                        && SettingsManager.shared.manualShiftEnabled
                         && LayoutSwitcher.currentLayoutID() == requiredSourceID
                     }
                 })
