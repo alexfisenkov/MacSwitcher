@@ -126,3 +126,10 @@ v3.4.0 и ранее разработанный native combined-Shift режим
 - Live preview первого31/62dced1 обнаружил Bundle.module build fallback. Установка shell отменена до записи; новые права не запрашивались, shell OFF. Само приложение31 работает, UI selfcheck4/4, настройки/хеши данных/200мс сохранены.
 - Исправление: ShellBridgeProfilePatch в `.app` возвращает только canonical читаемый regular resource внутри собственного nested bundle; build fallback допустим только вне `.app`. main --self-test-resources проверяет фактический shell URL.
 - Канон: docs/plans/2026-11-11-packaged-shell-resource.md. R2 review PASS; full646 и реальные cold packaged CLI positive0/negative2 (dev fallback доступен) PASS. Это причина дополнительного финального CI/нового signed artifact; прежний62dced1 и его receipt не перезаписывать.
+
+
+## Текущий выпуск · 13.11.2026
+
+- Подготовленная alpha.31: source `b47273570ab457d933141cfa19f5bc26b34245bd`, финальная CI `43276285226` (671 Swift/36 Python/gold495), notarization принята; установленный процесс работает, 29 настроек и локальные файлы сохранены. Физическая клавиатурная приёмка не подтверждена.
+- Alpha.31 публично опубликована: release assets анонимно перечитаны (HTTP 200, hashes/bytes match); source `b47273570ab457d933141cfa19f5bc26b34245bd`, PR #11 merge `6a7ef40044cdacedd67e03bb61e8a6671b19b0fe`. Feed remote read-back и Pages deployment/read-back остаются отдельными gates. Windows остаётся alpha.3.
+- Владелец разрешил переход к следующему продуктовому этапу; после подтверждения публичного релиза этап READY. Физическую клавиатурную приёмку не объявлять PASS и не считать блокером начала интервью/макетов.

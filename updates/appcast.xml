@@ -6,6 +6,17 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <link>https://github.com/alexfisenkov/MacSwitcher</link>
     <description>Signed MacSwitcher releases</description>
     <item>
+      <title>MacSwitcher 0.1.0-alpha.31</title>
+      <link>https://github.com/alexfisenkov/MacSwitcher/releases/tag/v0.1.0-alpha.31</link>
+      <pubDate>Thu, 12 Nov 2026 18:19:46 +0000</pubDate>
+      <description>Повышена устойчивость автокоррекции в длинных сессиях и добавлены современные русские и английские словарные формы. Улучшена работа двойного Shift в плавающих полях; добавлены добровольное подключение совместимых zsh-терминалов без выполнения команд, внутренние проверки и безопасное восстановление клавиатурного подключения после временных сбоев.</description>
+      <sparkle:version>31</sparkle:version>
+      <sparkle:shortVersionString>0.1.0-alpha.31</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <sparkle:channel>alpha</sparkle:channel>
+      <enclosure url="https://github.com/alexfisenkov/MacSwitcher/releases/download/v0.1.0-alpha.31/MacSwitcher-0.1.0-alpha.31-universal.zip" length="43324041" type="application/octet-stream" sparkle:edSignature="p9AYM/GouOQOqJ2M/ACN8JYF0UUSXb75ER+DNiwOOVufu4Z7Zb2aB5sandkidf/BeEXOgrLaZHuIA31imRa1Dw=="></enclosure>
+    </item>
+    <item>
       <title>MacSwitcher 0.1.0-alpha.30</title>
       <link>https://github.com/alexfisenkov/MacSwitcher/releases/tag/v0.1.0-alpha.30</link>
       <pubDate>Mon, 09 Nov 2026 16:41:54 +0000</pubDate>
@@ -238,6 +249,6 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     </item>
   </channel>
 </rss><!-- sparkle-signatures:
-edSignature: np4s70UfBN1bJ13dKnONtecn25psm/ZpaSSR46zZy/t3K6hGzC5sr5+WAHcY2dOAu8VZxME/sIzfKr12ISIFBQ==
-length: 23402
+edSignature: Pr9KSe3BvcpwVFLsX7eosQLAMZLl59/m9+t9tYa8JcswpuAFRZlb2L99Owovy96xGP2M4sezVah/+CF/3H5TDw==
+length: 24856
 -->
