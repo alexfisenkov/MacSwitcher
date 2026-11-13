@@ -130,6 +130,6 @@ v3.4.0 и ранее разработанный native combined-Shift режим
 
 ## Текущий выпуск · 13.11.2026
 
-- Подготовленная alpha.31: source `b47273570ab457d933141cfa19f5bc26b34245bd`, финальная CI `43276285226` (671 Swift/36 Python/gold495), notarization принята; установленный процесс работает, 29 настроек и локальные файлы сохранены. Физическая клавиатурная приёмка не подтверждена.
-- Alpha.31 публично опубликована: release assets анонимно перечитаны (HTTP 200, hashes/bytes match); source `b47273570ab457d933141cfa19f5bc26b34245bd`, PR #11 merge `6a7ef40044cdacedd67e03bb61e8a6671b19b0fe`. Feed remote read-back и Pages deployment/read-back остаются отдельными gates. Windows остаётся alpha.3.
-- Владелец разрешил переход к следующему продуктовому этапу; после подтверждения публичного релиза этап READY. Физическую клавиатурную приёмку не объявлять PASS и не считать блокером начала интервью/макетов.
+- Alpha.31: source `b47273570ab457d933141cfa19f5bc26b34245bd`, финальная CI `43276285226` (671 Swift/36 Python/gold495), notarization принята; установленный процесс работает, 29 настроек и локальные файлы сохранены. Физическая клавиатурная приёмка не подтверждена.
+- Alpha.31 опубликована и проверена: source `b47273570ab457d933141cfa19f5bc26b34245bd`, PR #11 merge `6a7ef40044cdacedd67e03bb61e8a6671b19b0fe`; release assets совпали, подписанный feed SHA `f40c33ef107c19f2f4c4c238411e27d128b4acf25a28ba9788992e043c41f053` byte-equal и Sparkle PASS. Pages run `43356600525` развернул source `dfe2d6785d2c34646177716849635f0a0aa6a85f`; home/legal/SVG HTTP 200 и byte-equal. Windows остаётся alpha.3.
+- Следующий продуктовый этап ACTIVE: owner briefing/interview — первый шаг. Физическая клавиатурная приёмка не подтверждена; не объявлять её PASS.
