@@ -37,14 +37,14 @@
 
 **Behavior contract:** до marker/failure getters и consumers ведут себя ровно как раньше. После verified marker manual Shift = ON; `automaticText` baseline = `raw.autoSwitch && raw.autoConvert`; `perAppBackground` baseline = `raw.autoSwitch && raw.perAppLayout`; monitor lifecycle по-прежнему зависит от permissions/health. Узкие V2 effective snapshot/overrides сохраняют раздельные состояния; исходные raw UserDefaults не перезаписывать. Явное Auto ON/OFF меняет только automatic-text override. Sol выбирает конкретную реализацию этих состояний.
 
-- [ ] RED: legacy behavior до marker/failure; Shift ON после marker с raw master/combined OFF; snapshot `{present,value,type}`; остальные prefs неизменны.
-- [ ] RED: initial auto/per-app = legacy effective state; Auto ON/OFF не меняет второй gate и Shift; без рекурсивных getters.
-- [ ] RED: lifecycle/permission/health, shell explicit opt-in и cache reconfiguration остаются отдельными gates; Caps обычного ввода не перехватывается новой политикой.
-- [ ] RED: backup read-back, write failure и идемпотентность; уже подтверждённая копия не заменяется.
-- [ ] Запустить целевой тест в изолированном Foundation-профиле; подтвердить, что новые проверки падают до реализации.
-- [ ] Реализовать Foundation-path preflight, права 0700/0600, atomic write и read-back; marker писать только после подтверждённой копии. Legacy prefs не менять.
-- [ ] Подключить policy в startup, `KeyboardMonitor` caches/`TriggerConfig`, `PredictionCoordinatorPlatform`, health/lifecycle, shell и manual/auto consumers. При ошибке сообщить об этом, сохранить прежнее поведение и Recovery/consent state.
-- [ ] Подтвердить targeted PASS; прогнать combined-shift execution/editing, settings, recovery и prediction regressions.
+- [x] RED: legacy behavior до marker/failure; Shift ON после marker с raw master/combined OFF; snapshot `{present,value,type}`; остальные prefs неизменны.
+- [x] RED: initial auto/per-app = legacy effective state; Auto ON/OFF не меняет второй gate и Shift; без рекурсивных getters.
+- [x] RED: lifecycle/permission/health, shell explicit opt-in и cache reconfiguration остаются отдельными gates; Caps обычного ввода не перехватывается новой политикой.
+- [x] RED: backup read-back, write failure и идемпотентность; уже подтверждённая копия не заменяется.
+- [x] Запустить целевой тест в изолированном Foundation-профиле; подтвердить, что новые проверки падают до реализации.
+- [x] Реализовать Foundation-path preflight, права 0700/0600, atomic write и read-back; marker писать только после подтверждённой копии. Legacy prefs не менять.
+- [x] Подключить policy в startup, `KeyboardMonitor` caches/`TriggerConfig`, `PredictionCoordinatorPlatform`, health/lifecycle, shell и manual/auto consumers. При ошибке сообщить об этом, сохранить прежнее поведение и Recovery/consent state.
+- [x] Подтвердить targeted PASS; прогнать combined-shift execution/editing, settings, recovery и prediction regressions.
 
 ### Задача 2: Компактное окно и меню статуса
 
@@ -57,23 +57,23 @@
 
 **Интерфейсы:** сохранить нужные callbacks (`onAutoConvertChanged`, `onPredictionPreferencesChanged`, `onShellBridgeSetupRequested`, `onRuntimeCheckRequested`, `onRecoveryArchiveChanged`) и используемую menu sync. Переиспользовать `PersonalDictionaryView`, `ExceptionListEditor`, `AdaptiveRulesView`.
 
-- [ ] Offscreen-тестом проверить три вкладки, первую выбранную вкладку, геометрию и доступность controls без показа окна.
-- [ ] В menu refactor сохранить `inputSourceMenuTag`/`sourceRecoveryItemTag` и динамическое обновление выбора раскладки/отложенного source recovery в `menuWillOpen` либо эквивалент; сохранить их handlers, recovery originals/archive folder.
-- [ ] Проверить меню: effective auto state, instructions/settings, conditional words/recovery, input-source recovery, archive, permissions/self-check, update, Quit.
-- [ ] Первая вкладка объясняет Shift/Shift×2/undo и `ghbdtn → привет`; отделяет Auto от ручного действия.
-- [ ] Переиспользовать dictionary/exceptions/learning views; Settings не предлагает legacy gesture controls или общий Shift master toggle.
-- [ ] Запустить offscreen geometry/controls tests в CFFIXED synthetic profile; screenshots — только компонентные свидетельства, не physical UI acceptance.
+- [x] Offscreen-тестом проверить три вкладки, первую выбранную вкладку, геометрию и доступность controls без показа окна.
+- [x] В menu refactor сохранить `inputSourceMenuTag`/`sourceRecoveryItemTag` и динамическое обновление выбора раскладки/отложенного source recovery в `menuWillOpen` либо эквивалент; сохранить их handlers, recovery originals/archive folder.
+- [x] Проверить меню: effective auto state, instructions/settings, conditional words/recovery, input-source recovery, archive, permissions/self-check, update, Quit.
+- [x] Первая вкладка объясняет Shift/Shift×2/undo и `ghbdtn → привет`; отделяет Auto от ручного действия.
+- [x] Переиспользовать dictionary/exceptions/learning views; Settings не предлагает legacy gesture controls или общий Shift master toggle.
+- [x] Запустить offscreen geometry/controls tests в CFFIXED synthetic profile; screenshots — только компонентные свидетельства, не physical UI acceptance.
 
 ### Задача 3: Полная проверка и фиксация границ
 
-- [ ] Сверить gates, migration, recovery consent, startup order и menu read-back со spec.
-- [ ] Запустить `CFFIXED_USER_HOME="$(mktemp -d -t macswitcher-tests)" swift test --package-path macos -j 4` и `swift build --package-path macos -c release -j 4`; перед запуском убедиться, что Foundation applicationSupportDirectory работает в свежем профиле.
-- [ ] Запустить `/usr/bin/python3 script/check_public.py`, `git diff --check` и просмотреть diff на утечки/выход за T0; после coherent freeze — один финальный CI.
+- [x] Сверить gates, migration, recovery consent, startup order и menu read-back со spec.
+- [x] Запустить `CFFIXED_USER_HOME="$(mktemp -d -t macswitcher-tests)" swift test --package-path macos -j 4` и `swift build --package-path macos -c release -j 4`; перед запуском убедиться, что Foundation applicationSupportDirectory работает в свежем профиле.
+- [x] Запустить `/usr/bin/python3 script/check_public.py`, `git diff --check` и просмотреть diff на утечки/выход за T0; после coherent freeze — один финальный CI.
 
 Один исполнитель `gpt-6-sol` ведёт все три задачи end-to-end; production code + tests — менее 3 000 строк. Owner уже утвердил T0: перед реализацией не запрашивать дополнительное подтверждение.
 
-**Остаётся отдельной приёмкой:** живой вид нативного окна владельцем, реальная клавиатура/TCC, достоверность раннего preflight на целевом macOS-профиле, откат старой версии из резервной копии, если он понадобится. Ни hosted tests, ни HTML-прототип не закрывают эти пункты.
+**Остаётся отдельной приёмкой:** физические клавиатурные жесты, Terminal live bridge (понадобится новый настроенный zsh prompt), Spotlight и совместимость с приложениями вне наблюдённого тестового охвата. CUA осмотр реального установленного окна прошёл; hosted tests и HTML-прототип сами по себе не подтверждают физический ввод или всю app matrix.
 
 ## Фактический статус · 13.11.2026
 
-План реализован локально; код и тесты прошли два раунда критики. Финальная локальная проверка: 695 Swift-тестов, 0 отказов, один намеренный skip PNG-export без output directory; отдельный offscreen-export 10 PNG прошёл. Release build прошёл с ранее существовавшим AX cast warning. `script/check_public.py` прошёл на 326 файлах. R2 bounded-read finding исправлен лимитом 128 KiB, проверками приватного файла и дескриптора и ограниченным чтением max+1; targeted 10 и полный набор 695 прошли. Hosted CI и перечисленная выше живая приёмка ещё не выполнены. Следующие шаги — заморозить source, выполнить одну финальную CI и отдельно подготовить/принять подписанную сборку. Кандидат alpha.32 пока не опубликован и не установлен.
+План реализован и прошёл два раунда критики; R2 bounded-read finding исправлен лимитом 128 KiB и проверкой файла/дескриптора, после чего targeted 10 и полный suite прошли. Финальная CI `43385000693` на source `176c3919b8b23db1f097cd4e234286f69db3c92c`: 695 Swift (0 failures, 1 intentional PNG-export skip), 36 Python, gold495. Отдельный offscreen-export 10 PNG прошёл. Universal ZIP 43,415,986 bytes, SHA-256 `8b1e8818d5dc9ce32b3a248cf66fdd3dcc3ec9a506c3f731fa4a1fae20f5d3f1`; Developer ID/notarization/staple/Gatekeeper/codesign/Sparkle checks PASS. Штатная установка работает: 34 прежних настроек неизменны, user data hashes unchanged; backup 11 gesture keys verified; Auto ON, double Shift 200 ms. CUA осмотр реального AppKit окна прошёл; internal checks 4/4 и keyboard monitor connected. GitHub prerelease и assets проверены публично. Не проверены физические клавиатурные жесты и весь app matrix; Terminal live bridge не подключён, личные редакторы слов не открывались, поэтому ручные CRUD-сценарии с персональными данными не наблюдались. Signed feed и Pages deployment/read-back остаются pending.
