@@ -150,7 +150,12 @@ final class RecoveryArchiveController {
     private func finishHeadroomValidation(_ source: TextConverter.BackedOriginal, valid: Bool) {
         working = false
         if valid {
-            _ = converter.evictValidatedBacking(id: source.id, receipt: source.archive)
+            // A valid archive cannot free RAM when the finite AX lock budget is full
+            // (or the entry changed while validation was running). Do not retry it.
+            guard converter.evictValidatedBacking(id: source.id, receipt: source.archive) else {
+                drain()
+                return
+            }
             onHeadroomPrepared?()
             if beginHeadroomValidation() { return }
             clearFailureState()

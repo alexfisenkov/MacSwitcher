@@ -2465,3 +2465,12 @@ en	keyboard	word
 en	layout	word
 en	correction	word
 en	iPhone	brand
+
+# Approved 2026-11-13 company and product spellings; categorized as brands under the existing format.
+en	Tabnine	brand
+en	Qodo	brand
+en	Lovart	brand
+en	Mureka	brand
+en	Genmo	brand
+en	Pippit	brand
+en	Sourcegraph	brand

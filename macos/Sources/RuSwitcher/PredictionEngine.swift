@@ -290,6 +290,17 @@ struct PredictionEngine: Sendable {
             }
             let distinctMatches = Set(spellingMatches)
             if distinctMatches.count == 1 { return distinctMatches.first }
+            // An opt-in Russian preference resolves only the physical final ;/ж
+            // collision when both readings are exact unweighted spellings.
+            // Source, structure, and rare-source guards above still apply.
+            if russianPriority, source == "en", !protectedEnglishContext, !hasDomainContext,
+               stripped.suffix == ";", candidates.count == 2,
+               (characterMapping ?? KeyMapping.enToRu)[";"] == "ж",
+               candidates[0].suffix.isEmpty, candidates[1].suffix == ";",
+               candidates[0].core == candidates[1].core + "ж",
+               distinctMatches == Set([candidates[0].core, candidates[1].core + ";"]) {
+                return candidates[0].core
+            }
         }
         return nil
     }

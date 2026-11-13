@@ -30,6 +30,23 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         }
     }
 
+    private final class HeadroomValidationProbe: @unchecked Sendable {
+        private let lock = NSLock()
+        private var calls = 0
+        private var capacityReleased = false
+
+        var validationCalls: Int { lock.lock(); defer { lock.unlock() }; return calls }
+        func releaseCapacity() { lock.lock(); capacityReleased = true; lock.unlock() }
+        func validate(_ id: UUID, _ receipt: RecoveryArchive.Receipt) throws -> String {
+            lock.lock()
+            calls += 1
+            let unexpectedRepeat = calls > 9 && !capacityReleased
+            lock.unlock()
+            if unexpectedRepeat { throw RecoveryArchive.Failure.verificationFailed }
+            return try RecoveryArchive.original(id: id, receipt: receipt)
+        }
+    }
+
     @MainActor
     private final class Rig {
         let monitor = KeyboardMonitor()
@@ -46,6 +63,8 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         var wholeObservationAvailable = true
         var reportWrongCaretAfterText = false
         var selectionKnownWord: ((String, String) -> Bool?)?
+        var gestureHostPID: Int32?
+        var currentTargetPID: (() -> Int32?)?
 
         lazy var converter = TextConverter(selectionPreferences: { [unowned self] in
             policySawLease = fence.hasActiveLease
@@ -112,10 +131,10 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
                      firstFocus: CombinedShiftFocus? = nil) throws -> CombinedShiftRequest {
             let contexts = [enToRu.sourceLayoutID: enToRu, ruToEn.sourceLayoutID: ruToEn]
             _ = try XCTUnwrap(monitor.snapshotCombinedShiftRequest(action: .switchLayout(direction),
-                frontProcessID: frontField.pid, focus: firstFocus ?? frontField.focus(),
+                frontProcessID: gestureHostPID ?? frontField.pid, focus: firstFocus ?? frontField.focus(),
                 contextForSource: { contexts[$0] }))
             return try XCTUnwrap(monitor.snapshotCombinedShiftRequest(action: .convert(direction),
-                frontProcessID: frontField.pid, focus: frontField.focus(),
+                frontProcessID: gestureHostPID ?? frontField.pid, focus: frontField.focus(),
                 contextForSource: { contexts[$0] }))
         }
 
@@ -124,9 +143,17 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
             let execution = CombinedShiftExecutionContext(focus: request.focus!,
                 inputRevision: request.inputRevision,
                 currentInputRevision: { [unowned self] in monitor.inputRevision })
+            if gestureHostPID != nil && !execution.isValid() {
+                // AppDelegate.runNativeCombinedShift performs this entry check
+                // before calling the production transaction.
+                return .init(outcome: .stopped, failureNotice: .noSafeEdit,
+                    pendingSourceTargetID: nil, confirmedAutomaticUndo: nil)
+            }
             let platform = CombinedShiftTransaction.Platform(
                 currentSourceID: { [unowned self] in sourceID },
-                frontProcessID: { [unowned self] in frontField.pid },
+                frontProcessID: { [unowned self] in
+                    currentTargetPID.map { $0() } ?? frontField.pid
+                },
                 secureInputActive: { [unowned self] in frontField.secure },
                 beginLease: { [unowned self] pid in fence.begin(processID: pid, maximumDuration: 0.250) },
                 leaseIsCurrent: { [unowned self] lease in fence.isCurrent(lease) },
@@ -395,6 +422,96 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
     }
 
     @MainActor
+    func testOverlayBoundRepeatedManualEditsAndChangedTargetRefuseBeforeQueue() throws {
+        let hostPID: Int32 = 6201
+        let overlayPID: Int32 = 6202
+        let field = Field(pid: overlayPID, text: "ghbdtn")
+        let rig = try Rig(fields: [field])
+        let window = SearchOverlayTargetPolicy.WindowEvidence(processID: overlayPID,
+            windowID: 8101, bundleID: "com.example.search", ownerName: "Search")
+        var frontPID = hostPID
+        var systemPID = overlayPID
+        var systemElement = field.element
+        var visibleWindows = [window]
+        let probe = SearchOverlayTarget.Probe(now: { 0 }, frontPID: { frontPID },
+            bundleID: { _ in "com.example.search" },
+            systemFocus: { _ in (systemPID, systemElement) },
+            directFocus: { _, _ in CombinedShiftFocus(processID: overlayPID, element: field.element) },
+            editable: { _, _ in true }, windows: { _ in visibleWindows },
+            focusedWindowBounds: { _, _ in nil }, selection: { _, _ in field.selectedRange() })
+        let initialCapture = try XCTUnwrap({ () -> CombinedShiftFocus? in
+            if case .verified(let focus) = SearchOverlayTarget.capture(hostPID: hostPID, probe: probe) {
+                return focus
+            }
+            return nil
+        }())
+        let initialBinding = try XCTUnwrap(initialCapture.searchOverlay)
+        rig.gestureHostPID = hostPID
+        rig.currentTargetPID = { [probe] in
+            SearchOverlayTarget.currentProcessID(for: initialBinding, probe: probe)
+        }
+        func boundFocus() throws -> CombinedShiftFocus {
+            let captured = try XCTUnwrap({ () -> CombinedShiftFocus? in
+                if case .verified(let focus) = SearchOverlayTarget.capture(hostPID: hostPID, probe: probe) {
+                    return focus
+                }
+                return nil
+            }())
+            let binding = try XCTUnwrap(captured.searchOverlay)
+            return CombinedShiftFocus(processID: captured.processID, element: captured.element,
+                initialSelection: captured.initialSelection,
+                fieldBoundary: CombinedShiftFieldBoundary(validationFailure: {
+                    guard field.valid,
+                          SearchOverlayTarget.isCurrent(captured, binding: binding, probe: probe) else {
+                        return .focusChanged
+                    }
+                    return nil
+                }, selectionRange: { field.selectedRange() }, text: { field.substring($0) }),
+                searchOverlay: binding)
+        }
+        try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+        rig.sourceID = rig.enToRu.targetLayoutID
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu, firstFocus: boundFocus()),
+            direction: rig.enToRu).outcome, .confirmed(resultID: rig.enToRu.targetLayoutID))
+        XCTAssertEqual(field.text, "привет")
+
+        rig.sourceID = rig.ruToEn.targetLayoutID
+        XCTAssertEqual(rig.run(try rig.request(rig.ruToEn, firstFocus: boundFocus()),
+            direction: rig.ruToEn).outcome, .confirmed(resultID: rig.ruToEn.targetLayoutID))
+        XCTAssertEqual(field.text, "ghbdtn")
+        rig.sourceID = rig.enToRu.targetLayoutID
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu, firstFocus: boundFocus()),
+            direction: rig.enToRu).outcome, .confirmed(resultID: rig.enToRu.targetLayoutID))
+        XCTAssertEqual(field.text, "привет")
+
+        field.type(" ghbdtn")
+        rig.monitor.handleKeyDown(keyCode: KC.space, flags: [],
+            renderedSourceLayoutID: rig.enToRu.sourceLayoutID)
+        try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+        rig.sourceID = rig.enToRu.targetLayoutID
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu, firstFocus: boundFocus()),
+            direction: rig.enToRu).outcome, .confirmed(resultID: rig.enToRu.targetLayoutID))
+        XCTAssertEqual(field.text, "привет привет")
+
+        let queued = field.queuedText
+        let disappearing = try rig.request(rig.ruToEn, firstFocus: boundFocus())
+        visibleWindows = []
+        XCTAssertEqual(rig.run(disappearing, direction: rig.ruToEn).outcome, .stopped)
+        XCTAssertEqual(field.queuedText, queued)
+        visibleWindows = [window]
+        let changedHost = try rig.request(rig.ruToEn, firstFocus: boundFocus())
+        frontPID = 9999
+        XCTAssertEqual(rig.run(changedHost, direction: rig.ruToEn).outcome, .stopped)
+        XCTAssertEqual(field.queuedText, queued)
+        frontPID = hostPID
+        let changedFocus = try rig.request(rig.ruToEn, firstFocus: boundFocus())
+        systemPID = hostPID
+        systemElement = AXUIElementCreateApplication(hostPID)
+        XCTAssertEqual(rig.run(changedFocus, direction: rig.ruToEn).outcome, .stopped)
+        XCTAssertEqual(field.queuedText, queued)
+    }
+
+    @MainActor
     func testUnknownPostQueueKeepsOriginalAndRefusesBlindRepeat() throws {
         let field = Field(pid: 5103, text: "ghbdtn")
         field.dropInsertion = true
@@ -654,6 +771,84 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         controller.requestManual()
         await fulfillment(of: [alreadySaved], timeout: 3)
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path).count, 1)
+    }
+
+    @MainActor
+    func testControllerStopsAtArchivedFieldLimitAndResumesAfterCapacityRelease() async throws {
+        let fields = (0..<264).map { Field(pid: 5800 + Int32($0), text: "ghbdtn") }
+        fields.forEach { $0.dropInsertion = true }
+        let rig = try Rig(fields: fields)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let lockDirectory = directory.appendingPathComponent("locks")
+        let finalDirectory = directory.appendingPathComponent("final")
+
+        func retainUnknown(_ field: Field) throws {
+            rig.frontField = field
+            rig.monitor.resetCombinedShift()
+            try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+            rig.sourceID = rig.enToRu.targetLayoutID
+            XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome, .stopped)
+            XCTAssertEqual(field.queuedText, 1)
+        }
+
+        for field in fields.prefix(8) { try retainUnknown(field) }
+        let firstBatch = rig.converter.unbackedOriginals.map { RecoveryArchive.Source(id: $0.id, text: $0.text) }
+        XCTAssertTrue(rig.converter.markArchived(try RecoveryArchive.saveVerified(firstBatch, in: lockDirectory)))
+        for index in 0..<256 {
+            if index > 0 {
+                try retainUnknown(fields[index + 7])
+                let latest = rig.converter.unbackedOriginals.map { RecoveryArchive.Source(id: $0.id, text: $0.text) }
+                XCTAssertEqual(latest.count, 1)
+                XCTAssertTrue(rig.converter.markArchived(try RecoveryArchive.saveVerified(latest, in: lockDirectory)))
+            }
+            let oldest = try XCTUnwrap(rig.converter.backedOriginals.first)
+            XCTAssertEqual(try RecoveryArchive.original(id: oldest.id, receipt: oldest.archive), oldest.text)
+            XCTAssertTrue(rig.converter.evictValidatedBacking(id: oldest.id, receipt: oldest.archive))
+        }
+        try retainUnknown(fields[263])
+        let final = rig.converter.unbackedOriginals.map { RecoveryArchive.Source(id: $0.id, text: $0.text) }
+        XCTAssertEqual(final.count, 1)
+        XCTAssertTrue(rig.converter.markArchived(try RecoveryArchive.saveVerified(final, in: finalDirectory)))
+        XCTAssertEqual(rig.converter.archivedOriginals.count, 256)
+        XCTAssertEqual(rig.converter.backedOriginals.count, 8)
+
+        let probe = HeadroomValidationProbe()
+        let firstHeadroomRead = expectation(description: "first headroom archive validation")
+        let controller = RecoveryArchiveController(converter: rig.converter,
+            enabled: { true }, directory: { finalDirectory },
+            validate: { id, receipt in
+                let text = try probe.validate(id, receipt)
+                if probe.validationCalls == 9 { firstHeadroomRead.fulfill() }
+                return text
+            })
+        var preparedCount = 0
+        var failureCount = 0
+        controller.onHeadroomPrepared = { preparedCount += 1 }
+        controller.onFailure = { _, _ in failureCount += 1 }
+        controller.requestManual()
+        await fulfillment(of: [firstHeadroomRead], timeout: 5)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(probe.validationCalls, 9, "A full archived-field budget must not revalidate the same RAM original")
+        XCTAssertEqual(preparedCount, 0, "No capacity was released")
+        XCTAssertEqual(failureCount, 0, "A valid archive must not be invalidated by a capacity limit")
+        XCTAssertEqual(rig.converter.backedOriginals.count, 8)
+        XCTAssertEqual(rig.converter.archivedOriginals.count, 256)
+        XCTAssertTrue(rig.converter.hasUnconfirmedAXEdit(in: fields[0].focus()))
+        controller.requestAutomatic()
+        controller.requestAutomatic()
+        XCTAssertEqual(probe.validationCalls, 9, "Automatic polling has no new unsaved source to process")
+
+        rig.converter.releaseArchivedLocks(forTerminatedProcessID: fields[0].pid)
+        probe.releaseCapacity()
+        let resumed = expectation(description: "headroom prepared after lock release")
+        controller.onHeadroomPrepared = { preparedCount += 1; resumed.fulfill() }
+        controller.requestManual()
+        await fulfillment(of: [resumed], timeout: 5)
+        XCTAssertEqual(preparedCount, 1)
+        XCTAssertEqual(rig.converter.backedOriginals.count, 7)
+        XCTAssertEqual(rig.converter.archivedOriginals.count, 256)
+        XCTAssertFalse(rig.converter.hasUnconfirmedAXEdit(in: fields[0].focus()))
     }
 
     @MainActor

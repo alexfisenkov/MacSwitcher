@@ -17,7 +17,7 @@ enum RuntimeDiagnosticEvent: String, CaseIterable, Sendable {
     case pasteClipboardWritten, pasteClipboardOwnershipLost, pastePostRefused, pastePosted, pasteCompleted, pasteInvalidAfterPost
     case autoInputEligible, autoUnicodeMissing, autoUnicodePresent, autoSnapshotSubmitted
     case autoEngineReady, autoEngineUnavailable, autoAnchorSessionChanged, autoAnchorStale
-    case autoAnchorUnavailable, autoAnchorSelectionUnavailable, autoAnchorAccepted
+    case autoAnchorUnavailable, autoAnchorSelectionUnavailable, autoAnchorAccepted, autoAnchorRetired
     case autoEvaluationStale, autoMappingUnavailable, autoNoProposal, autoProposal
     case autoProposalRejected, autoTargetUnavailable, autoFocusAnchorUnavailable, autoFocusMismatch
     case autoCaretUnavailable, autoCaretMismatch, autoEditRefused, autoEditPosted
@@ -48,14 +48,14 @@ enum RuntimeDiagnosticEvent: String, CaseIterable, Sendable {
 
     var logOnce: Bool { rawValue.hasPrefix("auto") || rawValue.hasPrefix("native") || rawValue.hasPrefix("focusRead") }
 
-    /// Only terminal or actionable automatic-refusal stages may recur in OSLog.
-    /// Routine snapshots, proposals, stale evaluations and successful edits stay
-    /// once per process. The explicit list keeps the logger closed vocabulary.
-    var isThrottledAutoRefusal: Bool {
+    /// Selected automatic milestones recur at the existing five-second interval.
+    /// The explicit list keeps the logger a closed metadata vocabulary.
+    var isThrottledAutoEvent: Bool {
         switch self {
-        case .autoEngineUnavailable, .autoAnchorStale, .autoAnchorUnavailable,
+        case .autoEngineUnavailable, .autoAnchorStale, .autoAnchorRetired, .autoAnchorUnavailable,
              .autoAnchorSelectionUnavailable, .autoMappingUnavailable,
-             .autoTargetUnavailable, .autoFocusAnchorUnavailable, .autoFocusMismatch,
+             .autoNoProposal, .autoTextConfirmed, .autoTargetUnavailable,
+             .autoFocusAnchorUnavailable, .autoFocusMismatch,
              .autoCaretUnavailable, .autoCaretMismatch, .autoEditRefused,
              .autoTextUnconfirmed, .autoSourceFailed, .autoSourceUnconfirmed,
              .autoAXUnsupported, .autoAXMutationUnknown,
@@ -139,7 +139,7 @@ enum RuntimeDiagnostics {
     }
 
     final class SeenEvents: @unchecked Sendable {
-        private static let refusalIntervalNanoseconds: UInt64 = 5_000_000_000
+        private static let autoEventIntervalNanoseconds: UInt64 = 5_000_000_000
         private let lock = NSLock()
         private var events = Set<RuntimeDiagnosticEvent>()
         private var lastRefusalEmission: [RuntimeDiagnosticEvent: UInt64] = [:]
@@ -150,12 +150,12 @@ enum RuntimeDiagnostics {
         }
 
         func shouldEmit(_ event: RuntimeDiagnosticEvent) -> Bool {
-            guard event.isThrottledAutoRefusal else { return !event.logOnce || insert(event) }
+            guard event.isThrottledAutoEvent else { return !event.logOnce || insert(event) }
             lock.lock(); defer { lock.unlock() }
             let current = now()
             if let previous = lastRefusalEmission[event] {
                 guard current >= previous,
-                      current - previous >= Self.refusalIntervalNanoseconds else { return false }
+                      current - previous >= Self.autoEventIntervalNanoseconds else { return false }
             }
             lastRefusalEmission[event] = current
             return true

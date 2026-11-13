@@ -24,12 +24,19 @@ if CommandLine.arguments.contains("--self-test-resources") {
     // A packaged app must find its dictionary INSIDE the app, never through
     // SwiftPM's absolute build-directory fallback on the developer's machine.
     guard let resourceBundle = try? PredictionResources.bundle() else { exit(2) }
-    let resourceRoot = resourceBundle.bundleURL.standardizedFileURL.path
-    let appRoot = Bundle.main.bundleURL.standardizedFileURL.path
+    let resourceRoot = resourceBundle.bundleURL.resolvingSymlinksInPath().standardizedFileURL.path
+    let appRoot = Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL.path
     guard resourceRoot.hasPrefix(appRoot + "/") else {
         fputs("Resource bundle is outside the app\n", stderr)
         exit(1)
     }
+    let shellResource = ShellBridgeProfilePatch.packagedResourceURL?
+        .resolvingSymlinksInPath().standardizedFileURL.path
+    let shellResourcePackaged = shellResource.map {
+        $0.hasPrefix(resourceRoot + "/") && FileManager.default.fileExists(atPath: $0)
+    } ?? false
+    print("{\"shellBridgeResourcePackaged\":\(shellResourcePackaged)}")
+    guard shellResourcePackaged else { exit(2) }
     let started = ProcessInfo.processInfo.systemUptime
     guard let lexicon = try? PredictionLexicon.bundled() else { exit(2) }
     for language in ["ru", "en"] {

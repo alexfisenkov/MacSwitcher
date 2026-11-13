@@ -63,13 +63,16 @@ struct CombinedShiftFocus: @unchecked Sendable {
     let initialSelection: CFRange?
     /// Synthetic boundary for headless editing tests. Live captures never set it.
     let fieldBoundary: CombinedShiftFieldBoundary?
+    let searchOverlay: SearchOverlayTarget.Binding?
 
     init(processID: Int32, element: AXUIElement, initialSelection: CFRange? = nil,
-         fieldBoundary: CombinedShiftFieldBoundary? = nil) {
+         fieldBoundary: CombinedShiftFieldBoundary? = nil,
+         searchOverlay: SearchOverlayTarget.Binding? = nil) {
         self.processID = processID
         self.element = element
         self.initialSelection = initialSelection
         self.fieldBoundary = fieldBoundary
+        self.searchOverlay = searchOverlay
     }
 
     func setMessagingTimeout(_ timeout: Float) -> AXError {
@@ -131,7 +134,15 @@ struct CombinedShiftFocus: @unchecked Sendable {
             initialSelection: includeSelection ? focus.selectionRange() : nil)
     }
 
+    @MainActor
+    func currentTargetProcessID() -> Int32? {
+        if let searchOverlay { return SearchOverlayTarget.currentProcessID(for: searchOverlay) }
+        return NSWorkspace.shared.frontmostApplication?.processIdentifier
+    }
+
+    @MainActor
     func isCurrent() -> Bool {
+        if let searchOverlay { return SearchOverlayTarget.isCurrent(self, binding: searchOverlay) }
         guard let current = Self.capture(processID: processID) else { return false }
         return CFEqual(element, current.element)
     }
@@ -246,14 +257,22 @@ struct CombinedShiftExecutionContext {
             return boundary.validationFailure()
         }
         guard focus.processID > 0,
-              NSWorkspace.shared.frontmostApplication?.processIdentifier == focus.processID else { return .wrongProcess }
+              focus.currentTargetProcessID() == focus.processID else { return .wrongProcess }
         guard !AutoSwitchPolicy.secureInputActive else { return .secureInput }
-        guard let current = CombinedShiftFocus.capture(processID: focus.processID, timeout: timeout, includeSelection: false) else { return .focusUnavailable }
-        guard CFEqual(focus.element, current.element) else { return .focusChanged }
+        if let overlay = focus.searchOverlay {
+            guard SearchOverlayTarget.isCurrent(focus, binding: overlay,
+                                                timeout: timeout) else { return .focusChanged }
+        } else {
+            // The host can remain NSWorkspace-frontmost after system input
+            // moves into Campo. A stale underlay field is never an edit target.
+            guard !SearchOverlayTarget.mayHaveActiveOverlay() else { return .focusChanged }
+            guard let current = CombinedShiftFocus.capture(processID: focus.processID, timeout: timeout, includeSelection: false) else { return .focusUnavailable }
+            guard CFEqual(focus.element, current.element) else { return .focusChanged }
+        }
         // AX calls are synchronous and may take time; repeat inexpensive checks
         // immediately before allowing a caller to edit.
         guard inputRevision == currentInputRevision() else { return .revisionChanged }
-        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == focus.processID else { return .wrongProcess }
+        guard focus.currentTargetProcessID() == focus.processID else { return .wrongProcess }
         guard !AutoSwitchPolicy.secureInputActive else { return .secureInput }
         return nil
     }

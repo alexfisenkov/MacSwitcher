@@ -58,7 +58,7 @@ extension NativeAutoEventTransport {
         func cheapGate() -> Bool {
             ProcessInfo.processInfo.systemUptime < deadline && inputBarrierIsActive()
                 && execution.inputRevision == execution.currentInputRevision()
-                && NSWorkspace.shared.frontmostApplication?.processIdentifier == focus.processID
+                && focus.currentTargetProcessID() == focus.processID
                 && !AutoSwitchPolicy.secureInputActive
         }
         func validateFocus() -> Bool {
@@ -179,7 +179,7 @@ extension NativeAutoEventTransport {
         func cheapGate() -> Bool {
             ProcessInfo.processInfo.systemUptime < deadline && inputBarrierIsActive()
                 && execution.inputRevision == execution.currentInputRevision()
-                && NSWorkspace.shared.frontmostApplication?.processIdentifier == focus.processID
+                && focus.currentTargetProcessID() == focus.processID
                 && !AutoSwitchPolicy.secureInputActive
         }
         func prepareRead(until phaseDeadline: TimeInterval) -> Bool {

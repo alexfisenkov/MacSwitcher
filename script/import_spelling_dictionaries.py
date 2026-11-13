@@ -34,7 +34,7 @@ SOURCES = {
 RU_MEMBER = "pymorphy3_dicts_ru/data/words.dawg"
 RU_META = "pymorphy3_dicts_ru/data/meta.json"
 MODERN = "dictionaries/modern-spellings-source.tsv"
-MODERN_SHA256 = "435eb0875367d56bf94e1e8b4b8ffa5f99ea2f0ac81d447565be72b29683ab0a"
+MODERN_SHA256 = "831abf9c58d2311aceadcf59d8a9cbb4565a382fc0155b80c4f7c3b40f1b3445"
 STORAGE = "SQLite spellings(word TEXT PRIMARY KEY NOT NULL) WITHOUT ROWID; metadata; user_version=1"
 
 

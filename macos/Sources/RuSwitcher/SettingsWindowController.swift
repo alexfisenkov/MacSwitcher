@@ -27,6 +27,8 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
     var onLanguageChanged: (() -> Void)?
     var onTriggerChanged: (() -> Void)?
     var onCombinedShiftChanged: (() -> Void)?
+    var onShellBridgeSetupRequested: (() -> Void)?
+    var onRuntimeCheckRequested: (() -> Void)?
     var onAutoConvertChanged: ((Bool) -> Void)?
     var onRemoteDesktopChanged: ((Bool) -> Void)?
     var onCaretFlagChanged: ((Bool) -> Void)?
@@ -409,6 +411,33 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
             : "Press either Shift briefly to change layout; double-press to fix the last word or selection. Other shortcuts and holding Shift work as usual."
         view.addSubview(combinedShift)
         y -= 30
+
+        let shellBridge = NSButton(checkboxWithTitle: L10n.languageCode == "ru"
+            ? "Исправлять ввод в zsh (после настройки)"
+            : "Correct zsh input (setup required)",
+            target: self, action: #selector(shellBridgeChanged))
+        shellBridge.frame = NSRect(x: 40, y: y, width: 390, height: 22)
+        shellBridge.state = SettingsManager.shared.shellBridgeEnabled ? .on : .off
+        shellBridge.toolTip = L10n.languageCode == "ru"
+            ? "Требуется настройка zsh и доступ к вкладке. После перезапуска MacSwitcher откройте новое окно терминала. Команды не запускаются."
+            : "Requires zsh setup and tab access. Open a new terminal window after restarting MacSwitcher. Commands are never run."
+        view.addSubview(shellBridge)
+        y -= 30
+
+        let shellSetup = NSButton(title: L10n.languageCode == "ru"
+            ? "Настроить zsh и доступ к вкладке…"
+            : "Set up zsh and tab access…",
+            target: self, action: #selector(shellBridgeSetupRequested))
+        shellSetup.frame = NSRect(x: 40, y: y, width: 300, height: 26)
+        view.addSubview(shellSetup)
+        y -= 36
+
+        let runtimeCheck = NSButton(title: L10n.languageCode == "ru"
+            ? "Проверить работу…" : "Check operation…",
+            target: self, action: #selector(runtimeCheckRequested))
+        runtimeCheck.frame = NSRect(x: 40, y: y, width: 300, height: 26)
+        view.addSubview(runtimeCheck)
+        y -= 36
 
         if SettingsManager.shared.combinedShiftEnabled {
         let intervalTitle = NSTextField(labelWithString: L10n.languageCode == "ru" ? "Интервал двух Shift" : "Double Shift interval")
@@ -1086,6 +1115,20 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
         onCombinedShiftChanged?()
         refreshGeneralTabPresentation()
     }
+
+    @objc private func shellBridgeChanged(_ sender: NSButton) {
+        SettingsManager.shared.shellBridgeEnabled = sender.state == .on
+        onCombinedShiftChanged?()
+    }
+
+    @objc private func shellBridgeSetupRequested() {
+        onShellBridgeSetupRequested?()
+    }
+
+    @objc private func runtimeCheckRequested() {
+        onRuntimeCheckRequested?()
+    }
+
 
     private func refreshGeneralTabPresentation() {
         refreshGeneralTabPresentation { createGeneralTab() }

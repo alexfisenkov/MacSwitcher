@@ -28,6 +28,7 @@ final class SettingsManager: @unchecked Sendable {
         static let triggerRightOnly = "com.ruswitcher.triggerRightOnly"
         static let triggerDoubleTap = "com.ruswitcher.triggerDoubleTap"
         static let combinedShift = "com.ruswitcher.combinedShiftEnabled"
+        static let shellBridgeEnabled = "com.macswitcher.shellBridgeEnabled"
         static let doubleShiftIntervalMilliseconds = "com.macswitcher.doubleShiftIntervalMilliseconds"
         static let russianPriorityEnabled = "com.macswitcher.russianPriorityEnabled"
         static let switchHotkey = "com.ruswitcher.switchHotkey"
@@ -188,6 +189,12 @@ final class SettingsManager: @unchecked Sendable {
     var combinedShiftEnabled: Bool {
         get { defaults.object(forKey: Keys.combinedShift) as? Bool ?? combinedShiftDefault }
         set { defaults.set(newValue, forKey: Keys.combinedShift) }
+    }
+
+    /// Explicitly opted in after shell setup. Missing key is always OFF.
+    var shellBridgeEnabled: Bool {
+        get { defaults.bool(forKey: Keys.shellBridgeEnabled) }
+        set { defaults.set(newValue, forKey: Keys.shellBridgeEnabled) }
     }
 
     /// A preference only. Automatic editing still requires its separate explicit enablement.
