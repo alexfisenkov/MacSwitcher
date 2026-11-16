@@ -15,6 +15,8 @@ signal.signal(signal.SIGTERM, stop)
 mode = sys.argv[1] if len(sys.argv) > 1 else ''
 if mode == 'delayed-start':
     time.sleep(3.2)
+if mode in ('delayed-child-hang', 'delayed-child-stubborn'):
+    time.sleep(0.75)
 if mode in ('hot-stdout', 'hot-stderr'):
     stream = 1 if mode == 'hot-stdout' else 2
     while True:
@@ -22,16 +24,19 @@ if mode in ('hot-stdout', 'hot-stderr'):
 print('python-ready', flush=True)
 command_read, command_write = os.pipe()
 reply_read, reply_write = os.pipe()
+if mode in ('delayed-child-hang', 'delayed-child-stubborn'):
+    time.sleep(0.75)
 shell, master = pty.fork()
 if shell == 0:
     os.close(command_write)
     os.close(reply_read)
     child = None
     try:
-        if mode in ('child-error', 'child-hang', 'child-stubborn'):
+        if mode in ('child-error', 'child-hang', 'child-stubborn',
+                    'delayed-child-hang', 'delayed-child-stubborn'):
             if mode == 'child-error':
                 raise RuntimeError('injected PTY child error')
-            if mode == 'child-stubborn':
+            if mode in ('child-stubborn', 'delayed-child-stubborn'):
                 signal.signal(signal.SIGTERM, signal.SIG_IGN)
             signal.pause()
         os.write(reply_write, f'{os.getpid()} {os.ttyname(0)}\n'.encode())
@@ -105,6 +110,7 @@ finally:
     }
 
     init(mode: String = "", timeout: TimeInterval = 8,
+         startupTimeout: TimeInterval? = nil, spawnTimeout: TimeInterval? = nil,
          onSpawn: ((pid_t) -> Void)? = nil) throws {
         let process = Process()
         let input = Pipe(), output = Pipe(), stderr = Pipe()
@@ -116,7 +122,10 @@ finally:
         process.standardOutput = output
         process.standardError = stderr
         try process.run()
-        let deadline = DispatchTime.now().uptimeNanoseconds + UInt64(timeout * 1_000_000_000)
+        func deadline(after seconds: TimeInterval) -> UInt64 {
+            DispatchTime.now().uptimeNanoseconds + UInt64(seconds * 1_000_000_000)
+        }
+        let setupDeadline = deadline(after: timeout)
         var pendingOutput = Data(), diagnostics = Data()
         var spawnedPID: pid_t?
         let parts: [Substring]
@@ -124,19 +133,23 @@ finally:
         do {
             guard try Self.readReply(from: output, stderr: stderr, process: process,
                                      pending: &pendingOutput, diagnostics: &diagnostics,
-                                     deadline: deadline, phase: "Python startup") == "python-ready" else {
+                                     deadline: startupTimeout.map(deadline(after:)) ?? setupDeadline,
+                                     phase: "Python startup") == "python-ready" else {
                 throw POSIXError(.EIO)
             }
             let spawned = try Self.readReply(from: output, stderr: stderr, process: process,
                                              pending: &pendingOutput, diagnostics: &diagnostics,
-                                             deadline: deadline, phase: "PTY fork").split(separator: " ")
+                                             deadline: spawnTimeout.map(deadline(after:)) ?? setupDeadline,
+                                             phase: "PTY fork").split(separator: " ")
             guard spawned.count == 2, spawned[0] == "spawned",
                   let pid = pid_t(spawned[1]), pid > 0 else { throw POSIXError(.EIO) }
             spawnedPID = pid
             onSpawn?(pid)
             let childReply = try Self.readReply(from: output, stderr: stderr, process: process,
                                                 pending: &pendingOutput, diagnostics: &diagnostics,
-                                                deadline: deadline, phase: "PTY child ready")
+                                                deadline: startupTimeout == nil && spawnTimeout == nil
+                                                    ? setupDeadline : deadline(after: timeout),
+                                                phase: "PTY child ready")
             if childReply.hasPrefix("child-error ") {
                 throw Self.failure(phase: "PTY child ready", reason: childReply,
                                    process: process, diagnostics: diagnostics)
@@ -306,6 +319,35 @@ final class ScriptableSelectedTTYTests: XCTestCase {
     func testPTYFixtureTimeoutReapsStalledChild() {
         var childPID: pid_t = 0
         XCTAssertThrowsError(try ForegroundPTYFixture(mode: "child-hang", timeout: 0.5,
+                                                      startupTimeout: 8, spawnTimeout: 4,
+                                                      onSpawn: { childPID = $0 })) { error in
+            XCTAssertTrue(String(describing: error).contains("PTY child ready: deadline exceeded"))
+        }
+        XCTAssertGreaterThan(childPID, 0)
+        if childPID > 0 {
+            XCTAssertEqual(Darwin.kill(childPID, 0), -1)
+            XCTAssertEqual(errno, ESRCH)
+        }
+    }
+
+    func testPTYFixtureDelayedStartupAndForkStillReapsStalledChild() {
+        var childPID: pid_t = 0
+        XCTAssertThrowsError(try ForegroundPTYFixture(mode: "delayed-child-hang", timeout: 0.5,
+                                                      startupTimeout: 8, spawnTimeout: 4,
+                                                      onSpawn: { childPID = $0 })) { error in
+            XCTAssertTrue(String(describing: error).contains("PTY child ready: deadline exceeded"))
+        }
+        XCTAssertGreaterThan(childPID, 0)
+        if childPID > 0 {
+            XCTAssertEqual(Darwin.kill(childPID, 0), -1)
+            XCTAssertEqual(errno, ESRCH)
+        }
+    }
+
+    func testPTYFixtureDelayedStartupAndForkStillReapsStubbornChild() {
+        var childPID: pid_t = 0
+        XCTAssertThrowsError(try ForegroundPTYFixture(mode: "delayed-child-stubborn", timeout: 0.5,
+                                                      startupTimeout: 8, spawnTimeout: 4,
                                                       onSpawn: { childPID = $0 })) { error in
             XCTAssertTrue(String(describing: error).contains("PTY child ready: deadline exceeded"))
         }
@@ -319,6 +361,7 @@ final class ScriptableSelectedTTYTests: XCTestCase {
     func testPTYFixtureForcedChildCleanupLetsPythonReapBeforeExit() {
         var childPID: pid_t = 0
         XCTAssertThrowsError(try ForegroundPTYFixture(mode: "child-stubborn", timeout: 0.5,
+                                                      startupTimeout: 8, spawnTimeout: 4,
                                                       onSpawn: { childPID = $0 })) { error in
             XCTAssertTrue(String(describing: error).contains("PTY child ready: deadline exceeded"))
         }
