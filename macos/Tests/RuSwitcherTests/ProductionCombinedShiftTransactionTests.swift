@@ -203,6 +203,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         var generation: UInt64 = 0
         var sourceRequests = 0
         var undoSourceOutcome: LayoutSelectionCommit.Outcome = .confirmed
+        var undoSourceRequestQueuedTextCounts: [Int] = []
         var receiptClock = DispatchTime.now().uptimeNanoseconds
         var applied: [String] = []
         var correctionNotices: [ConfirmedCorrectionNotice] = []
@@ -302,7 +303,8 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
 
         func undoByDoubleShift(direction requestedDirection: CombinedShiftContext? = nil,
                                sourceAfterFirst: String? = nil,
-                               notificationAfterFirst: String? = nil) throws -> CombinedShiftTransaction.Result {
+                               notificationAfterFirst: String? = nil,
+                               fixedManualLeaseBudget: TimeInterval? = nil) throws -> CombinedShiftTransaction.Result {
             let direction = requestedDirection ?? CombinedShiftContext(sourceLayoutID: ru, targetLayoutID: en)
             let contexts = [en: direction.reversed, ru: direction]
             _ = try XCTUnwrap(monitor.snapshotCombinedShiftRequest(action: .switchLayout(direction),
@@ -319,16 +321,35 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
                 inputRevision: request.inputRevision,
                 currentInputRevision: { [unowned self] in monitor.inputRevision })
             let fence = InputEventFence()
+            let fixedLease = InputEventFence.Lease(generation: 1, processID: field.pid)
+            var fixedLeaseActive = false
             let manualPlatform = CombinedShiftTransaction.Platform(
                 currentSourceID: { [unowned self] in sourceID },
                 frontProcessID: { [unowned self] in field.pid },
                 secureInputActive: { false },
-                beginLease: { pid in fence.begin(processID: pid, maximumDuration: 0.250) },
-                leaseIsCurrent: { fence.isCurrent($0) },
-                leaseRemaining: { fence.remainingDuration($0) },
-                finishLease: { lease, target in fence.finish(lease, replayLayoutID: target) },
+                beginLease: { pid in
+                    guard fixedManualLeaseBudget != nil else {
+                        return fence.begin(processID: pid, maximumDuration: 0.250)
+                    }
+                    guard pid == fixedLease.processID, !fixedLeaseActive else { return nil }
+                    fixedLeaseActive = true
+                    return fixedLease
+                },
+                leaseIsCurrent: { lease in
+                    fixedManualLeaseBudget == nil ? fence.isCurrent(lease)
+                        : fixedLeaseActive && lease == fixedLease
+                },
+                leaseRemaining: { lease in
+                    guard let fixedManualLeaseBudget else { return fence.remainingDuration(lease) }
+                    return fixedLeaseActive && lease == fixedLease ? fixedManualLeaseBudget : nil
+                },
+                finishLease: { lease, target in
+                    if fixedManualLeaseBudget == nil { fence.finish(lease, replayLayoutID: target) }
+                    else if lease == fixedLease { fixedLeaseActive = false }
+                },
                 pendingSourceTargetID: { nil },
                 selectSource: { [unowned self] target in
+                    undoSourceRequestQueuedTextCounts.append(field.queuedText)
                     if undoSourceOutcome == .confirmed { sourceID = target }
                     return undoSourceOutcome
                 }, noteUnconfirmedSource: { _, _ in },
@@ -1542,10 +1563,29 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         XCTAssertEqual(rig.field.text, "а")
         rig.undoSourceOutcome = .refused
 
-        XCTAssertEqual(try rig.undoByDoubleShift().outcome,
+        XCTAssertEqual(try rig.undoByDoubleShift(fixedManualLeaseBudget: 0.250).outcome,
             .sourceNotConfirmed(targetID: rig.en, sourceOutcome: .refused))
         XCTAssertEqual(rig.field.text, "f")
         XCTAssertEqual(rig.field.queuedText, 2)
+        XCTAssertEqual(rig.undoSourceRequestQueuedTextCounts, [2],
+            "The refused source must be requested once, after the reverse text batch was queued")
+        XCTAssertTrue(rig.confirmedAutoUndos.isEmpty)
+    }
+
+    @MainActor
+    func testAutomaticUndoInsufficientManualLeaseRefusesBeforeTextAndSource() throws {
+        let rig = try AutoRig()
+        rig.coordinator.russianPriorityProvider = { true }
+        rig.deliver("f", source: rig.en)
+        rig.settle(expected: .applied)
+        XCTAssertEqual(rig.field.text, "а")
+        XCTAssertEqual(rig.field.queuedText, 1)
+        rig.undoSourceOutcome = .refused
+
+        XCTAssertEqual(try rig.undoByDoubleShift(fixedManualLeaseBudget: 0).outcome, .stopped)
+        XCTAssertEqual(rig.field.text, "а")
+        XCTAssertEqual(rig.field.queuedText, 1)
+        XCTAssertTrue(rig.undoSourceRequestQueuedTextCounts.isEmpty)
         XCTAssertTrue(rig.confirmedAutoUndos.isEmpty)
     }
 
