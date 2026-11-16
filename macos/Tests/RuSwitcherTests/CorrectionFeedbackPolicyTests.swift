@@ -24,10 +24,15 @@ final class CorrectionFeedbackPolicyTests: XCTestCase {
         XCTAssertTrue(CorrectionFeedbackPolicy.retryMessage(languageCode: "ru").contains("Текст не изменён"))
         XCTAssertTrue(CorrectionFeedbackPolicy.retryMessage(languageCode: "ru").contains("выделите фрагмент"))
         XCTAssertTrue(CorrectionFeedbackPolicy.retryMessage(languageCode: "en").contains("select the text"))
-        XCTAssertTrue(CorrectionFeedbackPolicy.recoveryMessage(languageCode: "ru").contains("Исходный текст сохранён"))
-        let withoutCopy = CorrectionFeedbackPolicy.recoveryMessage(languageCode: "ru", hasRecovery: false)
-        XCTAssertTrue(withoutCopy.contains("Проверьте поле"))
-        XCTAssertFalse(withoutCopy.contains("сохранён"))
+        for language in ["ru", "en"] {
+            let withCopy = CorrectionFeedbackPolicy.recoveryMessage(languageCode: language, hasRecovery: true)
+            let withoutCopy = CorrectionFeedbackPolicy.recoveryMessage(languageCode: language, hasRecovery: false)
+            XCTAssertTrue(withCopy.contains(language == "ru" ? "скопируйте" : "copy it"))
+            XCTAssertTrue(withCopy.contains(language == "ru" ? "меню MacSwitcher" : "MacSwitcher menu"))
+            XCTAssertFalse(withoutCopy.contains(language == "ru" ? "скопир" : "copy"))
+            XCTAssertFalse(withoutCopy.contains(language == "ru" ? "сохранён" : "preserved"))
+            XCTAssertTrue(withoutCopy.contains(language == "ru" ? "Проверьте поле" : "Check the field"))
+        }
         XCTAssertTrue(CorrectionFeedbackPolicy.sourceMessage(languageCode: "ru").contains("Выберите нужную раскладку"))
         XCTAssertTrue(CorrectionFeedbackPolicy.sourceMessage(languageCode: "en").contains("Choose the needed keyboard layout"))
     }

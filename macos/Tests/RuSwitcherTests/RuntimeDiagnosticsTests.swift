@@ -9,6 +9,22 @@ final class RuntimeDiagnosticsTests: XCTestCase {
         XCTAssertTrue(RuntimeDiagnostics.isEnabled(arguments: ["MacSwitcher", "--diagnostic-events"]))
     }
 
+    func testCombinedOutcomeIdentifierIsClosedAndOptIn() {
+        let pending = CombinedShiftDiagnostic(application: .chrome, operation: .recovery, result: .pending)
+        XCTAssertNil(RuntimeDiagnostics.combinedIdentifier(pending, enabled: false))
+        XCTAssertEqual(RuntimeDiagnostics.combinedIdentifier(pending, enabled: true),
+            "combined.chrome.recovery.pending")
+        let unknownUndo = CombinedShiftDiagnostic(application: .safari, operation: .undo, result: .uncertain)
+        XCTAssertEqual(RuntimeDiagnostics.combinedIdentifier(unknownUndo, enabled: true),
+            "combined.safari.undo.uncertain")
+        let legacy = CombinedShiftDiagnostic(application: .browser, operation: .word, result: .confirmed)
+        XCTAssertEqual(RuntimeDiagnostics.combinedIdentifier(legacy, enabled: true),
+            "combined.browser.word.confirmed")
+        XCTAssertNil(RuntimeDiagnostics.automaticUncertainIdentifier(.chrome, enabled: false))
+        XCTAssertEqual(RuntimeDiagnostics.automaticUncertainIdentifier(.chrome, enabled: true),
+            "automatic.chrome.uncertain")
+    }
+
     func testVocabularyContainsOnlyUniqueStaticEventIdentifiers() {
         let names = RuntimeDiagnosticEvent.allCases.map(\.rawValue)
         XCTAssertEqual(names.count, Set(names).count)

@@ -31,16 +31,35 @@ enum CombinedShiftTransaction {
                     monitor: KeyboardMonitor, platform: Platform, convertWholeLine: Bool,
                     contextForSource: (String) -> CombinedShiftContext?,
                     selectionKnownWord: ((String, String) -> Bool?)? = nil,
-                    automaticUndo: DoubleShiftAutomaticUndo = .manual) -> Result {
+                    automaticUndo: DoubleShiftAutomaticUndo = .manual,
+                    diagnosticsEnabled: Bool = RuntimeDiagnostics.enabled,
+                    onDiagnostic: (CombinedShiftDiagnostic) -> Void = RuntimeDiagnostics.record) -> Result {
         converter.beginManualTransaction()
+        let pendingRecovery = converter.hasUnconfirmedAXEdit(in: execution.focus)
+        let automaticUndoRequested: Bool
+        if case .receipt = automaticUndo { automaticUndoRequested = true }
+        else { automaticUndoRequested = false }
+        let operation: CombinedShiftDiagnostic.Operation = pendingRecovery ? .recovery
+            : (execution.focus.initialSelection?.length ?? 0) > 0 ? .selection
+            : request.reconvert || automaticUndoRequested ? .undo : .word
+        func report(_ result: CombinedShiftDiagnostic.Result) {
+            guard diagnosticsEnabled else { return }
+            // The family is sampled at the terminal boundary. The caller uses
+            // frontmost application metadata, without an AX read for logging.
+            let family: CombinedShiftApplicationFamily = platform.secureInputActive()
+                ? .other : platform.applicationFamily()
+            onDiagnostic(.init(application: family,
+                operation: operation, result: result))
+        }
         // Selection policy can consult a lexicon. Prepare it after ShiftUp has
         // returned, before holding physical input, then revalidate under lease.
         let preparedSelection: TextConverter.PreparedNativeSelection?
         let sourceBeforePreparation = platform.currentSourceID()
         if (execution.focus.initialSelection?.length ?? 0) > 0,
-           !converter.hasUnconfirmedAXEdit(in: execution.focus) {
+           !pendingRecovery {
             func stoppedSelection() -> Result {
-                Result(outcome: .stopped, failureNotice: .noSafeEdit,
+                report(.refused)
+                return Result(outcome: .stopped, failureNotice: .noSafeEdit,
                     pendingSourceTargetID: platform.pendingSourceTargetID(), confirmedAutomaticUndo: nil)
             }
             guard sourceBeforePreparation == context.targetLayoutID else {
@@ -85,6 +104,7 @@ enum CombinedShiftTransaction {
         guard let lease = platform.beginLease(execution.focus.processID) else {
             RuntimeDiagnostics.record(.nativeFenceUnavailable)
             RuntimeDiagnostics.record(.doubleFailed)
+            report(.refused)
             return Result(outcome: nil, failureNotice: nil,
                 pendingSourceTargetID: platform.pendingSourceTargetID(), confirmedAutomaticUndo: nil)
         }
@@ -108,6 +128,7 @@ enum CombinedShiftTransaction {
             platform.noteUnconfirmedSource(target, requestedAt)
         })
         var failureNotice: CombinedShiftFailure?
+        var editDiagnostic: CombinedShiftDiagnostic?
         let succeeded = converter.withNativeInputBudget({ platform.leaseRemaining(lease) }) {
             converter.withNativeTextQueuedHandler({ _ in
                 // Queued Unicode alone cannot authorize a source selection.
@@ -117,8 +138,8 @@ enum CombinedShiftTransaction {
                     inputBarrierIsActive: isCurrent, convertWholeLine: convertWholeLine,
                     contextForSource: contextForSource,
                     onFailure: { failureNotice = $0 },
-                    onDiagnostic: { RuntimeDiagnostics.record($0) },
-                    application: platform.applicationFamily(),
+                    onDiagnostic: { editDiagnostic = $0 },
+                    application: .other,
                     preparedSelection: preparedSelection,
                     fallbackSourceIsCurrent: {
                         platform.currentSourceID() == context.targetLayoutID && isCurrent()
@@ -128,10 +149,17 @@ enum CombinedShiftTransaction {
         let outcome = CombinedShiftCompletion.finish(succeeded: succeeded, request: request,
             context: context, sourceCommit: sourceCommit, converter: converter,
             monitor: monitor, isInputCurrent: isCurrent)
+        let diagnosticResult: CombinedShiftDiagnostic.Result
+        switch outcome {
+        case .confirmed: diagnosticResult = .confirmed
+        case .sourceNotConfirmed: diagnosticResult = .sourceUnconfirmed
+        case .stopped: diagnosticResult = editDiagnostic?.result ?? .refused
+        }
         if case .confirmed = outcome, case .receipt(let receipt) = automaticUndo {
             converter.armManualRedoAfterConfirmedAutomaticUndo(receipt)
         }
         platform.finishLease(lease, sourceCommit.confirmedLayoutID)
+        report(diagnosticResult)
         let confirmedAutomaticUndo: ConfirmedCorrectionReceipt?
         if case .confirmed = outcome, case .receipt(let receipt) = automaticUndo {
             confirmedAutomaticUndo = receipt

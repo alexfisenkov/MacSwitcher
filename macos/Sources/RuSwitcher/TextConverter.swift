@@ -254,6 +254,7 @@ final class TextConverter {
     private let nativeEditBoundary: NativeEditBoundary?
     private let wholeFieldObservationOverride: ((CombinedShiftFocus) -> NativeFieldObservation?)?
     private let automaticRoute: (String?, String, String) -> AutomaticEditorRoute
+    private let recoveryFailureRecorder: (RuntimeDiagnosticFailureReason) -> Void
     /// A read-only preference boundary lets tests exercise the production
     /// selection path without changing the owner's saved application settings.
     private let selectionPreferences: () -> (convertByText: Bool, smartConversion: Bool)
@@ -265,11 +266,12 @@ final class TextConverter {
        wholeFieldObservationOverride: ((CombinedShiftFocus) -> NativeFieldObservation?)? = nil,
        automaticRoute: @escaping (String?, String, String) -> AutomaticEditorRoute = {
            AutomaticEditorPolicy.route(bundleID: $0, suffix: $1, sourceID: $2)
-       }) {
+       }, recoveryFailureRecorder: @escaping (RuntimeDiagnosticFailureReason) -> Void = RuntimeDiagnostics.recordFailure) {
         self.selectionPreferences = selectionPreferences
         self.nativeEditBoundary = nativeEditBoundary
         self.wholeFieldObservationOverride = wholeFieldObservationOverride
         self.automaticRoute = automaticRoute
+        self.recoveryFailureRecorder = recoveryFailureRecorder
     }
 
     private var nativeTextQueuedHandler: ((String) -> Void)?
@@ -1114,20 +1116,43 @@ final class TextConverter {
     /// A new explicit gesture may restore it only at that same exact AX range.
     private func recoverUnconfirmedAXEdit(execution: CombinedShiftExecutionContext,
                                           inputBarrierIsActive: (() -> Bool)? = nil) -> Bool {
-        guard !isConverting, inputBarrierIsActive?() ?? true,
-              let pending = unconfirmedAXEdits.first(where: {
+        guard !isConverting, inputBarrierIsActive?() ?? true else {
+            recoveryFailureRecorder(.recoveryInputUnavailable)
+            return false
+        }
+        guard let pending = unconfirmedAXEdits.first(where: {
                 $0.focus.processID == execution.focus.processID && CFEqual($0.focus.element, execution.focus.element)
-              }) else { return false }
+              }) else {
+            // The caller already found an exact-field lock; an archived lock has
+            // no RAM snapshot from which a gesture could safely restore text.
+            recoveryFailureRecorder(.recoveryNoRAMSnapshot)
+            return false
+        }
         // A native unknown requires an independent input lease and an explicit
         // whole-result selection. It cannot fall through to an AX writer.
-        guard !pending.requiresExplicitSelection || inputBarrierIsActive != nil else { return false }
+        guard !pending.requiresExplicitSelection || inputBarrierIsActive != nil else {
+            recoveryFailureRecorder(.recoveryInputUnavailable)
+            return false
+        }
         if inputBarrierIsActive != nil {
-            guard execution.focus.setMessagingTimeout(nativeAXTimeout) == .success else { return false }
+            guard execution.focus.setMessagingTimeout(nativeAXTimeout) == .success else {
+                recoveryFailureRecorder(.recoveryInputUnavailable)
+                return false
+            }
         }
         defer { if inputBarrierIsActive != nil { _ = execution.focus.setMessagingTimeout(0.05) } }
-        guard execution.isValid(timeout: inputBarrierIsActive == nil ? 0.05 : nativeAXTimeout),
-              let current = execution.focus.selectionRange() else { return false }
-        guard !pending.requiresExplicitSelection || current.length > 0 else { return false }
+        guard execution.isValid(timeout: inputBarrierIsActive == nil ? 0.05 : nativeAXTimeout) else {
+            recoveryFailureRecorder(.recoveryInputUnavailable)
+            return false
+        }
+        guard let current = execution.focus.selectionRange() else {
+            recoveryFailureRecorder(.recoverySelectionMissing)
+            return false
+        }
+        guard !pending.requiresExplicitSelection || current.length > 0 else {
+            recoveryFailureRecorder(.recoverySelectionMissing)
+            return false
+        }
         let resultRange = CFRange(location: pending.original.range.location, length: pending.replacement.utf16.count)
         let observed = execution.focus.text(in: resultRange)
         guard let result = pending.original.resultSnapshot(replacement: pending.replacement,
@@ -1140,6 +1165,7 @@ final class TextConverter {
                execution.isValid(timeout: inputBarrierIsActive == nil ? 0.05 : nativeAXTimeout) {
                 removeUnconfirmed(in: execution.focus)
             }
+            recoveryFailureRecorder(.recoverySelectionMismatch)
             return false
         }
         isConverting = true
@@ -1163,6 +1189,7 @@ final class TextConverter {
                     lastNativeObservation: pending.lastNativeObservation,
                     id: pending.id, archive: pending.archive))
             }
+            recoveryFailureRecorder(outcome == .unknown ? .recoveryEditUnknown : .recoveryEditRefused)
             return false
         }
         removeUnconfirmed(in: execution.focus)

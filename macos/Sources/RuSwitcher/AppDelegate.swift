@@ -930,17 +930,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         else { isDouble = false; RuntimeDiagnostics.record(.soloReceived) }
         guard (SettingsManager.shared.nativeShiftMigrationApplied || SettingsManager.shared.combinedShiftEnabled),
               SettingsManager.shared.manualShiftEnabled else {
-            if isDouble { RuntimeDiagnostics.record(.doubleDisabled) }; return
+            if isDouble { RuntimeDiagnostics.record(.doubleDisabled); reportEarlyCombinedShiftRefusal(request) }; return
         }
         guard !AutoSwitchPolicy.secureInputActive else {
-            if isDouble { RuntimeDiagnostics.record(.doubleSecureInput) }
+            if isDouble { RuntimeDiagnostics.record(.doubleSecureInput); reportEarlyCombinedShiftRefusal(request) }
             keyboardMonitor.resetCombinedShift()
             notifySecureInputPaused()
             return
         }
         guard let currentPID = NSWorkspace.shared.frontmostApplication?.processIdentifier,
               request.frontProcessID > 0, request.frontProcessID == currentPID else {
-            if isDouble { RuntimeDiagnostics.record(.doubleWrongProcess) }
+            if isDouble { RuntimeDiagnostics.record(.doubleWrongProcess); reportEarlyCombinedShiftRefusal(request) }
             keyboardMonitor.resetCombinedShift()
             return
         }
@@ -959,13 +959,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return  // preserve typed buffers and undo; this may still be the first half of a double
         case .convert(let direction):
             guard request.inputRevision == keyboardMonitor.inputRevision else {
-                RuntimeDiagnostics.record(.doubleRevisionChanged); return
+                RuntimeDiagnostics.record(.doubleRevisionChanged)
+                reportEarlyCombinedShiftRefusal(request)
+                return
             }
             context = direction
         }
         // The controlled instance receives the real Shift gestures. Local source was already
         // selected on tap one; another generic toggle here would race that instance.
-        guard !AutoSwitchPolicy.shouldDeferToRemoteClient else { RuntimeDiagnostics.record(.doubleRemoteDeferred); return }
+        guard !AutoSwitchPolicy.shouldDeferToRemoteClient else {
+            RuntimeDiagnostics.record(.doubleRemoteDeferred)
+            reportEarlyCombinedShiftRefusal(request)
+            return
+        }
         let nativeFallback = { [weak self] in
             guard let self else { return }
             self.runNativeCombinedShift(request, context: context)
@@ -990,11 +996,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
               (focus.searchOverlay?.hostPID == request.frontProcessID
                 || (focus.searchOverlay == nil && focus.processID == request.frontProcessID)),
               focus.currentTargetProcessID() == focus.processID else {
-            RuntimeDiagnostics.record(.doubleMissingFocus); return
+            RuntimeDiagnostics.record(.doubleMissingFocus)
+            reportEarlyCombinedShiftRefusal(request)
+            return
         }
         let execution = CombinedShiftExecutionContext(focus: focus, inputRevision: request.inputRevision,
             currentInputRevision: { [weak self] in self?.keyboardMonitor.inputRevision ?? UInt64.max })
-        guard execution.isValid() else { RuntimeDiagnostics.record(.doubleInvalidExecution); return }
+        guard execution.isValid() else {
+            RuntimeDiagnostics.record(.doubleInvalidExecution)
+            reportEarlyCombinedShiftRefusal(request)
+            return
+        }
 
         handleVerifiedCombinedShift(request, context: context, execution: execution)
     }
@@ -1013,6 +1025,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                   let queries = SmartConvert.requiredNativeWordEvidence(baseline.selection.text,
                       context: context) else {
                 showCombinedShiftRefusal()
+                reportEarlyCombinedShiftRefusal(request)
                 return
             }
             let generation = nativeSelectionAwaitGate.nextAction()
@@ -1029,6 +1042,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                       !AutoSwitchPolicy.secureInputActive,
                       LayoutSwitcher.currentLayoutID() == context.targetLayoutID else {
                     self.showCombinedShiftRefusal()
+                    self.reportEarlyCombinedShiftRefusal(request)
                     return
                 }
                 self.runVerifiedCombinedShift(request, context: context, execution: execution,
@@ -1047,6 +1061,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 body: CorrectionFeedbackPolicy.retryMessage(languageCode: L10n.languageCode),
                 kind: .manualFailure)
         }
+    }
+
+    private func reportEarlyCombinedShiftRefusal(_ request: CombinedShiftRequest) {
+        guard RuntimeDiagnostics.enabled, case .convert = request.action else { return }
+        let secure = AutoSwitchPolicy.secureInputActive
+        let front = NSWorkspace.shared.frontmostApplication
+        let family = CombinedShiftApplicationFamily.classify(bundleID: secure ? nil : front?.bundleIdentifier,
+            expectedProcessID: request.frontProcessID, observedProcessID: front?.processIdentifier,
+            secureInputActive: secure)
+        let operation: CombinedShiftDiagnostic.Operation
+        if !secure, let focus = request.focus,
+           focus.processID == request.frontProcessID,
+           textConverter.hasUnconfirmedAXEdit(in: focus) {
+            operation = .recovery
+        } else if (request.focus?.initialSelection?.length ?? 0) > 0 {
+            operation = .selection
+        } else {
+            operation = request.reconvert ? .undo : .word
+        }
+        RuntimeDiagnostics.record(.init(application: family, operation: operation, result: .refused))
     }
 
     private func runVerifiedCombinedShift(_ request: CombinedShiftRequest,
@@ -1078,8 +1112,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     })
                 return self.textConverter.nativeSelectionBaseline(execution: current)?.field
             }, applicationFamily: {
-                CombinedShiftApplicationFamily.classify(
-                    bundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+                let front = NSWorkspace.shared.frontmostApplication
+                return CombinedShiftApplicationFamily.classify(bundleID: front?.bundleIdentifier,
+                    expectedProcessID: execution.focus.processID,
+                    observedProcessID: front?.processIdentifier,
+                    secureInputActive: AutoSwitchPolicy.secureInputActive)
             })
         let automaticUndo = predictionCoordinator.claimDoubleShiftAutomaticUndo(
             request: request, context: context, observedSourceID: platform.currentSourceID())

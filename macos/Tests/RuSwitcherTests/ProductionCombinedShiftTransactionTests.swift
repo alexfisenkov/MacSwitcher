@@ -59,6 +59,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         var policyDelay: TimeInterval = 0
         var policySawLease = false
         var sourceRequests = 0
+        var recoveryFailures: [RuntimeDiagnosticFailureReason] = []
         var sourceOutcome: LayoutSelectionCommit.Outcome = .confirmed
         var wholeObservationAvailable = true
         var reportWrongCaretAfterText = false
@@ -105,7 +106,8 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
             guard wholeObservationAvailable else { return nil }
             return fields.first(where: { $0.pid == focus.processID
                 && CFEqual($0.element, focus.element) && $0.valid })?.observation
-        }, automaticRoute: { _, _, _ in .nativeVerified })
+        }, automaticRoute: { _, _, _ in .nativeVerified },
+           recoveryFailureRecorder: { [unowned self] in recoveryFailures.append($0) })
 
         init(fields: [Field]) throws {
             let layouts = LayoutSwitcher.installedLayouts()
@@ -139,7 +141,8 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         }
 
         func run(_ request: CombinedShiftRequest,
-                 direction: CombinedShiftContext) -> CombinedShiftTransaction.Result {
+                 direction: CombinedShiftContext,
+                 onDiagnostic: @escaping (CombinedShiftDiagnostic) -> Void = { _ in }) -> CombinedShiftTransaction.Result {
             let execution = CombinedShiftExecutionContext(focus: request.focus!,
                 inputRevision: request.inputRevision,
                 currentInputRevision: { [unowned self] in monitor.inputRevision })
@@ -171,14 +174,18 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
                     guard wholeObservationAvailable else { return nil }
                     return fields.first(where: { $0.pid == focus.processID
                         && CFEqual($0.element, focus.element) && $0.valid })?.observation
-                }, applicationFamily: { .textEdit })
+                }, applicationFamily: { [unowned self] in
+                    (currentTargetPID.map { $0() } ?? frontField.pid) == request.frontProcessID
+                        ? .textEdit : .other
+                })
             return CombinedShiftTransaction.run(request: request, context: direction,
                 execution: execution, converter: converter, monitor: monitor,
                 platform: platform, convertWholeLine: false,
                 contextForSource: { [unowned self] source in
                     source == enToRu.sourceLayoutID ? enToRu
                         : source == ruToEn.sourceLayoutID ? ruToEn : nil
-                }, selectionKnownWord: selectionKnownWord)
+                }, selectionKnownWord: selectionKnownWord,
+                diagnosticsEnabled: true, onDiagnostic: onDiagnostic)
         }
     }
 
@@ -200,13 +207,19 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         var applied: [String] = []
         var correctionNotices: [ConfirmedCorrectionNotice] = []
         var confirmedAutoUndos: [ConfirmedCorrectionNotice] = []
+        var automaticUnknowns: [CombinedShiftApplicationFamily] = []
+        var diagnosticsOn = true
+        var frontmostReads = 0
         let suppliedLexicon: PredictionLexicon?
 
         lazy var converter = ProductionCombinedShiftEditingTests.converter(for: [field],
             automaticRoute: { _, _, _ in .nativeVerified })
 
         lazy var platform = PredictionCoordinatorPlatform(
-            frontmost: { [unowned self] in ("com.apple.TextEdit", field.pid) },
+            frontmost: { [unowned self] in
+                frontmostReads += 1
+                return ("com.apple.TextEdit", field.pid)
+            },
             currentLayoutID: { [unowned self] in sourceID },
             route: { _, _, _ in .nativeVerified }, deniedApp: { _ in false },
             autoSwitchEnabled: { true }, autoConvertEnabled: { true },
@@ -241,7 +254,9 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
             ])
             let value = PredictionCoordinator(monitor: monitor, converter: converter,
                 platform: platform, engine: PredictionEngine(lexicon: suppliedLexicon ?? lexicon),
-                receiptNow: { [unowned self] in receiptClock })
+                receiptNow: { [unowned self] in receiptClock },
+                diagnosticsEnabled: { [unowned self] in diagnosticsOn },
+                recordAutomaticUncertain: { [unowned self] in automaticUnknowns.append($0) })
             value.onApplied = { [unowned self] word in applied.append(word) }
             value.onCorrection = { [unowned self] in correctionNotices.append($0) }
             value.onConfirmedAutomaticUndo = { [unowned self] in confirmedAutoUndos.append($0) }
@@ -587,6 +602,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         rig.sourceID = rig.enToRu.targetLayoutID
         XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome, .stopped)
         XCTAssertEqual(fields[0].queuedText, 1)
+        XCTAssertEqual(rig.recoveryFailures.last, .recoveryNoRAMSnapshot)
         for field in fields[9...] {
             let backed = try XCTUnwrap(rig.converter.backedOriginals.first)
             XCTAssertEqual(try RecoveryArchive.original(id: backed.id, receipt: backed.archive), backed.text)
@@ -910,6 +926,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
             .stopped, "A collapsed caret cannot recover an uncertain whole-field write")
         XCTAssertEqual(field.queuedText, 1)
         XCTAssertTrue(rig.converter.hasUnconfirmedAXEdit(in: field.focus()))
+        XCTAssertEqual(rig.recoveryFailures.last, .recoverySelectionMissing)
 
         // The user explicitly selects the exact observed result in the same AX
         // field. Only this fresh selection may restore the retained original.
@@ -931,6 +948,29 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
             .confirmed(resultID: rig.enToRu.targetLayoutID))
         XCTAssertEqual(field.text, "ghbdtn привет")
         XCTAssertEqual(field.queuedText, 3)
+    }
+
+    @MainActor
+    func testExplicitRecoveryRefusedBeforeQueueKeepsOriginalAndFieldLocked() throws {
+        let field = Field(pid: 5114, text: "ghbdtn")
+        let rig = try Rig(fields: [field])
+        rig.reportWrongCaretAfterText = true
+        try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+        rig.sourceID = rig.enToRu.targetLayoutID
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome, .stopped)
+        XCTAssertEqual(field.text, "привет")
+        XCTAssertEqual(field.queuedText, 1)
+
+        rig.reportWrongCaretAfterText = false
+        field.caret = 0
+        field.selection = field.text.utf16.count
+        field.refuseBeforeQueue = true
+        rig.sourceID = rig.ruToEn.targetLayoutID
+        XCTAssertEqual(rig.run(try rig.request(rig.ruToEn), direction: rig.ruToEn).outcome, .stopped)
+        XCTAssertEqual(rig.recoveryFailures.last, .recoveryEditRefused)
+        XCTAssertEqual(field.queuedText, 1, "A refused recovery must not queue a second text batch")
+        XCTAssertTrue(rig.converter.hasUnconfirmedAXEdit(in: field.focus()))
+        XCTAssertEqual(rig.converter.unconfirmedOriginals.first?.text, "ghbdtn")
     }
 
     @MainActor
@@ -1023,9 +1063,13 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         try rig.type("ghbd", source: rig.enToRu.sourceLayoutID)
         rig.sourceID = rig.enToRu.targetLayoutID
         rig.sourceOutcome = .unconfirmed
-        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome,
+        var diagnostics: [CombinedShiftDiagnostic] = []
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu,
+            onDiagnostic: { diagnostics.append($0) }).outcome,
             .sourceNotConfirmed(targetID: rig.enToRu.targetLayoutID,
                 sourceOutcome: .unconfirmed))
+        XCTAssertEqual(diagnostics, [.init(application: .textEdit,
+            operation: .word, result: .sourceUnconfirmed)])
         XCTAssertEqual(field.text, "прив")
         XCTAssertEqual(field.queuedText, 1)
         XCTAssertEqual(rig.sourceRequests, 1)
@@ -1040,10 +1084,45 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         let rig = try Rig(fields: [field])
         rig.sourceID = rig.enToRu.targetLayoutID
         rig.wholeObservationAvailable = false
-        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome, .stopped)
+        var diagnostics: [CombinedShiftDiagnostic] = []
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu,
+            onDiagnostic: { diagnostics.append($0) }).outcome, .stopped)
+        XCTAssertEqual(diagnostics, [.init(application: .textEdit,
+            operation: .selection, result: .refused)])
         XCTAssertEqual(field.text, "ghbdtn MacSwitcher")
         XCTAssertEqual(field.queuedText, 0)
         XCTAssertEqual(rig.sourceRequests, 0)
+    }
+
+    @MainActor
+    func testConfirmedNativeWordHasOneTerminalDiagnostic() throws {
+        let field = Field(pid: 5168, text: "ghbdtn")
+        let rig = try Rig(fields: [field])
+        try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+        rig.sourceID = rig.enToRu.targetLayoutID
+        var diagnostics: [CombinedShiftDiagnostic] = []
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu,
+            onDiagnostic: { diagnostics.append($0) }).outcome,
+            .confirmed(resultID: rig.enToRu.targetLayoutID))
+        XCTAssertEqual(diagnostics, [.init(application: .textEdit,
+            operation: .word, result: .confirmed)])
+    }
+
+    @MainActor
+    func testStaleTargetPIDCannotAttributeRefusalToPreviousApplication() throws {
+        let field = Field(pid: 5169, text: "ghbdtn MacSwitcher")
+        field.caret = 0
+        field.selection = field.text.utf16.count
+        let rig = try Rig(fields: [field])
+        rig.sourceID = rig.enToRu.targetLayoutID
+        let request = try rig.request(rig.enToRu)
+        rig.currentTargetPID = { 9999 }
+        var diagnostics: [CombinedShiftDiagnostic] = []
+        XCTAssertEqual(rig.run(request, direction: rig.enToRu,
+            onDiagnostic: { diagnostics.append($0) }).outcome, .stopped)
+        XCTAssertEqual(diagnostics, [.init(application: .other,
+            operation: .selection, result: .refused)])
+        XCTAssertEqual(field.queuedText, 0)
     }
 
     @MainActor
@@ -1180,6 +1259,42 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         XCTAssertEqual(rig.field.text, "ghbdtn",
             "The explicit undo keeps the current word unchanged until its boundary")
         XCTAssertEqual(rig.sourceID, rig.en)
+    }
+
+    @MainActor
+    func testFirstAutomaticUnknownReportsQueuedApplicationOnce() throws {
+        let rig = try AutoRig()
+        rig.coordinator.russianPriorityProvider = { true }
+        rig.field.dropInsertion = true
+        rig.deliver("f", source: rig.en)
+        rig.settle(expected: .textUnconfirmed)
+        XCTAssertEqual(rig.field.queuedText, 1)
+        XCTAssertEqual(rig.automaticUnknowns, [.textEdit])
+        XCTAssertTrue(rig.converter.hasUnconfirmedAXEdit(in: rig.field.focus()))
+    }
+
+    @MainActor
+    func testAutomaticDiagnosticsAddNoFrontmostReadOnSuccessOrOptOut() throws {
+        func run(dropInsertion: Bool, diagnosticsOn: Bool) throws -> (Int, [CombinedShiftApplicationFamily]) {
+            let rig = try AutoRig()
+            rig.diagnosticsOn = diagnosticsOn
+            rig.coordinator.russianPriorityProvider = { true }
+            rig.field.dropInsertion = dropInsertion
+            rig.deliver("f", source: rig.en)
+            rig.settle(expected: dropInsertion ? .textUnconfirmed : .applied)
+            return (rig.frontmostReads, rig.automaticUnknowns)
+        }
+        let successOn = try run(dropInsertion: false, diagnosticsOn: true)
+        let successOff = try run(dropInsertion: false, diagnosticsOn: false)
+        XCTAssertEqual(successOn.0, successOff.0)
+        XCTAssertTrue(successOn.1.isEmpty)
+        XCTAssertTrue(successOff.1.isEmpty)
+
+        let unknownOn = try run(dropInsertion: true, diagnosticsOn: true)
+        let unknownOff = try run(dropInsertion: true, diagnosticsOn: false)
+        XCTAssertEqual(unknownOn.0, unknownOff.0 + 1)
+        XCTAssertEqual(unknownOn.1, [.textEdit])
+        XCTAssertTrue(unknownOff.1.isEmpty)
     }
 
     @MainActor
