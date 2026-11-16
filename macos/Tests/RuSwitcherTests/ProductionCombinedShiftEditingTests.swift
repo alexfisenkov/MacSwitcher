@@ -133,7 +133,7 @@ final class ProductionCombinedShiftEditingTests: XCTestCase {
                               AutomaticEditorPolicy.route(bundleID: $0, suffix: $1, sourceID: $2)
                           }) -> TextConverter {
         TextConverter(selectionPreferences: { (false, true) },
-            nativeEditBoundary: { selected, original, replacement, execution, barrier, prepared, queued in
+            nativeEditBoundary: { selected, original, replacement, execution, barrier, prepared, queued, formattedStart, _, _, _ in
                 guard let field = fields.first(where: {
                     $0.pid == execution.focus.processID && CFEqual($0.element, execution.focus.element)
                 }) else { return .refused }
@@ -141,11 +141,11 @@ final class ProductionCombinedShiftEditingTests: XCTestCase {
                 if selected {
                     return VerifiedNativeFieldEditor.executeSelection(original: original.text,
                         replacement: replacement, start: original.range.location, access: access,
-                        onPrepared: prepared, onTextQueued: queued)
+                        onPrepared: prepared, onTextQueued: queued, formattedStart: formattedStart)
                 }
                 return VerifiedNativeFieldEditor.execute(original: original.text, replacement: replacement,
                     start: original.range.location, access: access,
-                    onPrepared: prepared, onTextQueued: queued)
+                    onPrepared: prepared, onTextQueued: queued, formattedStart: formattedStart)
             }, wholeFieldObservationOverride: { focus in
                 fields.first(where: {
                     $0.pid == focus.processID && CFEqual($0.element, focus.element) && $0.valid
@@ -554,7 +554,26 @@ final class ProductionCombinedShiftEditingTests: XCTestCase {
 
     func testDiagnosticApplicationFamilyContainsNoTypedContent() {
         XCTAssertEqual(CombinedShiftApplicationFamily.classify(bundleID: "com.apple.TextEdit"), .textEdit)
+        XCTAssertEqual(CombinedShiftApplicationFamily.classify(bundleID: "com.anthropic.claudefordesktop"), .claude)
+        XCTAssertEqual(CombinedShiftApplicationFamily.classify(bundleID: "com.example.claude-clone",
+            secondaryClaudeBundleID: "com.example.claude-clone"), .claudeSecondary)
+        XCTAssertEqual(CombinedShiftApplicationFamily.classify(bundleID: "com.example.claude-clone",
+            secondaryClaudeBundleID: "com.example.claude"), .other)
+        XCTAssertEqual(CombinedShiftApplicationFamily.classify(bundleID: "com.example.claude-clone",
+            secondaryClaudeBundleID: "COM.EXAMPLE.CLAUDE-CLONE"), .other)
+        XCTAssertEqual(CombinedShiftApplicationFamily.classify(bundleID: "com.apple.TextEdit",
+            secondaryClaudeBundleID: "com.apple.TextEdit"), .textEdit)
+        XCTAssertEqual(CombinedShiftApplicationFamily.classify(bundleID: "com.anthropic.claudefordesktop",
+            secondaryClaudeBundleID: "com.anthropic.claudefordesktop"), .claude)
+        XCTAssertEqual(CombinedShiftApplicationFamily.classify(bundleID: "com.example.claude-clone",
+            secondaryClaudeBundleID: " "), .other)
+        XCTAssertEqual(CombinedShiftApplicationFamily.classify(bundleID: "not a bundle id",
+            secondaryClaudeBundleID: "not a bundle id"), .other)
         XCTAssertEqual(CombinedShiftApplicationFamily.classify(bundleID: "com.openai.codex"), .codex)
+        XCTAssertEqual(CombinedShiftApplicationFamily.classify(bundleID: "com.microsoft.VSCode"), .vsCode)
+        XCTAssertEqual(CombinedShiftApplicationFamily.classify(bundleID: "com.microsoft.VSCode",
+            secondaryClaudeBundleID: "com.microsoft.VSCode"), .vsCode)
+        XCTAssertEqual(CombinedShiftApplicationFamily.classify(bundleID: "com.microsoft.VSCode-insiders"), .other)
         XCTAssertEqual(CombinedShiftApplicationFamily.classify(bundleID: "com.google.Chrome"), .chrome)
         XCTAssertEqual(CombinedShiftApplicationFamily.classify(bundleID: "com.apple.Safari"), .safari)
         XCTAssertEqual(CombinedShiftApplicationFamily.classify(bundleID: "org.mozilla.firefox"), .firefox)

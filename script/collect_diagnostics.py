@@ -20,7 +20,8 @@ CATEGORY = "Diagnostics"
 DOMAIN = "com.alexfisenkov.macswitcher"
 KEY = "com.macswitcher.metadataDiagnosticsEnabled"
 FAMILIES = frozenset(("textEdit", "codex", "browser", "chrome", "safari",
-                      "firefox", "edge", "telegram", "other"))
+                      "firefox", "edge", "telegram", "vsCode", "claude",
+                      "claudeSecondary", "other"))
 OPERATIONS = frozenset(("word", "selection", "undo", "recovery"))
 RESULTS = frozenset(("confirmed", "refused", "uncertain", "pending", "sourceUnconfirmed"))
 DOUBLE_EVENTS = frozenset((
@@ -33,6 +34,8 @@ DOUBLE_EVENTS = frozenset((
 FAILURES = frozenset((
     "selectionSourceMismatch", "selectionStateBlocked", "selectionTimeout",
     "selectionInvalidExecution", "selectionSnapshotMissing", "selectionFieldUnavailable",
+    "selectionCoordinateEvidenceUnavailable", "selectionCoordinateProjectionMismatch",
+    "selectionCoordinateEndpointUnproven",
     "selectionFieldMismatch", "selectionTextMismatch", "selectionPolicyNoChange",
     "selectionReplacementRejected", "selectionRevalidationFailed",
     "transactionCandidateUnavailable", "transactionInvalidExecution",

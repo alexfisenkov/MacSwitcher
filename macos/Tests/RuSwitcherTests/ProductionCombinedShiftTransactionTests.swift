@@ -72,7 +72,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
             if policyDelay > 0 { Thread.sleep(forTimeInterval: policyDelay) }
             return (false, true)
         }, nativeEditBoundary: { [unowned self] selected, original, replacement, execution,
-                barrier, prepared, queued in
+                barrier, prepared, queued, formattedStart, _, _, _ in
             guard let field = fields.first(where: {
                 $0.pid == execution.focus.processID && CFEqual($0.element, execution.focus.element)
             }) else { return .refused }
@@ -97,11 +97,11 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
             if selected {
                 return VerifiedNativeFieldEditor.executeSelection(original: original.text,
                     replacement: replacement, start: original.range.location, access: access,
-                    onPrepared: prepared, onTextQueued: queued)
+                    onPrepared: prepared, onTextQueued: queued, formattedStart: formattedStart)
             }
             return VerifiedNativeFieldEditor.execute(original: original.text,
                 replacement: replacement, start: original.range.location, access: access,
-                onPrepared: prepared, onTextQueued: queued)
+                onPrepared: prepared, onTextQueued: queued, formattedStart: formattedStart)
         }, wholeFieldObservationOverride: { [unowned self] focus in
             guard wholeObservationAvailable else { return nil }
             return fields.first(where: { $0.pid == focus.processID

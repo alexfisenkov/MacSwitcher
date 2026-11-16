@@ -62,20 +62,26 @@ enum VerifiedNativeFieldEditor {
     static func execute(original: String, replacement: String, start: Int,
                         access: NativeFieldAccess, absoluteDeadline: TimeInterval? = nil,
                         onPrepared: (NativeFieldObservation) -> Void = { _ in },
-                        onTextQueued: () -> Void = {}) -> VerifiedNativeFieldEditResult {
+                        onTextQueued: () -> Void = {},
+                        formattedStart: Int? = nil,
+                        resolvedFormattedStart: (() -> Int?)? = nil) -> VerifiedNativeFieldEditResult {
         execute(access: access, absoluteDeadline: absoluteDeadline, onPrepared: onPrepared,
                 onTextQueued: onTextQueued) { snapshot in
-            NativeFieldEditPlan.make(original: original, replacement: replacement, start: start, snapshot: snapshot)
+            NativeFieldEditPlan.make(original: original, replacement: replacement,
+                start: start, snapshot: snapshot,
+                formattedStart: resolvedFormattedStart?() ?? formattedStart)
         }
     }
 
     static func executeSelection(original: String, replacement: String, start: Int,
                                  access: NativeFieldAccess, absoluteDeadline: TimeInterval? = nil,
                                  onPrepared: (NativeFieldObservation) -> Void = { _ in },
-                                 onTextQueued: () -> Void = {}) -> VerifiedNativeFieldEditResult {
+                                 onTextQueued: () -> Void = {},
+                                 formattedStart: Int? = nil) -> VerifiedNativeFieldEditResult {
         execute(access: access, absoluteDeadline: absoluteDeadline, onPrepared: onPrepared,
                 onTextQueued: onTextQueued) { snapshot in
-            NativeFieldEditPlan.makeSelected(original: original, replacement: replacement, start: start, snapshot: snapshot)
+            NativeFieldEditPlan.makeSelected(original: original, replacement: replacement,
+                start: start, snapshot: snapshot, formattedStart: formattedStart)
         }
     }
 

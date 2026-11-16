@@ -459,9 +459,10 @@ final class PredictionCoordinator {
                 // This only runs for an unknown queued edit, after the input
                 // lease ends. Frontmost metadata is never read for successful edits.
                 let front = platform.frontmost()
-                let family = CombinedShiftApplicationFamily.classify(bundleID: front.bundleID,
+                let family = RuntimeDiagnostics.applicationFamily(bundleID: front.bundleID,
                     expectedProcessID: snapshot.processID, observedProcessID: front.processID,
-                    secureInputActive: platform.isSecure() || focus.processID != snapshot.processID)
+                    secureInputActive: platform.isSecure() || focus.processID != snapshot.processID,
+                    diagnosticsEnabled: true)
                 recordAutomaticUncertain(family)
             }
         }
