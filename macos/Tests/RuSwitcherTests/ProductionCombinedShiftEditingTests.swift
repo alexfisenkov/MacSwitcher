@@ -17,6 +17,7 @@ final class ProductionCombinedShiftEditingTests: XCTestCase {
         var readOnly = false
         var refuseBeforeQueue = false
         var dropInsertion = false
+        var reportWrongCaretAfterText = false
         var loseFocusAfterSelection = false
         var selectionPostDelay: TimeInterval = 0
         var leaseDeadline: TimeInterval = .infinity
@@ -79,10 +80,19 @@ final class ProductionCombinedShiftEditingTests: XCTestCase {
 
         @MainActor
         func access(replacement: String, barrier: @escaping () -> Bool) -> NativeFieldAccess {
-            NativeFieldAccess(validateOriginalIdentity: { [self] _ in active && !secure },
+            var textPosted = false
+            return NativeFieldAccess(validateOriginalIdentity: { [self] _ in active && !secure },
                 cheapGate: { [self] in active && barrier() },
                 isEditable: { [self] _ in active && !secure && !readOnly },
-                observe: { [self] _ in observedCount += 1; return active ? observation : nil },
+                observe: { [self] _ in
+                    observedCount += 1
+                    guard active else { return nil }
+                    let actual = observation
+                    return reportWrongCaretAfterText && textPosted
+                        ? NativeFieldObservation(text: actual.text,
+                            caretUTF16Location: max(0, actual.caretUTF16Location - 1),
+                            selectionLength: actual.selectionLength) : actual
+                },
                 postBatch: { [self] operations in
                     guard active && !refuseBeforeQueue else { return false }
                     let droppedReplacementBatch = dropInsertion && operations.contains(.insertReplacement)
@@ -116,6 +126,7 @@ final class ProductionCombinedShiftEditingTests: XCTestCase {
                         clock += selectionPostDelay
                         if loseFocusAfterSelection { valid = false }
                     }
+                    if operations.contains(.insertReplacement) { textPosted = true }
                     return true
                 },
                 cancelPreparedSelection: { [self] _ in

@@ -136,7 +136,9 @@ final class RichEditorSelectionTests: XCTestCase {
                            smartConversion: Bool = true,
                            beforeNativeObservation: (() -> Void)? = nil,
                            beforeNativePost: (() -> Void)? = nil,
-                           afterNativePost: (() -> Void)? = nil) -> TextConverter {
+                           afterNativePost: (() -> Void)? = nil,
+                           postTextWrongCaret: (() -> Bool)? = nil,
+                           postTextObservedOverride: (() -> String?)? = nil) -> TextConverter {
         TextConverter(selectionPreferences: { (convertByText, smartConversion) }, nativeEditBoundary: {
             selected, original, replacement, execution, barrier, prepared, queued, formattedStart,
             requiresEndpointWitness, allowCoordinateResolution, onResolvedFormattedStart in
@@ -164,7 +166,12 @@ final class RichEditorSelectionTests: XCTestCase {
                         beforeNativeObservation?()
                     }
                     guard base.observe(deadline) != nil else { return nil }
-                    let observed = self.observation(field)
+                    let exact = self.observation(field)
+                    let observed = NativeFieldObservation(
+                        text: textWasQueued ? (postTextObservedOverride?() ?? exact.text) : exact.text,
+                        caretUTF16Location: textWasQueued && postTextWrongCaret?() == true
+                            ? max(0, exact.caretUTF16Location - 1) : exact.caretUTF16Location,
+                        selectionLength: exact.selectionLength)
                     if !coordinateResolved {
                         guard let resolution = execution.focus.nativeCollapsedCoordinateResolution(
                             observed, rawStart: original.range.location,
@@ -738,6 +745,193 @@ final class RichEditorSelectionTests: XCTestCase {
         XCTAssertEqual(second.outcome, .stopped)
         XCTAssertEqual(field.queuedText, 1)
         XCTAssertEqual(field.text, "A\nghbdtn Z")
+    }
+
+    @MainActor
+    func testUnknownDeliveredWordCanReverseFromFreshCollapsedCaretExactlyOnce() throws {
+        let pair = try directions()
+        let field = Field(pid: 8830, text: "ghbdtn")
+        field.caret = field.text.utf16.count
+        var wrongACK = true
+        let converter = converter(field, postTextWrongCaret: { wrongACK })
+        let monitor = KeyboardMonitor()
+
+        let unknown = try run(field, monitor: monitor, converter: converter,
+            context: pair.context, sourceID: pair.ru)
+        XCTAssertEqual(unknown.outcome, .stopped)
+        XCTAssertEqual(field.text, "привет")
+        XCTAssertEqual(field.queuedText, 1)
+        XCTAssertTrue(converter.hasUnconfirmedAXEdit(in: field.focus()))
+        XCTAssertEqual(converter.unconfirmedOriginals.first?.text, "ghbdtn")
+
+        wrongACK = false
+        let recovery = try run(field, monitor: monitor, converter: converter,
+            context: pair.context.reversed, sourceID: pair.en)
+        XCTAssertEqual(recovery.outcome, .confirmed(resultID: pair.en))
+        XCTAssertEqual(field.text, "ghbdtn")
+        XCTAssertEqual(field.queuedText, 2)
+        XCTAssertFalse(converter.hasUnconfirmedAXEdit(in: field.focus()))
+
+        XCTAssertEqual(try run(field, monitor: monitor, converter: converter,
+            context: pair.context, sourceID: pair.ru).outcome,
+            .confirmed(resultID: pair.ru))
+        XCTAssertEqual(field.text, "привет")
+        XCTAssertEqual(try run(field, monitor: monitor, converter: converter,
+            context: pair.context.reversed, sourceID: pair.en).outcome,
+            .confirmed(resultID: pair.en))
+        XCTAssertEqual(field.text, "ghbdtn")
+        XCTAssertEqual(field.queuedText, 4)
+
+        field.type(" ghbdtn")
+        monitor.handleKeyDown(keyCode: KC.space, flags: [], renderedSourceLayoutID: pair.en)
+        for character in "ghbdtn" {
+            let code = try XCTUnwrap(KeyMapping.keycodeToEN.first { $0.value == character }?.key)
+            monitor.handleKeyDown(keyCode: code, flags: [], renderedSourceLayoutID: pair.en)
+        }
+        let next = try run(field, monitor: monitor, converter: converter,
+            context: pair.context, sourceID: pair.ru)
+        XCTAssertEqual(next.outcome, .confirmed(resultID: pair.ru))
+        XCTAssertEqual(field.text, "ghbdtn привет")
+        XCTAssertEqual(field.queuedText, 5)
+    }
+
+    @MainActor
+    func testStalePreEditTextDuringACKCanRecoverOnlyFromPlannedResult() throws {
+        let pair = try directions()
+        let field = Field(pid: 8836, text: "ghbdtn")
+        field.caret = field.text.utf16.count
+        var staleAXText = true
+        let converter = converter(field, postTextObservedOverride: {
+            staleAXText ? "ghbdtn" : nil
+        })
+        let monitor = KeyboardMonitor()
+
+        XCTAssertEqual(try run(field, monitor: monitor, converter: converter,
+            context: pair.context, sourceID: pair.ru).outcome, .stopped)
+        XCTAssertEqual(field.text, "привет")
+        XCTAssertEqual(field.queuedText, 1)
+        XCTAssertTrue(converter.hasUnconfirmedAXEdit(in: field.focus()))
+        staleAXText = false
+        XCTAssertEqual(try run(field, monitor: monitor, converter: converter,
+            context: pair.context.reversed, sourceID: pair.en).outcome,
+            .confirmed(resultID: pair.en))
+        XCTAssertEqual(field.text, "ghbdtn")
+        XCTAssertEqual(field.queuedText, 2)
+        XCTAssertFalse(converter.hasUnconfirmedAXEdit(in: field.focus()))
+    }
+
+    @MainActor
+    func testUnknownUndeliveredWordKeepsCollapsedFieldLocked() throws {
+        let pair = try directions()
+        let field = Field(pid: 8831, text: "ghbdtn")
+        field.caret = field.text.utf16.count
+        field.dropInsertion = true
+        let converter = converter(field)
+        let monitor = KeyboardMonitor()
+
+        XCTAssertEqual(try run(field, monitor: monitor, converter: converter,
+            context: pair.context, sourceID: pair.ru).outcome, .stopped)
+        XCTAssertEqual(field.queuedText, 1)
+        XCTAssertEqual(field.text, "ghbdtn")
+        field.dropInsertion = false
+        XCTAssertEqual(try run(field, monitor: monitor, converter: converter,
+            context: pair.context.reversed, sourceID: pair.en).outcome, .stopped)
+        XCTAssertEqual(field.queuedText, 1)
+        XCTAssertTrue(converter.hasUnconfirmedAXEdit(in: field.focus()))
+        XCTAssertEqual(converter.unconfirmedOriginals.first?.text, "ghbdtn")
+    }
+
+    @MainActor
+    func testUnknownProjectedWordRecoversWithSameCompleteFieldProof() throws {
+        let pair = try directions()
+        let field = Field(pid: 8832, text: "A\nghbdtn")
+        field.caret = field.text.utf16.count
+        var wrongACK = true
+        let converter = converter(field, postTextWrongCaret: { wrongACK })
+        let monitor = KeyboardMonitor()
+        let proof = syntheticParagraphProof(field)
+
+        XCTAssertEqual(try run(field, monitor: monitor, converter: converter,
+            context: pair.context, sourceID: pair.ru,
+            firstFocus: richFocus(field, paragraphBoundaryProof: proof)).outcome, .stopped)
+        XCTAssertEqual(field.text, "A\nпривет")
+        XCTAssertTrue(converter.hasUnconfirmedAXEdit(in: field.focus()))
+        wrongACK = false
+        XCTAssertEqual(try run(field, monitor: monitor, converter: converter,
+            context: pair.context.reversed, sourceID: pair.en,
+            firstFocus: richFocus(field, paragraphBoundaryProof: proof)).outcome,
+            .confirmed(resultID: pair.en))
+        XCTAssertEqual(field.text, "A\nghbdtn")
+        XCTAssertEqual(field.queuedText, 2)
+        XCTAssertFalse(converter.hasUnconfirmedAXEdit(in: field.focus()))
+    }
+
+    @MainActor
+    func testUnknownReverseCannotBeRepeatedAfterItsOwnMissingACK() throws {
+        let pair = try directions()
+        let field = Field(pid: 8833, text: "ghbdtn")
+        field.caret = field.text.utf16.count
+        var wrongACK = true
+        let converter = converter(field, postTextWrongCaret: { wrongACK })
+        let monitor = KeyboardMonitor()
+
+        XCTAssertEqual(try run(field, monitor: monitor, converter: converter,
+            context: pair.context, sourceID: pair.ru).outcome, .stopped)
+        XCTAssertEqual(field.text, "привет")
+        XCTAssertEqual(try run(field, monitor: monitor, converter: converter,
+            context: pair.context.reversed, sourceID: pair.en).outcome, .stopped)
+        XCTAssertEqual(field.text, "ghbdtn")
+        XCTAssertEqual(field.queuedText, 2)
+        XCTAssertEqual(converter.unconfirmedOriginals.first?.text, "ghbdtn")
+        wrongACK = false
+        XCTAssertEqual(try run(field, monitor: monitor, converter: converter,
+            context: pair.context.reversed, sourceID: pair.en).outcome, .stopped)
+        XCTAssertEqual(field.queuedText, 2)
+        XCTAssertTrue(converter.hasUnconfirmedAXEdit(in: field.focus()))
+    }
+
+    @MainActor
+    func testUnknownEquivalentButDifferentWholeTextCannotRecover() throws {
+        let pair = try directions()
+        let field = Field(pid: 8834, text: "Å ghbdtn")
+        field.caret = field.text.utf16.count
+        var wrongACK = true
+        let converter = converter(field, postTextWrongCaret: { wrongACK })
+        let monitor = KeyboardMonitor()
+
+        XCTAssertEqual(try run(field, monitor: monitor, converter: converter,
+            context: pair.context, sourceID: pair.ru).outcome, .stopped)
+        XCTAssertEqual(field.text, "Å привет")
+        wrongACK = false
+        field.text = "Å привет"
+        XCTAssertEqual(try run(field, monitor: monitor, converter: converter,
+            context: pair.context.reversed, sourceID: pair.en).outcome, .stopped)
+        XCTAssertEqual(field.queuedText, 1)
+        XCTAssertTrue(converter.hasUnconfirmedAXEdit(in: field.focus()))
+    }
+
+    @MainActor
+    func testUnknownRecoveryRechecksWholeFieldAtTransportAdmission() throws {
+        let pair = try directions()
+        let field = Field(pid: 8835, text: "ghbdtn Z")
+        field.caret = "ghbdtn".utf16.count
+        var wrongACK = true
+        var mutateAtRecovery = false
+        let converter = converter(field, beforeNativeObservation: {
+            if mutateAtRecovery { field.text = "привет Y" }
+        }, postTextWrongCaret: { wrongACK })
+        let monitor = KeyboardMonitor()
+
+        XCTAssertEqual(try run(field, monitor: monitor, converter: converter,
+            context: pair.context, sourceID: pair.ru).outcome, .stopped)
+        XCTAssertEqual(field.text, "привет Z")
+        wrongACK = false
+        mutateAtRecovery = true
+        XCTAssertEqual(try run(field, monitor: monitor, converter: converter,
+            context: pair.context.reversed, sourceID: pair.en).outcome, .stopped)
+        XCTAssertEqual(field.text, "привет Y")
+        XCTAssertEqual(field.queuedText, 1)
+        XCTAssertTrue(converter.hasUnconfirmedAXEdit(in: field.focus()))
     }
 
     @MainActor

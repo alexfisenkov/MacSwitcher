@@ -316,7 +316,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
             }
             let request = try XCTUnwrap(monitor.snapshotCombinedShiftRequest(action: .convert(direction),
                 frontProcessID: field.pid, focus: field.focus(), contextForSource: { contexts[$0] }))
-            XCTAssertTrue(request.reconvert)
+            XCTAssertTrue(request.reconvert || converter.hasUnconfirmedAXEdit(in: field.focus()))
             let execution = CombinedShiftExecutionContext(focus: try XCTUnwrap(request.focus),
                 inputRevision: request.inputRevision,
                 currentInputRevision: { [unowned self] in monitor.inputRevision })
@@ -938,16 +938,17 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         XCTAssertEqual(rig.converter.unconfirmedOriginals.count, 1,
             "A backed fresh field must keep its original in RAM for explicit reconversion")
 
-        // A fresh observation now reports the actual result/caret. This does
-        // not by itself authorize recovery from a collapsed caret.
+        // The result text has arrived, but the caret moved away from its
+        // planned endpoint. The collapsed shortcut must still refuse.
         rig.reportWrongCaretAfterText = false
         field.selection = 0
+        field.caret = 0
         rig.sourceID = rig.ruToEn.targetLayoutID // first solo of the next double
         XCTAssertEqual(rig.run(try rig.request(rig.ruToEn), direction: rig.ruToEn).outcome,
-            .stopped, "A collapsed caret cannot recover an uncertain whole-field write")
+            .stopped, "A moved caret cannot authorize collapsed recovery")
         XCTAssertEqual(field.queuedText, 1)
         XCTAssertTrue(rig.converter.hasUnconfirmedAXEdit(in: field.focus()))
-        XCTAssertEqual(rig.recoveryFailures.last, .recoverySelectionMissing)
+        XCTAssertEqual(rig.recoveryFailures.last, .recoverySelectionMismatch)
 
         // The user explicitly selects the exact observed result in the same AX
         // field. Only this fresh selection may restore the retained original.
@@ -1292,6 +1293,31 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         XCTAssertEqual(rig.field.queuedText, 1)
         XCTAssertEqual(rig.automaticUnknowns, [.textEdit])
         XCTAssertTrue(rig.converter.hasUnconfirmedAXEdit(in: rig.field.focus()))
+    }
+
+    @MainActor
+    func testAutomaticUnknownDeliveredWordRecoversAndNextWordCanAutoCorrect() throws {
+        let rig = try AutoRig()
+        _ = rig.coordinator
+        rig.field.reportWrongCaretAfterText = true
+        rig.deliver("ghbd", source: rig.en)
+        rig.settle(expected: .textUnconfirmed)
+        XCTAssertEqual(rig.field.text, "прив")
+        XCTAssertEqual(rig.field.queuedText, 1)
+        XCTAssertTrue(rig.converter.hasUnconfirmedAXEdit(in: rig.field.focus()))
+
+        rig.field.reportWrongCaretAfterText = false
+        XCTAssertEqual(try rig.undoByDoubleShift().outcome, .confirmed(resultID: rig.en))
+        XCTAssertEqual(rig.field.text, "ghbd")
+        XCTAssertEqual(rig.field.queuedText, 2)
+        XCTAssertFalse(rig.converter.hasUnconfirmedAXEdit(in: rig.field.focus()))
+
+        rig.deliver(" ", source: rig.en)
+        rig.settle(expected: .noProposal)
+        rig.deliver("ghbd", source: rig.en)
+        rig.settle(expected: .applied)
+        XCTAssertEqual(rig.field.text, "ghbd прив")
+        XCTAssertEqual(rig.field.queuedText, 3)
     }
 
     @MainActor
