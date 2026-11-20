@@ -34,3 +34,4 @@ windows/publish/
 # Per-machine learned words are private runtime data, never source fixtures.
 **/adaptive-rules.json
 **/adaptive-rules.json.*
+.aispa-work/
