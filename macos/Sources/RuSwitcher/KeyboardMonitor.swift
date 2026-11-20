@@ -787,6 +787,28 @@ final class KeyboardMonitor: @unchecked Sendable {
         return !admission.interrupted
     }
 
+    /// Runs the first-tap suffix read after the current key callback returns.
+    var suffixSnapshotScheduler: (@escaping @MainActor () -> Void) -> Void = { work in
+        DispatchQueue.main.async { MainActor.assumeIsolated { work() } }
+    }
+
+    /// Attaches a pending suffix snapshot to a collapsed first-tap focus and
+    /// schedules its single read. Nothing is read synchronously here.
+    func attachingSuffixSnapshot(_ focus: CombinedShiftFocus?,
+                                 read: @escaping @MainActor (CombinedShiftFocus)
+                                     -> (selection: CFRange?, text: String?) = CaretSuffixSnapshot.liveRead)
+        -> CombinedShiftFocus? {
+        guard let focus, let caret = focus.initialSelection, caret.length == 0 else { return focus }
+        let snapshot = CaretSuffixSnapshot()
+        suffixSnapshotScheduler {
+            snapshot.capture(caret: caret) { read(focus) }
+        }
+        return focus.with(suffixSnapshot: snapshot)
+    }
+
+    /// Closed-vocabulary sink for second taps that missed the double window.
+    var gestureMissRecorder: (RuntimeDiagnosticEvent) -> Void = RuntimeDiagnostics.record
+
     /// Production gesture state transition, shared by the tap callback and its
     /// raw-CGEvent regression tests. Context is captured only on a press.
     func recognizeCombinedShift(side: CombinedShiftGesture.Side, isPressed: Bool,
@@ -797,7 +819,13 @@ final class KeyboardMonitor: @unchecked Sendable {
             combinedShiftGesture.press(side, clock: clock, context: context)
             return nil
         }
-        return combinedShiftGesture.release(side, clock: clock)
+        let action = combinedShiftGesture.release(side, clock: clock)
+        switch combinedShiftGesture.lastMiss {
+        case .window?: gestureMissRecorder(.doubleWindowMissed)
+        case .arrivalSkew?: gestureMissRecorder(.doubleArrivalSkewRejected)
+        case nil: break
+        }
+        return action
     }
 
     func resetCombinedShift() {
@@ -876,7 +904,8 @@ final class KeyboardMonitor: @unchecked Sendable {
             // shortcuts, held Shift and the second tap perform no AX capture here.
             switch SearchOverlayTarget.capture(hostPID: frontPID) {
             case .absent:
-                focus = CombinedShiftFocus.capture(processID: frontPID)
+                // The suffix value read is scheduled after this callback returns.
+                focus = attachingSuffixSnapshot(CombinedShiftFocus.capture(processID: frontPID))
             case .unverified:
                 focus = nil  // never bind the underlay while search is visible
             case .verified(let target):

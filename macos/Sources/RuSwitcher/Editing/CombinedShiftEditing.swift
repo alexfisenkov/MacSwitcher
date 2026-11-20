@@ -99,6 +99,7 @@ enum CombinedShiftEditing {
                 return converter.undoConfirmedCorrection(receipt, execution: execution,
                     inputBarrierIsActive: inputBarrierIsActive) == .confirmed
             } else if case .staleAutomatic = automaticUndo {
+                converter.recordEditFailure(.staleAutomaticRequest)
                 return false
             } else if request.reconvert {
                 guard converter.hasReconversionState else {

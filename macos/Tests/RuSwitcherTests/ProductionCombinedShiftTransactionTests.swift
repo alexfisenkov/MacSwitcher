@@ -387,6 +387,27 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         XCTAssertEqual(rig.sourceRequests, 1)
     }
 
+    /// The production transaction starts the read-only late check after the
+    /// lease; a field that applies the text late is unlocked without a write.
+    @MainActor
+    func testTransactionConfirmsLateAppliedEditAfterLease() throws {
+        let field = Field(pid: 5150, text: "ghbdtn")
+        field.defersInsertion = true
+        let rig = try Rig(fields: [field])
+        try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+        let result = rig.run(try rig.request(rig.enToRu), direction: rig.enToRu)
+        XCTAssertEqual(result.outcome, .stopped)
+        XCTAssertTrue(rig.converter.hasUnconfirmedAXEdit(in: field.focus()))
+        let queued = (field.queuedText, field.queuedSelection)
+        field.applyDeferredInsertion()
+        XCTAssertEqual(field.text, "привет")
+        RunLoop.main.run(until: Date().addingTimeInterval(1.0))
+        XCTAssertFalse(rig.converter.hasUnconfirmedAXEdit(in: field.focus()))
+        XCTAssertEqual(field.queuedText, queued.0)
+        XCTAssertEqual(field.queuedSelection, queued.1)
+        XCTAssertEqual(rig.sourceRequests, 0, "the late check never selects an input source")
+    }
+
     @MainActor
     func testRepeatedWordUndoNextWordPauseAndFieldChange() throws {
         let first = Field(pid: 5102, text: "ghbdtn")

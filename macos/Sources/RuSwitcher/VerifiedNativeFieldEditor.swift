@@ -29,13 +29,20 @@ struct NativeFieldAccess {
     let cancelPreparedSelection: ((_ deadline: TimeInterval) -> Bool)?
     let now: () -> TimeInterval
     let pause: (TimeInterval) -> Void
+    /// Closed-vocabulary sinks; nil uses the opt-in process logger.
+    let recordFailure: ((RuntimeDiagnosticFailureReason) -> Void)?
+    let recordEvent: ((RuntimeDiagnosticEvent) -> Void)?
 
     init(validateOriginalIdentity: @escaping (TimeInterval) -> Bool,
          cheapGate: @escaping () -> Bool, isEditable: @escaping (TimeInterval) -> Bool,
          observe: @escaping (TimeInterval) -> NativeFieldObservation?,
          postBatch: @escaping ([NativeFieldEditOperation]) -> Bool,
          cancelPreparedSelection: ((TimeInterval) -> Bool)? = nil,
-         now: @escaping () -> TimeInterval, pause: @escaping (TimeInterval) -> Void) {
+         now: @escaping () -> TimeInterval, pause: @escaping (TimeInterval) -> Void,
+         recordFailure: ((RuntimeDiagnosticFailureReason) -> Void)? = nil,
+         recordEvent: ((RuntimeDiagnosticEvent) -> Void)? = nil) {
+        self.recordFailure = recordFailure
+        self.recordEvent = recordEvent
         self.validateOriginalIdentity = validateOriginalIdentity
         self.cheapGate = cheapGate
         self.isEditable = isEditable
@@ -90,10 +97,20 @@ enum VerifiedNativeFieldEditor {
                                 onTextQueued: () -> Void,
                                 planFrom: (NativeFieldObservation) -> Result<NativeFieldEditPlan, NativeFieldEditRefusal>)
         -> VerifiedNativeFieldEditResult {
+        // Every refusal names its stage once; no field text enters the code.
+        func refuse(_ reason: RuntimeDiagnosticFailureReason) -> VerifiedNativeFieldEditResult {
+            if let sink = access.recordFailure { sink(reason) } else { RuntimeDiagnostics.recordFailure(reason) }
+            return .refused
+        }
+        func record(_ event: RuntimeDiagnosticEvent) {
+            if let sink = access.recordEvent { sink(event) } else { RuntimeDiagnostics.record(event) }
+        }
         let started = access.now()
-        guard started.isFinite, started >= 0, (started + maximumDuration).isFinite else { return .refused }
+        guard started.isFinite, started >= 0, (started + maximumDuration).isFinite else { return refuse(.editorClockInvalid) }
         let deadline = absoluteDeadline ?? started + maximumDuration
-        guard deadline.isFinite, deadline > started, deadline <= started + maximumDuration else { return .refused }
+        guard deadline.isFinite, deadline > started, deadline <= started + maximumDuration else {
+            return refuse(.editorClockInvalid)
+        }
         let preparationDeadline = min(started + maximumPreparationDuration,
                                       started + max((deadline - started) * 0.4,
                                                     (deadline - started) - 0.070))
@@ -123,13 +140,23 @@ enum VerifiedNativeFieldEditor {
             lastValidatedObservation = valid ? observed : nil
             return (observed, valid)
         }
+        /// Text-free comparison of the last whole-field read at the ACK deadline.
+        func deadlineSubcode(expected: NativeFieldObservation,
+                             source: NativeFieldObservation) -> RuntimeDiagnosticEvent {
+            guard let last = lastObservation else { return .ackDeadlineOther }
+            if last.text.utf16.elementsEqual(source.text.utf16) { return .ackDeadlineSourceVisible }
+            if last.text.utf16.elementsEqual(expected.text.utf16) { return .ackDeadlineCaretOnly }
+            return .ackDeadlineOther
+        }
         func awaitExact(_ expected: NativeFieldObservation, until limit: TimeInterval,
-                        diagnoseFailure: Bool = false) -> Bool {
+                        diagnoseFailure: Bool = false,
+                        source: NativeFieldObservation? = nil) -> Bool {
             var lastObservationFailure: RuntimeDiagnosticEvent?
             func failed(_ reason: RuntimeDiagnosticEvent) -> Bool {
                 if diagnoseFailure {
-                    RuntimeDiagnostics.record(reason)
-                    if let lastObservationFailure { RuntimeDiagnostics.record(lastObservationFailure) }
+                    record(reason)
+                    if reason == .ackDeadline, let source { record(deadlineSubcode(expected: expected, source: source)) }
+                    if let lastObservationFailure { record(lastObservationFailure) }
                 }
                 return false
             }
@@ -162,16 +189,18 @@ enum VerifiedNativeFieldEditor {
             return failed(.ackObservationLimit)
         }
 
-        guard checkpoint(until: deadline), access.isEditable(deadline),
-              cheapCheckpoint(until: deadline) else { return .refused }
+        guard checkpoint(until: deadline) else { return refuse(.editorIdentityLost) }
+        guard access.isEditable(deadline) else { return refuse(.editorFieldNotEditable) }
+        guard cheapCheckpoint(until: deadline) else { return refuse(.editorIdentityLost) }
         let initial = read(until: deadline)
-        guard initial.valid, let snapshot = initial.value,
-              case .success(let plan) = planFrom(snapshot) else { return .refused }
+        guard initial.valid, let snapshot = initial.value else { return refuse(.editorFirstReadInvalid) }
+        guard case .success(let plan) = planFrom(snapshot) else { return refuse(.editorPlanRefused) }
         onPrepared(plan.originalSnapshot)
         let hasPreparation = !plan.preparationOperations.isEmpty
         let admissionDeadline = hasPreparation ? preparationDeadline : deadline
 
-        func cancelPreparation() -> VerifiedNativeFieldEditResult {
+        func cancelPreparation(_ reason: RuntimeDiagnosticFailureReason = .editorPreparationCancelled)
+            -> VerifiedNativeFieldEditResult {
             // No text has been queued. Cleanup is preallocated non-text
             // navigation to the captured PID, under the remaining fence budget.
             // Never post it after losing exact-field identity. Refused means no
@@ -189,17 +218,19 @@ enum VerifiedNativeFieldEditor {
                 return .preparationUncertain(observation: lastObservation)
             }
             return awaitExact(plan.originalSnapshot, until: deadline)
-                ? .refused : .preparationUncertain(observation: lastObservation)
+                ? refuse(reason) : .preparationUncertain(observation: lastObservation)
         }
 
-        guard cheapCheckpoint(until: admissionDeadline), access.isEditable(admissionDeadline),
-              cheapCheckpoint(until: admissionDeadline) else { return .refused }
+        guard cheapCheckpoint(until: admissionDeadline) else { return refuse(.editorIdentityLost) }
+        guard access.isEditable(admissionDeadline) else { return refuse(.editorFieldNotEditable) }
+        guard cheapCheckpoint(until: admissionDeadline) else { return refuse(.editorIdentityLost) }
         let before = read(until: admissionDeadline)
-        guard before.valid, before.value == plan.originalSnapshot,
-              cheapCheckpoint(until: admissionDeadline) else { return .refused }
+        guard before.valid else { return refuse(.editorIdentityLost) }
+        guard before.value == plan.originalSnapshot else { return refuse(.editorFieldChanged) }
+        guard cheapCheckpoint(until: admissionDeadline) else { return refuse(.editorIdentityLost) }
 
         if hasPreparation {
-            guard access.postBatch(plan.preparationOperations) else { return .refused }
+            guard access.postBatch(plan.preparationOperations) else { return refuse(.editorPreparationNotQueued) }
             guard awaitExact(plan.preparedSnapshot, until: preparationDeadline) else { return cancelPreparation() }
             // A programmatic A→B switch during selection must be caught before
             // any Unicode is sent. The full selected original is checked again.
@@ -210,13 +241,15 @@ enum VerifiedNativeFieldEditor {
                   cheapCheckpoint(until: admissionDeadline) else { return cancelPreparation() }
         }
         guard access.postBatch(plan.replacementOperations) else {
-            return hasPreparation ? cancelPreparation() : .refused
+            return hasPreparation ? cancelPreparation(.editorReplacementNotQueued)
+                : refuse(.editorReplacementNotQueued)
         }
         // This receipt is about data queued, never observed delivery. Callers
         // must wait for the exact result before selecting a new input source.
         onTextQueued()
         return awaitExact(plan.resultSnapshot, until: deadline,
-            diagnoseFailure: RuntimeDiagnostics.enabled)
+            diagnoseFailure: RuntimeDiagnostics.enabled || access.recordEvent != nil,
+            source: plan.originalSnapshot)
             ? .confirmed : .uncertain(observation: lastObservation)
     }
 }

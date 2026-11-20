@@ -285,6 +285,106 @@ final class TextConverter {
     private let wholeFieldObservationOverride: ((CombinedShiftFocus) -> NativeFieldObservation?)?
     private let automaticRoute: (String?, String, String) -> AutomaticEditorRoute
     private let recoveryFailureRecorder: (RuntimeDiagnosticFailureReason) -> Void
+    /// Closed refusal stages of the native edit path. Each gesture may record its own.
+    private let editFailureRecorder: (RuntimeDiagnosticFailureReason) -> Void
+    private let editEventRecorder: (RuntimeDiagnosticEvent) -> Void
+    /// Field-lock events already written by the current manual gesture; nil outside one.
+    private var gestureLockEvents: Set<RuntimeDiagnosticEvent>?
+
+    /// Opens one manual gesture's diagnostic scope: a field lock is then
+    /// written once per gesture, however many checks observe it.
+    func beginDiagnosticGesture() {
+        gestureLockEvents = []
+        // A new gesture cancels the previous read-only late check.
+        lateAcknowledgementCheck?.cancel()
+        lateAcknowledgementCheck = nil
+        lateAcknowledgementCandidate = nil
+    }
+    func endDiagnosticGesture() { gestureLockEvents = nil }
+
+    func recordEditFailure(_ reason: RuntimeDiagnosticFailureReason) { editFailureRecorder(reason) }
+
+    /// Starts the read-only late-acknowledgement check for this gesture's
+    /// uncertain edit. Returns false when there is no exact candidate.
+    @discardableResult
+    func scheduleLateAcknowledgement(execution: CombinedShiftExecutionContext,
+                                     read: @escaping () -> NativeFieldObservation?,
+                                     schedule: LateAcknowledgementCheck.Scheduler = LateAcknowledgementCheck.mainQueue,
+                                     onConfirmed: @escaping @MainActor () -> Void) -> Bool {
+        guard let candidate = lateAcknowledgementCandidate,
+              candidate.focus.processID == execution.focus.processID,
+              CFEqual(candidate.focus.element, execution.focus.element),
+              candidate.inputRevision == execution.inputRevision else { return false }
+        lateAcknowledgementCandidate = nil
+        let check = LateAcknowledgementCheck()
+        lateAcknowledgementCheck = check
+        let isCurrent = { [weak self] () -> Bool in
+            guard let self else { return false }
+            return self.unconfirmedAXEdits.contains { $0.id == candidate.id
+                && $0.focus.processID == candidate.focus.processID
+                && CFEqual($0.focus.element, candidate.focus.element) }
+                && execution.validationFailure() == nil
+        }
+        check.start(.init(expected: candidate.expected, read: read, isCurrent: isCurrent),
+                    schedule: schedule) { [weak self] in
+            guard let self, self.confirmLateAcknowledgement(candidate) else { return }
+            onConfirmed()
+        }
+        return true
+    }
+
+    /// Exact evidence of the uncertain edit's planned result. Text stays in RAM
+    /// only, like the retained recovery source; nothing here is logged.
+    private struct LateAcknowledgementCandidate {
+        let id: UUID
+        let focus: CombinedShiftFocus
+        let inputRevision: UInt64
+        let original: CombinedShiftSelectionSnapshot
+        let replacement: String
+        let selected: Bool
+        let context: CombinedShiftContext?
+        let layouts: (source: String, target: String)?
+        let formattedStart: Int?
+        let before: NativeFieldObservation
+        let expected: NativeFieldObservation
+    }
+    private var lateAcknowledgementCandidate: LateAcknowledgementCandidate?
+    private var lateAcknowledgementCheck: LateAcknowledgementCheck?
+
+    /// Releases the exact field lock and arms the ordinary repeat for the
+    /// observed result. No field, clipboard or input-source write happens here.
+    private func confirmLateAcknowledgement(_ candidate: LateAcknowledgementCandidate) -> Bool {
+        guard let index = unconfirmedAXEdits.firstIndex(where: { $0.id == candidate.id }) else { return false }
+        unconfirmedAXEdits.remove(at: index)
+        confirmedNativeField = ConfirmedNativeField(focus: candidate.focus, original: candidate.original.text,
+            replacement: candidate.replacement, before: candidate.before, after: candidate.expected)
+        if candidate.selected {
+            commitAXEdit(original: candidate.original, replacement: candidate.replacement, focus: candidate.focus,
+                context: candidate.context, layouts: candidate.layouts, formattedStart: candidate.formattedStart)
+        } else {
+            lastOriginal = candidate.original.text
+            lastConverted = candidate.replacement
+            lastWasBuffer = true
+            lastWasAXEdit = false
+            predictionLayouts = candidate.layouts
+            lastLayoutContext = candidate.context
+            lastSelectionOrigin = candidate.focus
+            lastSelectionRange = CFRange(location: candidate.original.range.location,
+                length: candidate.replacement.utf16.count)
+            lastProjectedFormattedStart = candidate.formattedStart
+            lastProjectedAfter = candidate.formattedStart == nil ? nil : ProjectedFieldReceipt(candidate.expected)
+            lastProjectedEndpointWitness = false
+        }
+        editEventRecorder(.ackLateConfirmed)
+        return true
+    }
+
+    private func recordFieldLock(_ event: RuntimeDiagnosticEvent) {
+        guard var seen = gestureLockEvents else { RuntimeDiagnostics.record(event); return }
+        guard seen.insert(event).inserted else { return }
+        gestureLockEvents = seen
+        editEventRecorder(event)
+    }
     /// A read-only preference boundary lets tests exercise the production
     /// selection path without changing the owner's saved application settings.
     private let selectionPreferences: () -> (convertByText: Bool, smartConversion: Bool)
@@ -296,7 +396,11 @@ final class TextConverter {
        wholeFieldObservationOverride: ((CombinedShiftFocus) -> NativeFieldObservation?)? = nil,
        automaticRoute: @escaping (String?, String, String) -> AutomaticEditorRoute = {
            AutomaticEditorPolicy.route(bundleID: $0, suffix: $1, sourceID: $2)
-       }, recoveryFailureRecorder: @escaping (RuntimeDiagnosticFailureReason) -> Void = RuntimeDiagnostics.recordFailure) {
+       }, recoveryFailureRecorder: @escaping (RuntimeDiagnosticFailureReason) -> Void = RuntimeDiagnostics.recordFailure,
+       editFailureRecorder: @escaping (RuntimeDiagnosticFailureReason) -> Void = RuntimeDiagnostics.recordFailure,
+       editEventRecorder: @escaping (RuntimeDiagnosticEvent) -> Void = RuntimeDiagnostics.recordRepeatable) {
+        self.editFailureRecorder = editFailureRecorder
+        self.editEventRecorder = editEventRecorder
         self.selectionPreferences = selectionPreferences
         self.nativeEditBoundary = nativeEditBoundary
         self.wholeFieldObservationOverride = wholeFieldObservationOverride
@@ -462,7 +566,7 @@ final class TextConverter {
     func hasUnconfirmedAXEdit(in focus: CombinedShiftFocus) -> Bool {
         let blocked = unconfirmedAXEdits.contains { $0.focus.processID == focus.processID && CFEqual($0.focus.element, focus.element) }
             || archivedAXFields.contains { $0.focus.processID == focus.processID && CFEqual($0.focus.element, focus.element) }
-        if blocked { RuntimeDiagnostics.record(.recoverySameFieldBlocked) }
+        if blocked { recordFieldLock(.recoverySameFieldBlocked) }
         return blocked
     }
     private func ensureRecoveryCapacity(_ proposed: Int, replacing focus: CombinedShiftFocus? = nil) -> Bool {
@@ -526,7 +630,7 @@ final class TextConverter {
             else { RuntimeDiagnostics.record(.nativeAutoBlocked); return false }
         }
         guard !hasUnconfirmedAXEdit(in: execution.focus) else {
-            RuntimeDiagnostics.record(.unconfirmedEditBlocked); return false
+            recordFieldLock(.unconfirmedEditBlocked); return false
         }
         guard !isConverting, original != replacement, !sourceLayoutID.isEmpty, !resultLayoutID.isEmpty,
               let caret = execution.focus.initialSelection, caret.length == 0,
@@ -537,7 +641,7 @@ final class TextConverter {
         let recoveryUnits = usesNative ? NativeFieldEditPlan.maximumFieldUnits * 2
             : original.utf16.count + replacement.utf16.count
         guard ensureRecoveryCapacity(recoveryUnits) else {
-            RuntimeDiagnostics.record(.unconfirmedEditBlocked); return false
+            recordFieldLock(.unconfirmedEditBlocked); return false
         }
         isConverting = true
         defer { isConverting = false }
@@ -1042,7 +1146,7 @@ final class TextConverter {
             return recoverUnconfirmedAXEdit(execution: execution, inputBarrierIsActive: inputBarrierIsActive)
         }
         guard ensureRecoveryCapacity(0) else {
-            RuntimeDiagnostics.record(.unconfirmedEditBlocked); return false
+            recordFieldLock(.unconfirmedEditBlocked); return false
         }
         if inputBarrierIsActive != nil {
             guard let selection = execution.focus.initialSelection, selection.length > 0,
@@ -1095,7 +1199,7 @@ final class TextConverter {
         }
         guard replacement != original.text, !replacement.isEmpty else { return false }
         guard ensureRecoveryCapacity(original.text.utf16.count + replacement.utf16.count) else {
-            RuntimeDiagnostics.record(.unconfirmedEditBlocked); return false
+            recordFieldLock(.unconfirmedEditBlocked); return false
         }
         isConverting = true
         defer { isConverting = false }
@@ -1155,7 +1259,7 @@ final class TextConverter {
 
     /// A supplied input lease selects only verified native editing. Refusal or
     /// uncertainty never authorizes an AX setter, clipboard or delete-first batch.
-    private func replaceNativeRange(original: CombinedShiftSelectionSnapshot, replacement: String,
+    private func replaceNativeRange(original requested: CombinedShiftSelectionSnapshot, replacement: String,
                                     expectedSelection: CFRange, execution: CombinedShiftExecutionContext,
                                     inputBarrierIsActive: @escaping () -> Bool,
                                     context: CombinedShiftContext?, layouts: (source: String, target: String)?,
@@ -1165,32 +1269,67 @@ final class TextConverter {
                                     expectedBaseline: NativeFieldObservation? = nil,
                                     onResolvedFormattedStart: @escaping (Int) -> Void = { _ in },
                                     preservedOriginal: UnconfirmedAXEdit? = nil,
+                                    onReanchored: (CombinedShiftSelectionSnapshot) -> Void = { _ in },
                                     onConfirmedField: ((NativeFieldObservation, NativeFieldObservation) -> Void)? = nil)
                                     -> CombinedShiftAXEditResult {
-        guard inputBarrierIsActive(), !original.text.isEmpty, !replacement.isEmpty else { return .refused }
-        guard !requiresEndpointWitness || formattedStart != nil else { return .refused }
+        func refuse(_ reason: RuntimeDiagnosticFailureReason) -> CombinedShiftAXEditResult {
+            editFailureRecorder(reason)
+            return .refused
+        }
+        guard inputBarrierIsActive(), !requested.text.isEmpty, !replacement.isEmpty else {
+            return refuse(.editBarrierInactive)
+        }
+        guard !requiresEndpointWitness || formattedStart != nil else { return refuse(.editEndpointWitnessMissing) }
         if let preservedOriginal {
             guard preservedOriginal.focus.processID == execution.focus.processID,
-                  CFEqual(preservedOriginal.focus.element, execution.focus.element) else { return .refused }
+                  CFEqual(preservedOriginal.focus.element, execution.focus.element) else {
+                return refuse(.editPreservedFieldMismatch)
+            }
         } else {
             guard !hasUnconfirmedAXEdit(in: execution.focus) else {
-                RuntimeDiagnostics.record(.unconfirmedEditBlocked); return .refused
+                recordFieldLock(.unconfirmedEditBlocked); return .refused
             }
         }
         guard ensureRecoveryCapacity(NativeFieldEditPlan.maximumFieldUnits * 2,
             replacing: preservedOriginal?.focus) else {
-            RuntimeDiagnostics.record(.unconfirmedEditBlocked); return .refused
+            recordFieldLock(.unconfirmedEditBlocked); return .refused
         }
-        guard hasSafeNativeEditBudget else { return .refused }
-        guard execution.focus.setMessagingTimeout(nativeAXTimeout) == .success else { return .refused }
+        guard hasSafeNativeEditBudget else { return refuse(.editBudgetExhausted) }
+        guard execution.focus.setMessagingTimeout(nativeAXTimeout) == .success else {
+            return refuse(.editTimeoutUnavailable)
+        }
         defer { _ = execution.focus.setMessagingTimeout(0.05) }
-        guard let current = execution.focus.selectionRange(),
-              current.location == expectedSelection.location, current.length == expectedSelection.length,
-              inputBarrierIsActive() else { return .refused }
+        guard let current = execution.focus.selectionRange(), inputBarrierIsActive() else {
+            return refuse(.editSelectionDrifted)
+        }
+        let original: CombinedShiftSelectionSnapshot
+        if current.location == expectedSelection.location, current.length == expectedSelection.length {
+            original = requested
+        } else if expectedSelection.length == 0,
+                  expectedSelection.location == requested.range.location + requested.range.length {
+            // A collapsed word caret drifted. Only the owner-approved forward
+            // re-anchor may move the range; everything after it is unchanged.
+            // Without the first-tap suffix snapshot the alpha.36 refusal stays.
+            guard let snapshotSuffix = execution.focus.suffixSnapshot?.suffix else {
+                return refuse(.editSelectionDrifted)
+            }
+            guard let anchored = reanchoredOriginal(requested, snapshotCaret: expectedSelection.location,
+                      snapshotSuffix: snapshotSuffix,
+                      live: current, execution: execution, inputBarrierIsActive: inputBarrierIsActive,
+                      eligible: preservedOriginal == nil && formattedStart == nil
+                          && !requiresEndpointWitness && expectedBaseline == nil) else {
+                return refuse(.caretReanchorRefused)
+            }
+            original = anchored
+            onReanchored(anchored)
+            editEventRecorder(.doubleCaretReanchored)
+        } else {
+            return refuse(.editSelectionDrifted)
+        }
         let selected = current.location == original.range.location && current.length == original.range.length
         let collapsedSuffix = current.length == 0
             && current.location == original.range.location + original.range.length
-        guard selected || collapsedSuffix else { return .refused }
+        guard selected || collapsedSuffix else { return refuse(.editSelectionShapeInvalid) }
         var prepared: NativeFieldObservation?
         var resolvedFormattedStart = formattedStart
         var retainedSource: CombinedShiftSelectionSnapshot?
@@ -1219,7 +1358,7 @@ final class TextConverter {
             guard let target = layouts?.target ?? context?.targetLayoutID, !target.isEmpty else { return }
             self?.nativeTextQueuedHandler?(target)
         }
-        guard hasSafeNativeEditBudget else { return .refused }
+        guard hasSafeNativeEditBudget else { return refuse(.editBudgetExhausted) }
         if let nativeEditBoundary {
             result = nativeEditBoundary(selected, original, replacement, execution,
                 leasedGate, prepare, textQueued, formattedStart, requiresEndpointWitness,
@@ -1271,10 +1410,12 @@ final class TextConverter {
             return .confirmed
         case .uncertain(let observation):
             guard let prepared, let wholeSource = retainedSource else {
+                editFailureRecorder(.editSourceUnretained)
                 return .unknown
             }
             let actual = observation ?? prepared
             var plannedReverse: UnconfirmedAXEdit.PlannedReverse?
+            var plannedResult: NativeFieldObservation?
             if preservedOriginal == nil {
                 let forward = selected
                     ? NativeFieldEditPlan.makeSelected(original: original.text,
@@ -1299,6 +1440,7 @@ final class TextConverter {
                             || projected.unambiguousFormattedCaret(
                                 rawLocation: plan.resultSnapshot.caretUTF16Location) == nil
                     }
+                    plannedResult = plan.resultSnapshot
                     plannedReverse = UnconfirmedAXEdit.PlannedReverse(
                         after: ProjectedFieldReceipt(plan.resultSnapshot),
                         rawStart: original.range.location,
@@ -1309,15 +1451,44 @@ final class TextConverter {
             }
             // Repeated uncertain recovery keeps the first source forever. Only
             // the last actual observation is replaced; predictions are not evidence.
+            let retainedID = preservedOriginal?.id ?? UUID()
             retainUnconfirmed(UnconfirmedAXEdit(focus: execution.focus, original: wholeSource,
                 replacement: actual.text,
                 layoutContext: preservedOriginal?.layoutContext ?? context,
                 predictionLayouts: preservedOriginal?.predictionLayouts ?? layouts,
                 requiresExplicitSelection: true, lastNativeObservation: actual,
                 plannedReverse: plannedReverse,
-                id: preservedOriginal?.id ?? UUID(), archive: preservedOriginal?.archive))
+                id: retainedID, archive: preservedOriginal?.archive))
+            if plannedReverse != nil, let plannedResult {
+                // Only a first forward edit with an exact planned result may be
+                // confirmed late, and only by the read-only check after the lease.
+                lateAcknowledgementCandidate = LateAcknowledgementCandidate(id: retainedID,
+                    focus: execution.focus, inputRevision: execution.inputRevision,
+                    original: original, replacement: replacement, selected: selected,
+                    context: context, layouts: layouts, formattedStart: resolvedFormattedStart,
+                    before: prepared, expected: plannedResult)
+            }
             return .unknown
         }
+    }
+
+    /// Two consecutive read-only whole-field observations under the same lease
+    /// decide the forward re-anchor. No field write happens here.
+    private func reanchoredOriginal(_ requested: CombinedShiftSelectionSnapshot, snapshotCaret: Int,
+                                    snapshotSuffix: String, live: CFRange, execution: CombinedShiftExecutionContext,
+                                    inputBarrierIsActive: () -> Bool, eligible: Bool) -> CombinedShiftSelectionSnapshot? {
+        guard eligible, live.length == 0, live.location > snapshotCaret else { return nil }
+        let revisionUnchanged = { execution.inputRevision == execution.currentInputRevision() }
+        guard revisionUnchanged(), inputBarrierIsActive() else { return nil }
+        let first = wholeFieldObservation(focus: execution.focus)
+        let second = wholeFieldObservation(focus: execution.focus)
+        guard let range = CaretReanchor.range(original: requested.text, snapshotCaret: snapshotCaret,
+                  liveCaret: live, first: first, second: second,
+                  revisionUnchanged: revisionUnchanged(), snapshotSuffix: snapshotSuffix),
+              let after = execution.focus.selectionRange(),
+              after.location == live.location, after.length == live.length,
+              revisionUnchanged(), inputBarrierIsActive() else { return nil }
+        return CombinedShiftSelectionSnapshot(range: range, text: requested.text)
     }
 
     private func commitAXEdit(original: CombinedShiftSelectionSnapshot, replacement: String,
@@ -2552,6 +2723,7 @@ final class TextConverter {
                 RuntimeDiagnostics.recordFailure(.wordNativeSnapshotInvalid); return false
             }
             var committedFormattedStart = formattedStart
+            var anchoredSnapshot = snapshot
             isConverting = true
             defer { isConverting = false }
             guard replaceNativeRange(original: snapshot, replacement: replacement, expectedSelection: caret,
@@ -2561,9 +2733,10 @@ final class TextConverter {
                 requiresEndpointWitness: requiresEndpointWitness,
                 allowCoordinateResolution: allowCoordinateResolution,
                 expectedBaseline: expectedBaseline,
-                onResolvedFormattedStart: { committedFormattedStart = $0 }) == .confirmed else { return false }
+                onResolvedFormattedStart: { committedFormattedStart = $0 },
+                onReanchored: { anchoredSnapshot = $0 }) == .confirmed else { return false }
             lastSelectionOrigin = execution.focus
-            lastSelectionRange = CFRange(location: snapshot.range.location, length: replacement.utf16.count)
+            lastSelectionRange = CFRange(location: anchoredSnapshot.range.location, length: replacement.utf16.count)
             lastProjectedFormattedStart = committedFormattedStart
             lastProjectedAfter = committedFormattedStart == nil ? nil
                 : (confirmedNativeField?.after).map(ProjectedFieldReceipt.init)
@@ -2572,7 +2745,7 @@ final class TextConverter {
                let projected = NativeSelectedTextProjection(formatted: before.text,
                    flat: before.text.replacingOccurrences(of: "\n", with: "")) {
                 lastProjectedEndpointWitness = projected.unambiguousFormattedCaret(
-                    rawLocation: snapshot.range.location) == nil
+                    rawLocation: anchoredSnapshot.range.location) == nil
                     && committedFormattedStart >= 0
             } else {
                 lastProjectedEndpointWitness = false

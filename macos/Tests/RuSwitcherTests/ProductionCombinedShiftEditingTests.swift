@@ -28,6 +28,19 @@ final class ProductionCombinedShiftEditingTests: XCTestCase {
         var substringReadDelay: TimeInterval = 0
         var subrole: (AXError, AnyObject?) = (.attributeUnsupported, nil)
         var queuedLayoutTargets: [String] = []
+        /// Opt-in capture of the editor's closed diagnostic codes.
+        var capturesEditorDiagnostics = false
+        var editorFailures: [RuntimeDiagnosticFailureReason] = []
+        var editorEvents: [RuntimeDiagnosticEvent] = []
+        /// Synthetic late editor: the queued replacement lands only on applyDeferredInsertion().
+        var defersInsertion = false
+        private var deferredInsertion: String?
+
+        func applyDeferredInsertion() {
+            guard let replacement = deferredInsertion else { return }
+            deferredInsertion = nil
+            insert(replacement)
+        }
 
         init(pid: Int32, text: String, element: AXUIElement? = nil) {
             self.pid = pid
@@ -95,7 +108,9 @@ final class ProductionCombinedShiftEditingTests: XCTestCase {
                 },
                 postBatch: { [self] operations in
                     guard active && !refuseBeforeQueue else { return false }
-                    let droppedReplacementBatch = dropInsertion && operations.contains(.insertReplacement)
+                    // A deferred batch lands later as one unit (insert over the prepared selection).
+                    let droppedReplacementBatch = (dropInsertion || defersInsertion)
+                        && operations.contains(.insertReplacement)
                     for operation in operations {
                         switch operation {
                         case .selectPreviousCharacter:
@@ -105,7 +120,8 @@ final class ProductionCombinedShiftEditingTests: XCTestCase {
                             queuedSelection += 1
                         case .insertReplacement:
                             queuedText += 1
-                            if !dropInsertion { insert(replacement) }
+                            if defersInsertion { deferredInsertion = replacement }
+                            else if !dropInsertion { insert(replacement) }
                         case .right:
                             if droppedReplacementBatch { continue }
                             caret += selection
@@ -134,7 +150,9 @@ final class ProductionCombinedShiftEditingTests: XCTestCase {
                     caret += selection
                     selection = 0
                     return true
-                }, now: { [self] in clock }, pause: { [self] interval in clock += interval })
+                }, now: { [self] in clock }, pause: { [self] interval in clock += interval },
+                recordFailure: capturesEditorDiagnostics ? { [self] in editorFailures.append($0) } : nil,
+                recordEvent: capturesEditorDiagnostics ? { [self] in editorEvents.append($0) } : nil)
         }
     }
 

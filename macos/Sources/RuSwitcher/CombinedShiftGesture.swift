@@ -36,8 +36,12 @@ struct CombinedShiftGesture {
         let clock: KeyboardInputClock
         let context: CombinedShiftContext
     }
+    /// Observation only: why the last release after a first tap was not a double.
+    enum Miss: Equatable, Sendable { case window, arrivalSkew }
+
     private var pressed: Press?
     private var firstTap: Tap?
+    private(set) var lastMiss: Miss?
     private let soloLimit: UInt64 = 250_000_000
     // Small callback scheduling skew is allowed only when the event clock advances.
     private static let maximumArrivalSkew: UInt64 = 50_000_000
@@ -65,6 +69,7 @@ struct CombinedShiftGesture {
     }
 
     mutating func release(_ side: Side, clock: KeyboardInputClock) -> Action? {
+        lastMiss = nil
         guard let press = pressed, press.side == side,
               Self.qualifiedHold(clock, after: press.clock, limit: soloLimit) else {
             interrupt()
@@ -75,6 +80,9 @@ struct CombinedShiftGesture {
            Self.within(clock, after: first.clock, limit: configuration.doubleWindowNanoseconds) {
             firstTap = nil
             return .convert(first.context)  // no second generic layout toggle
+        }
+        if let first = firstTap {
+            lastMiss = Self.miss(clock, after: first.clock, limit: configuration.doubleWindowNanoseconds)
         }
         firstTap = Tap(clock: clock, context: press.context)
         return .switchLayout(press.context)  // no wait to discover whether another tap follows
@@ -96,6 +104,24 @@ struct CombinedShiftGesture {
             return arrivalGap <= eventGap + maximumArrivalSkew
         }
         return arrivalGap <= limit
+    }
+
+    /// Seconds-apart solos are deliberate switches, not near misses.
+    private static let nearMissLimit: UInt64 = 1_000_000_000
+
+    /// Explains a rejected second tap for diagnostics. It never changes the action.
+    private static func miss(_ later: KeyboardInputClock, after earlier: KeyboardInputClock,
+                             limit: UInt64) -> Miss? {
+        guard later.receivedAt >= earlier.receivedAt else { return nil }
+        let arrivalGap = later.receivedAt - earlier.receivedAt
+        var gap = arrivalGap
+        if let previous = earlier.eventTimestamp, let current = later.eventTimestamp,
+           current > previous {
+            let eventGap = current - previous
+            if eventGap <= limit, arrivalGap > eventGap + maximumArrivalSkew { return .arrivalSkew }
+            gap = eventGap
+        }
+        return gap > limit && gap <= nearMissLimit ? .window : nil
     }
 
     private static func qualifiedHold(_ release: KeyboardInputClock, after press: KeyboardInputClock,

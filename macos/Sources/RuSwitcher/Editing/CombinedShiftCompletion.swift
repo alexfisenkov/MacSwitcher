@@ -14,9 +14,10 @@ enum CombinedShiftCompletion {
     static func finish(succeeded: Bool, request: CombinedShiftRequest,
                        context: CombinedShiftContext, sourceCommit: NativeQueuedSourceCommit,
                        converter: TextConverter, monitor: KeyboardMonitor,
-                       isInputCurrent: () -> Bool) -> Outcome {
+                       isInputCurrent: () -> Bool,
+                       record: (RuntimeDiagnosticEvent) -> Void = RuntimeDiagnostics.record) -> Outcome {
         guard succeeded else {
-            RuntimeDiagnostics.record(.doubleFailed)
+            record(.doubleFailed)
             return .stopped
         }
         let resultID = converter.lastResultLayoutID ?? context.targetLayoutID
@@ -28,10 +29,11 @@ enum CombinedShiftCompletion {
             // but do not adopt a requested source or clear pending uncertainty.
             monitor.markConverted()
             monitor.requireObservedInputSource(resultID)
-            RuntimeDiagnostics.record(.doubleFailed)
+            // The text is fixed; only the layout switch lacks confirmation.
+            record(.doubleLayoutUnconfirmed)
             return .sourceNotConfirmed(targetID: resultID, sourceOutcome: sourceCommit.outcome)
         }
-        RuntimeDiagnostics.record(.doubleSucceeded)
+        record(.doubleSucceeded)
         if let field = converter.confirmedNativeField, let focus = request.focus,
            field.focus.processID == focus.processID,
            CFEqual(field.focus.element, focus.element) {
