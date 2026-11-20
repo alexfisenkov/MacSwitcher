@@ -209,6 +209,10 @@ final class KeyboardMonitor: @unchecked Sendable {
         combinedShiftDoubleWindowNanoseconds = configuration.doubleWindowNanoseconds
     }
     private(set) var inputRevision: UInt64 = 0
+    /// Grows on every Shift press offered to the gesture recognizer. A first tap
+    /// does not advance `inputRevision`, so read-only background work uses this
+    /// to see that a new Shift gesture has started and must stay untouched.
+    private(set) var combinedShiftPressCount: UInt64 = 0
     private var currentWordSourceID: String?
     private var prevWordSourceID: String?
     private var lineSourceID: String?
@@ -815,6 +819,7 @@ final class KeyboardMonitor: @unchecked Sendable {
                                 clock: KeyboardInputClock, context: CombinedShiftContext? = nil)
         -> CombinedShiftGesture.Action? {
         if isPressed {
+            combinedShiftPressCount &+= 1
             guard let context else { combinedShiftGesture.interrupt(); return nil }
             combinedShiftGesture.press(side, clock: clock, context: context)
             return nil

@@ -288,6 +288,8 @@ final class TextConverter {
     /// Closed refusal stages of the native edit path. Each gesture may record its own.
     private let editFailureRecorder: (RuntimeDiagnosticFailureReason) -> Void
     private let editEventRecorder: (RuntimeDiagnosticEvent) -> Void
+    /// A field lock observed outside a manual gesture's diagnostic scope.
+    private let fieldLockRecorder: (RuntimeDiagnosticEvent) -> Void
     /// Field-lock events already written by the current manual gesture; nil outside one.
     private var gestureLockEvents: Set<RuntimeDiagnosticEvent>?
 
@@ -310,6 +312,7 @@ final class TextConverter {
     func scheduleLateAcknowledgement(execution: CombinedShiftExecutionContext,
                                      read: @escaping () -> NativeFieldObservation?,
                                      schedule: LateAcknowledgementCheck.Scheduler = LateAcknowledgementCheck.mainQueue,
+                                     newGestureStarted: @escaping () -> Bool = { false },
                                      onConfirmed: @escaping @MainActor () -> Void) -> Bool {
         guard let candidate = lateAcknowledgementCandidate,
               candidate.focus.processID == execution.focus.processID,
@@ -324,6 +327,9 @@ final class TextConverter {
                 && $0.focus.processID == candidate.focus.processID
                 && CFEqual($0.focus.element, candidate.focus.element) }
                 && execution.validationFailure() == nil
+                // A started Shift gesture owns the field; confirming now would
+                // reset its first tap. The lock stays for that gesture instead.
+                && !newGestureStarted()
         }
         check.start(.init(expected: candidate.expected, read: read, isCurrent: isCurrent),
                     schedule: schedule) { [weak self] in
@@ -380,7 +386,7 @@ final class TextConverter {
     }
 
     private func recordFieldLock(_ event: RuntimeDiagnosticEvent) {
-        guard var seen = gestureLockEvents else { RuntimeDiagnostics.record(event); return }
+        guard var seen = gestureLockEvents else { fieldLockRecorder(event); return }
         guard seen.insert(event).inserted else { return }
         gestureLockEvents = seen
         editEventRecorder(event)
@@ -398,8 +404,10 @@ final class TextConverter {
            AutomaticEditorPolicy.route(bundleID: $0, suffix: $1, sourceID: $2)
        }, recoveryFailureRecorder: @escaping (RuntimeDiagnosticFailureReason) -> Void = RuntimeDiagnostics.recordFailure,
        editFailureRecorder: @escaping (RuntimeDiagnosticFailureReason) -> Void = RuntimeDiagnostics.recordFailure,
-       editEventRecorder: @escaping (RuntimeDiagnosticEvent) -> Void = RuntimeDiagnostics.recordRepeatable) {
+       editEventRecorder: @escaping (RuntimeDiagnosticEvent) -> Void = RuntimeDiagnostics.recordRepeatable,
+       fieldLockRecorder: @escaping (RuntimeDiagnosticEvent) -> Void = { RuntimeDiagnostics.record($0) }) {
         self.editFailureRecorder = editFailureRecorder
+        self.fieldLockRecorder = fieldLockRecorder
         self.editEventRecorder = editEventRecorder
         self.selectionPreferences = selectionPreferences
         self.nativeEditBoundary = nativeEditBoundary
@@ -564,10 +572,15 @@ final class TextConverter {
         return true
     }
     func hasUnconfirmedAXEdit(in focus: CombinedShiftFocus) -> Bool {
-        let blocked = unconfirmedAXEdits.contains { $0.focus.processID == focus.processID && CFEqual($0.focus.element, focus.element) }
-            || archivedAXFields.contains { $0.focus.processID == focus.processID && CFEqual($0.focus.element, focus.element) }
+        let blocked = isFieldLocked(focus)
         if blocked { recordFieldLock(.recoverySameFieldBlocked) }
         return blocked
+    }
+    /// The same exact-field lock as `hasUnconfirmedAXEdit(in:)`, but records
+    /// nothing: for entry checks before a gesture's diagnostic scope opens.
+    func isFieldLocked(_ focus: CombinedShiftFocus) -> Bool {
+        unconfirmedAXEdits.contains { $0.focus.processID == focus.processID && CFEqual($0.focus.element, focus.element) }
+            || archivedAXFields.contains { $0.focus.processID == focus.processID && CFEqual($0.focus.element, focus.element) }
     }
     private func ensureRecoveryCapacity(_ proposed: Int, replacing focus: CombinedShiftFocus? = nil) -> Bool {
         guard proposed >= 0, proposed <= Self.maximumRecoveryUTF16Units else {

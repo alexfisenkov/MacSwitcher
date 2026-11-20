@@ -1016,9 +1016,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let settings = SettingsManager.shared
         let languages = LayoutSwitcher.currentAndOppositeLanguage(context: context)
         let nativeRUEN = languages.map { Set([$0.current, $0.opposite]) == Set(["ru", "en"]) } == true
-        if (execution.focus.initialSelection?.length ?? 0) > 0,
-           !textConverter.hasUnconfirmedAXEdit(in: execution.focus),
-           !settings.convertByText, settings.smartConversion, nativeRUEN {
+        if CombinedShiftTransaction.needsSelectionEvidence(execution: execution,
+               converter: textConverter, convertByText: settings.convertByText,
+               smartConversion: settings.smartConversion, nativeRUEN: nativeRUEN) {
             guard !AutoSwitchPolicy.secureInputActive,
                   LayoutSwitcher.currentLayoutID() == context.targetLayoutID,
                   let baseline = textConverter.nativeSelectionBaseline(execution: execution),

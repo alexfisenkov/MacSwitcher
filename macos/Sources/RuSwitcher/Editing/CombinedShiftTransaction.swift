@@ -28,6 +28,17 @@ enum CombinedShiftTransaction {
         let confirmedAutomaticUndo: ConfirmedCorrectionReceipt?
     }
 
+    /// The live handler's entry check: a selected-text gesture in an unlocked
+    /// field first gathers local lexicon evidence, before `run` is called.
+    /// It writes nothing: `run` records a field lock once for the gesture.
+    static func needsSelectionEvidence(execution: CombinedShiftExecutionContext,
+                                       converter: TextConverter, convertByText: Bool,
+                                       smartConversion: Bool, nativeRUEN: Bool) -> Bool {
+        (execution.focus.initialSelection?.length ?? 0) > 0
+            && !converter.isFieldLocked(execution.focus)
+            && !convertByText && smartConversion && nativeRUEN
+    }
+
     static func run(request: CombinedShiftRequest, context: CombinedShiftContext,
                     execution: CombinedShiftExecutionContext, converter: TextConverter,
                     monitor: KeyboardMonitor, platform: Platform, convertWholeLine: Bool,
@@ -167,9 +178,12 @@ enum CombinedShiftTransaction {
         platform.finishLease(lease, sourceCommit.confirmedLayoutID)
         if case .stopped = outcome {
             // Only reads the field; a confirmed late result arms the ordinary repeat.
+            // Any later Shift press cancels it: its first tap revises no input.
+            let shiftPresses = monitor.combinedShiftPressCount
             converter.scheduleLateAcknowledgement(execution: execution,
                 read: { platform.observeWholeField(execution.focus) },
-                schedule: platform.lateAcknowledgementScheduler ?? LateAcknowledgementCheck.mainQueue) {
+                schedule: platform.lateAcknowledgementScheduler ?? LateAcknowledgementCheck.mainQueue,
+                newGestureStarted: { monitor.combinedShiftPressCount != shiftPresses }) {
                     monitor.markConverted()
                 }
         }
