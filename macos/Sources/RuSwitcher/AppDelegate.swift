@@ -58,6 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { action() }
     })
     private var caretIndicator: CaretIndicator?   // issue #10: флаг у каретки (бета, по умолчанию OFF)
+    private let rivalTapWatch = RivalKeyboardTapWatch()
     private let secureNotice = SecureInputNotice()  // issue #27: подсказка о защ. вводе без кражи фокуса
     private let correctionExceptionOffer = CorrectionExceptionOffer()
     private var lastFlagShown: String?            // идентичность раскладки для детекта смены (не title!)
@@ -277,8 +278,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// Explicit setup only. Showing this preview does not change the profile.
+    /// One button: explanation and consent, profile line with a backup, then the system request.
     @objc private func showShellBridgeSetup() {
+        ShellOneButtonSetupPresenter.present(enableBridge: { [weak self] in
+            SettingsManager.shared.shellBridgeEnabled = true
+            self?.keyboardMonitor.resetCombinedShift()
+            self?.textConverter.clearState()
+            self?.reconfigureTap()
+            self?.configurePredictionPreferences()
+            self?.configureShellBridge()
+        }, manage: { [weak self] in self?.showShellBridgeManagement() })
+    }
+
+    /// Everything is already set up: offers tab access again or removal of the line.
+    /// Showing this preview does not change the profile.
+    private func showShellBridgeManagement() {
         guard let resource = ShellBridgeProfilePatch.packagedResourceURL else {
             showShellBridgeSetupResult(success: false, detail: L10n.languageCode == "ru"
                 ? "Ресурс подключения отсутствует в приложении."
@@ -454,6 +468,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     : "Could not save the exception. Open the personal dictionary in Settings.",
                 kind: .saveFailure)
         })
+    }
+
+    /// Inside the existing two-second poll: logs the code and hints once per launch.
+    private func noteRivalKeyboardTap() {
+        guard monitoringActive, let name = rivalTapWatch.takeHint(for: rivalTapWatch.scan()) else { return }
+        showFeedback(title: L10n.rivalTapTitle, body: L10n.rivalTapBody(programName: name), kind: .rivalTap)
     }
 
     private func showUnknownEditNotice() {
@@ -902,6 +922,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             Task { @MainActor in
                 guard let self else { return }
                 self.runtimeHealth.poll()
+                self.noteRivalKeyboardTap()
                 self.electronAccessibilityBridge.refresh()
                 self.updateStatusIcon()
             }

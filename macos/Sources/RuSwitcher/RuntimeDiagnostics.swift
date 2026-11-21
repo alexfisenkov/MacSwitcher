@@ -12,6 +12,7 @@ enum RuntimeDiagnosticEvent: String, CaseIterable, Sendable {
     case doubleFailed, doubleSucceeded
     case doubleCaretReanchored, doubleWindowMissed, doubleArrivalSkewRejected, doubleLayoutUnconfirmed
     case secureFlagWithEvents, autocompleteSuggestionRefused
+    case rivalKeyboardTapActive, autoLoopGuardTripped
     case clipboardBegin, clipboardBeginRefused, copyInvalidExecution, copyFocusUnavailable
     case copyClipboardOwnershipLost, copyClipboardPrepared, copyPostRefused, copyPosted, copyUnchanged
     case copyChanged, copyFocusChanged, copyAXSelectionMismatch, copyClaimRefused, copyVerified
@@ -49,7 +50,11 @@ enum RuntimeDiagnosticEvent: String, CaseIterable, Sendable {
     case focusReadCannotComplete, focusReadNoValue, focusReadInvalidElement
     case focusReadOtherError, focusReadMissingValue, focusReadUnexpectedType
 
-    var logOnce: Bool { rawValue.hasPrefix("auto") || rawValue.hasPrefix("native") || rawValue.hasPrefix("focusRead") }
+    /// `autoLoopGuardTripped` keeps its brief-fixed name but recurs, so it is never once-only.
+    var logOnce: Bool {
+        self != .autoLoopGuardTripped
+            && (rawValue.hasPrefix("auto") || rawValue.hasPrefix("native") || rawValue.hasPrefix("focusRead"))
+    }
 
     /// Selected automatic milestones recur at the existing five-second interval.
     /// The explicit list keeps the logger a closed metadata vocabulary.

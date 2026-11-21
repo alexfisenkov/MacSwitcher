@@ -44,6 +44,8 @@ final class PredictionCoordinator {
     private let correctionReceipts: ConfirmedCorrectionReceipts
     private let receiptNow: () -> UInt64
     private let diagnosticsEnabled: () -> Bool
+    private let loopGuard: AutoCorrectionLoopGuard
+    private let loopClock: () -> TimeInterval
     private let recordAutomaticUncertain: (CombinedShiftApplicationFamily) -> Void
     private var confirmedAdaptiveUndo: (id: UUID, original: String, replacement: String,
                                         focus: CombinedShiftFocus)?
@@ -80,12 +82,16 @@ final class PredictionCoordinator {
          platform: PredictionCoordinatorPlatform? = nil, engine: PredictionEngine? = nil,
          receiptNow: @escaping () -> UInt64 = { DispatchTime.now().uptimeNanoseconds },
          diagnosticsEnabled: @escaping () -> Bool = { RuntimeDiagnostics.enabled },
+         loopGuard: AutoCorrectionLoopGuard = AutoCorrectionLoopGuard(),
+         loopClock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
          recordAutomaticUncertain: @escaping (CombinedShiftApplicationFamily) -> Void = RuntimeDiagnostics.recordAutomaticUncertain) {
         self.monitor = monitor
         self.converter = converter
         self.platform = platform ?? .live(monitor: monitor)
         self.receiptNow = receiptNow
         self.diagnosticsEnabled = diagnosticsEnabled
+        self.loopGuard = loopGuard
+        self.loopClock = loopClock
         self.recordAutomaticUncertain = recordAutomaticUncertain
         self.correctionReceipts = ConfirmedCorrectionReceipts(now: receiptNow)
         if let engine {
@@ -434,6 +440,11 @@ final class PredictionCoordinator {
         }
         guard let edit = PredictionSuffixEdit(original: proposal.originalSuffix,
             replacement: proposal.replacementSuffix) else { return }
+        // Manual double Shift never passes through here, so it is never paused.
+        guard loopGuard.allow(now: loopClock(), original: proposal.originalSuffix,
+                              replacement: proposal.replacementSuffix) else {
+            outcome = .suppressed; return
+        }
         let resultID = LayoutSwitcher.sourceID(target)
         let execution = CombinedShiftExecutionContext(focus: focus, inputRevision: snapshot.inputRevision,
             currentInputRevision: { [weak monitor] in
@@ -505,6 +516,8 @@ final class PredictionCoordinator {
             return
         }
         RuntimeDiagnostics.record(.autoTextConfirmed)
+        loopGuard.record(original: proposal.originalSuffix,
+            replacement: proposal.replacementSuffix, now: loopClock())
         // Physical input is still held by this lease. Select the result source
         // only after the complete field edit is independently acknowledged.
         // Queued Unicode alone can still be dropped or delivered late.

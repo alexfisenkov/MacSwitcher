@@ -71,6 +71,7 @@ HEALTH_EVENTS = frozenset((
     "recoverySameFieldBlocked", "recoverySlotsFull", "recoveryUnitsFull",
     "recoveryArchiveLimit", "recoveryArchiveFailed", "recoveryArchiveQuota",
     "recoveryArchiveWriteFailed", "recoveryArchiveVerificationFailed",
+    "rivalKeyboardTapActive", "autoLoopGuardTripped",
 ))
 EDIT_FAILURE_EVENTS = frozenset((
     "ackDeadline", "ackGateInvalid", "ackObservationLimit", "ackObservationUnavailable",

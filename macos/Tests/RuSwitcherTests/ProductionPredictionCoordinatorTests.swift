@@ -99,6 +99,8 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         var selectionAvailable = true
         var captureFocusCount = 0
         var searchOverlayActive = false
+        var loopClockValue: TimeInterval = 100
+        let loopGuard = AutoCorrectionLoopGuard(onTrip: {})
 
         lazy var converter = ProductionCombinedShiftEditingTests.converter(for: fields,
             automaticRoute: { _, _, _ in .nativeVerified })
@@ -148,7 +150,8 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
             }, searchOverlayActive: { [unowned self] in searchOverlayActive })
 
         lazy var coordinator: PredictionCoordinator = {
-            let value = PredictionCoordinator(monitor: monitor, converter: converter, platform: platform, engine: engine)
+            let value = PredictionCoordinator(monitor: monitor, converter: converter, platform: platform, engine: engine,
+                loopGuard: loopGuard, loopClock: { [unowned self] in loopClockValue })
             value.onApplied = { [unowned self] word in
                 applied.append(word)
                 onApplication?()
@@ -225,6 +228,33 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         XCTAssertEqual(rig.captureFocusCount, 0)
         XCTAssertEqual(rig.beginLeaseAttempts, 0)
         XCTAssertEqual(field.text, "ghbd")
+    }
+
+    @MainActor
+    func testFrozenLoopGuardLeavesTextUntouched() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2091, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        _ = rig.coordinator
+        rig.loopGuard.record(original: "abc", replacement: "абв", now: 100)
+        _ = rig.loopGuard.allow(now: 100.1, original: "абв", replacement: "abc")
+        rig.deliver("ghbd")
+        rig.settle(expected: .suppressed)
+        XCTAssertEqual(field.text, "ghbd")
+        XCTAssertEqual(rig.beginLeaseAttempts, 0)
+        XCTAssertTrue(rig.applied.isEmpty)
+    }
+
+    @MainActor
+    func testConfirmedAutomaticCorrectionIsRecordedForReversalDetection() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2092, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        _ = rig.coordinator
+        rig.deliver("ghbd")
+        rig.settle(expected: .applied)
+        XCTAssertEqual(field.text, "прив")
+        XCTAssertFalse(rig.loopGuard.allow(now: 100.2, original: "прив", replacement: "ghbd"))
     }
 
     @MainActor

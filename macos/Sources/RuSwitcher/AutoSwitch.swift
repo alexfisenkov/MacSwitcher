@@ -242,6 +242,7 @@ enum AutoSwitchPolicy {
     static let terminalApps: Set<String> = [
         "com.apple.Terminal", "com.googlecode.iterm2", "net.kovidgoyal.kitty",
         "io.alacritty", "com.github.wez.wezterm", "dev.warp.Warp-Stable", "co.zeit.hyper",
+        "com.mitchellh.ghostty",
     ]
     static func isTerminalApp(_ bundleID: String?) -> Bool {
         guard let id = bundleID else { return false }

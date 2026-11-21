@@ -249,6 +249,32 @@ enum L10n {
     static var updateAvailable: String { s("update.available") }
     static var updateBeta: String { s("update.beta") }
     static var securePausedTitle: String { s("secure.paused.title") }
+    static var rivalTapTitle: String { s("rival.hint.title") }
+    static func rivalTapBody(programName: String) -> String {
+        programName.isEmpty ? s("rival.hint.body.unnamed")
+            : String(format: s("rival.hint.body.named"), programName)
+    }
+    static var shellSetupTitle: String { s("shell.setup.title") }
+    static func shellSetupExplanation(sourceLine: String) -> String { s("shell.setup.explain") + "\n\n" + sourceLine }
+    static var shellSetupConnect: String { s("shell.setup.connect") }
+    static var shellSetupCancel: String { s("shell.setup.cancel") }
+    static var shellSetupFailed: String { s("shell.setup.failed") }
+    static func shellSetupResult(_ outcome: ShellOneButtonSetup.Outcome) -> String {
+        switch outcome {
+        case .cancelled: return ""
+        case .failed: return s("shell.setup.failed")
+        case .done(let installed, let openNewTerminal, let access):
+            var parts: [String] = []
+            if installed { parts.append(s("shell.setup.done.installed")) }
+            switch access {
+            case .granted: parts.append(s("shell.setup.done.granted"))
+            case .denied: parts.append(s("shell.setup.done.denied"))
+            case .noTerminal: parts.append(s("shell.setup.done.noTerminal"))
+            }
+            if openNewTerminal { parts.append(s("shell.setup.done.newWindow")) }
+            return parts.joined(separator: " ")
+        }
+    }
     static var securePausedBody: String { s("secure.paused.body") }
     static var securePausedUnknownApp: String { s("secure.paused.unknownapp") }
     static var updateNewVersion: String { s("update.newVersion") }
@@ -329,7 +355,20 @@ enum L10n {
             "settings.version": ("Переключение раскладки и коррекция RU/EN", "Keyboard layout switching and RU/EN correction"),
             "menu.autoConvert": ("Автоисправление", "Automatic correction"),
             "menu.inputSource": ("Раскладка", "Input Source"),
-            "menu.more": ("Дополнительно", "More")
+            "menu.more": ("Дополнительно", "More"),
+            "rival.hint.title": ("Рядом работает другой переключатель", "Another layout switcher is running"),
+            "rival.hint.body.named": ("Рядом работает другой переключатель раскладки (%@). Он может мешать MacSwitcher.", "Another layout switcher is running nearby (%@). It may interfere with MacSwitcher."),
+            "rival.hint.body.unnamed": ("Рядом работает другой переключатель раскладки. Он может мешать MacSwitcher.", "Another layout switcher is running nearby. It may interfere with MacSwitcher."),
+            "shell.setup.title": ("Подключить командную строку?", "Connect the command line?"),
+            "shell.setup.explain": ("MacSwitcher добавит в ~/.zshrc одну строку, чтобы исправлять ввод в zsh. Перед записью сохранится точная приватная копия файла. Затем macOS один раз спросит разрешение на доступ к активной вкладке терминала: оно нужно только чтобы найти вкладку, команды не запускаются.", "MacSwitcher will add one line to ~/.zshrc so it can fix typing in zsh. A byte-exact private backup is saved first. Then macOS asks once for permission to reach the active terminal tab: it is used only to find the tab, and no commands are run."),
+            "shell.setup.connect": ("Подключить", "Connect"),
+            "shell.setup.cancel": ("Отмена", "Cancel"),
+            "shell.setup.failed": ("Подключение не завершено. Проверьте ~/.zshrc и приватные копии в ~/.macswitcher-profile-recovery и повторите.", "Setup did not finish. Review ~/.zshrc and the private copies in ~/.macswitcher-profile-recovery, then try again."),
+            "shell.setup.done.installed": ("Строка добавлена.", "The line was added."),
+            "shell.setup.done.granted": ("Доступ к вкладке терминала разрешён.", "Terminal tab access is allowed."),
+            "shell.setup.done.denied": ("Доступ к вкладке пока не получен: нажмите кнопку ещё раз, когда будете готовы.", "Tab access was not granted yet: press the button again when you are ready."),
+            "shell.setup.done.noTerminal": ("Откройте один терминал (например, Ghostty) и нажмите кнопку ещё раз, чтобы выдать доступ.", "Open one terminal (for example Ghostty) and press the button again to grant access."),
+            "shell.setup.done.newWindow": ("Откройте новое окно терминала, чтобы подключение заработало.", "Open a new terminal window for the setup to take effect.")
         ]
         if let pair = own[key] { return currentLang == "ru" ? pair.0 : pair.1 }
         return strings[currentLang]?[key] ?? strings["en"]![key] ?? key
