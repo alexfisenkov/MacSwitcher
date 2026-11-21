@@ -82,8 +82,8 @@ struct CombinedShiftFocus: @unchecked Sendable {
 
     /// Reject secure fields before either selected-range or whole-value text is requested.
     /// A missing optional subrole is compatible; malformed or failed reads fail closed.
-    func allowsTextRead() -> Bool {
-        guard !AutoSwitchPolicy.secureInputActive else { return false }
+    func allowsTextRead(prepareRead: () -> Bool = { true }) -> Bool {
+        guard prepareRead(), !AutoSwitchPolicy.secureInputActive else { return false }
         var raw: AnyObject?
         let status: AXError
         if let fieldBoundary {
@@ -202,9 +202,10 @@ struct CombinedShiftFocus: @unchecked Sendable {
         return current.location == end && current.length == 0
     }
 
-    func selectionRange() -> CFRange? {
-        if let fieldBoundary { return fieldBoundary.selectionRange() }
+    func selectionRange(prepareRead: () -> Bool = { true }) -> CFRange? {
+        if let fieldBoundary { return prepareRead() ? fieldBoundary.selectionRange() : nil }
         var raw: AnyObject?
+        guard prepareRead() else { return nil }
         guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &raw) == .success,
               let raw, CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
         var range = CFRange()
@@ -224,18 +225,20 @@ struct CombinedShiftFocus: @unchecked Sendable {
             currentSelection: range, observedSuffix: observed)
     }
 
-    func text(in range: CFRange, allowValueFallback: Bool = true) -> String? {
-        guard allowsTextRead() else { return nil }
-        if let fieldBoundary { return fieldBoundary.text(range) }
+    func text(in range: CFRange, allowValueFallback: Bool = true,
+              prepareRead: () -> Bool = { true }) -> String? {
+        guard allowsTextRead(prepareRead: prepareRead) else { return nil }
+        if let fieldBoundary { return prepareRead() ? fieldBoundary.text(range) : nil }
         var requestedRange = range
         var raw: AnyObject?
-        if let value = AXValueCreate(.cfRange, &requestedRange),
+        if let value = AXValueCreate(.cfRange, &requestedRange), prepareRead(),
            AXUIElementCopyParameterizedAttributeValue(element, kAXStringForRangeParameterizedAttribute as CFString,
                                                        value, &raw) == .success,
            let text = raw as? String { return text }
         guard allowValueFallback else { return nil }
         raw = nil
-        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &raw) == .success,
+        guard prepareRead(),
+              AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &raw) == .success,
               let value = raw as? String else { return nil }
         let units = Array(value.utf16)
         guard range.location <= units.count, range.length <= units.count - range.location else { return nil }
@@ -302,4 +305,102 @@ struct CombinedShiftFieldBoundary {
     let text: (CFRange) -> String?
     /// Synthetic AX subrole response; live fields always use AX directly.
     var secureSubrole: (() -> (AXError, AnyObject?))? = nil
+    /// Synthetic rich-editor evidence. Live fields use AX text markers.
+    var fullTextContent: (() -> String?)? = nil
+    var selectedText: (() -> String?)? = nil
+    /// Two-stage synthetic marker reader for deadline/lease tests.
+    var fullMarkerRange: (() -> Bool)? = nil
+    var fullMarkerText: (() -> String?)? = nil
+    var readAdmission: (() -> Bool)? = nil
+    var nativeEditability: (() -> Bool)? = nil
+    var paragraphBoundaryProof: ((CFRange, String, String,
+        NativeParagraphBoundaryWitness.Side) -> Bool)? = nil
+    var nativeWholeObservation: (() -> NativeFieldObservation?)? = nil
+    var valueText: (() -> String?)? = nil
+}
+
+extension CombinedShiftFocus {
+    enum NativeFullTextContentResult {
+        case unsupported
+        case available(String)
+        case failed
+    }
+
+    private func checkedString(_ raw: AnyObject?) -> String? {
+        guard let raw, CFGetTypeID(raw) == CFStringGetTypeID() else { return nil }
+        let value = raw as! CFString
+        let count = CFStringGetLength(value)
+        guard count <= NativeFieldEditPlan.maximumFieldUnits else { return nil }
+        var units = [UInt16](repeating: 0, count: count)
+        if count > 0 {
+            units.withUnsafeMutableBufferPointer {
+                CFStringGetCharacters(value, CFRange(location: 0, length: count), $0.baseAddress!)
+            }
+        }
+        guard NativeFieldEditPlan.isWellFormedUTF16(units) else { return nil }
+        return String(decoding: units, as: UTF16.self)
+    }
+
+    /// Complete text-content representation of this exact editable AX element.
+    /// The marker range is requested for `element`, never an ancestor or document.
+    func nativeFullTextContent(prepareRead: () -> Bool = { true }) -> NativeFullTextContentResult {
+        guard allowsTextRead(prepareRead: prepareRead) else { return .failed }
+        if let fieldBoundary {
+            if let range = fieldBoundary.fullMarkerRange,
+               let text = fieldBoundary.fullMarkerText {
+                guard prepareRead(), range(), prepareRead(), let result = text() else { return .failed }
+                return .available(result)
+            }
+            guard let read = fieldBoundary.fullTextContent else { return .unsupported }
+            guard prepareRead(), let text = read() else { return .failed }
+            return .available(text)
+        }
+        var markerRaw: AnyObject?
+        guard prepareRead() else { return .failed }
+        let markerStatus = AXUIElementCopyParameterizedAttributeValue(element,
+            "AXTextMarkerRangeForUIElement" as CFString, element, &markerRaw)
+        if markerStatus == .parameterizedAttributeUnsupported { return .unsupported }
+        guard markerStatus == .success, let markerRaw,
+              CFGetTypeID(markerRaw) == AXTextMarkerRangeGetTypeID() else { return .failed }
+        var textRaw: AnyObject?
+        guard prepareRead(), AXUIElementCopyParameterizedAttributeValue(element,
+            "AXStringForTextMarkerRange" as CFString, markerRaw, &textRaw) == .success,
+              let text = checkedString(textRaw) else { return .failed }
+        return .available(text)
+    }
+
+    func nativeSelectedTextAttribute(prepareRead: () -> Bool = { true }) -> String? {
+        guard allowsTextRead(prepareRead: prepareRead) else { return nil }
+        if let fieldBoundary { return prepareRead() ? fieldBoundary.selectedText?() : nil }
+        var raw: AnyObject?
+        guard prepareRead(),
+              AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString, &raw) == .success else { return nil }
+        return checkedString(raw)
+    }
+
+    func nativeValueText(prepareRead: () -> Bool = { true }) -> String? {
+        guard allowsTextRead(prepareRead: prepareRead) else { return nil }
+        if let fieldBoundary { return prepareRead() ? fieldBoundary.valueText?() : nil }
+        var raw: AnyObject?
+        guard prepareRead(),
+              AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &raw) == .success else { return nil }
+        return checkedString(raw)
+    }
+
+    func nativeParagraphBoundaryProof(rawRange: CFRange, expectedFlat: String,
+                                      expectedLeafText: String,
+                                      expectedSide: NativeParagraphBoundaryWitness.Side,
+                                      phaseDeadline: TimeInterval,
+                                      prepareRead: @escaping () -> Bool) -> Bool {
+        guard prepareRead(), allowsTextRead(prepareRead: prepareRead),
+              nativeFieldIsEditable(prepareRead: prepareRead) else { return false }
+        if let fieldBoundary {
+            return prepareRead() && fieldBoundary.paragraphBoundaryProof?(
+                rawRange, expectedFlat, expectedLeafText, expectedSide) == true
+        }
+        return NativeParagraphBoundaryWitness.prove(focus: self, rawRange: rawRange,
+            expectedFlat: expectedFlat, expectedLeafText: expectedLeafText,
+            expectedSide: expectedSide, phaseDeadline: phaseDeadline,
+            prepareRead: prepareRead)
+    }
 }

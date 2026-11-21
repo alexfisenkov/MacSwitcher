@@ -25,6 +25,46 @@ final class RuntimeDiagnosticsTests: XCTestCase {
             "automatic.chrome.uncertain")
     }
 
+    func testSecondaryClaudeAliasIsReadOnlyForEnabledUnknownApplication() {
+        let privateAlias = "com.example.secondary-client"
+        var aliasReads = 0
+        let disabled = RuntimeDiagnostics.diagnosticApplicationFamily(
+            bundleID: privateAlias, diagnosticsEnabled: false) {
+                aliasReads += 1
+                return privateAlias
+            }
+        XCTAssertEqual(disabled, .other)
+        XCTAssertEqual(aliasReads, 0)
+
+        let missingID = RuntimeDiagnostics.diagnosticApplicationFamily(
+            bundleID: nil, diagnosticsEnabled: true) {
+                aliasReads += 1
+                return privateAlias
+            }
+        XCTAssertEqual(missingID, .other)
+        XCTAssertEqual(aliasReads, 0)
+
+        let known = RuntimeDiagnostics.diagnosticApplicationFamily(
+            bundleID: "com.anthropic.claudefordesktop", diagnosticsEnabled: true) {
+                aliasReads += 1
+                return privateAlias
+            }
+        XCTAssertEqual(known, .claude)
+        XCTAssertEqual(aliasReads, 0)
+
+        let secondary = RuntimeDiagnostics.diagnosticApplicationFamily(
+            bundleID: privateAlias, diagnosticsEnabled: true) {
+                aliasReads += 1
+                return privateAlias
+            }
+        XCTAssertEqual(secondary, .claudeSecondary)
+        XCTAssertEqual(aliasReads, 1)
+        let logged = RuntimeDiagnostics.combinedIdentifier(
+            .init(application: secondary, operation: .word, result: .refused), enabled: true)
+        XCTAssertEqual(logged, "combined.claudeSecondary.word.refused")
+        XCTAssertFalse(logged?.contains(privateAlias) ?? true)
+    }
+
     func testVocabularyContainsOnlyUniqueStaticEventIdentifiers() {
         let names = RuntimeDiagnosticEvent.allCases.map(\.rawValue)
         XCTAssertEqual(names.count, Set(names).count)

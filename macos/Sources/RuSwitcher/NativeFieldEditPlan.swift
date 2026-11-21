@@ -57,7 +57,8 @@ struct NativeFieldEditPlan {
         pattern: "[\\p{bc=R}\\p{bc=AL}\\p{bc=AN}\\p{Bidi_Control}]")
 
     static func make(original: String, replacement: String, start: Int,
-                     snapshot: NativeFieldObservation, isEditable: Bool = true)
+                     snapshot: NativeFieldObservation, isEditable: Bool = true,
+                     formattedStart: Int? = nil)
         -> Result<Self, NativeFieldEditRefusal> {
         guard isEditable else { return .failure(.readOnly) }
         guard isSimpleText(original), isSimpleText(replacement),
@@ -65,24 +66,27 @@ struct NativeFieldEditPlan {
               original.utf16.count == replacement.utf16.count else { return .failure(.invalidEdit) }
         let count = original.utf16.count
         let whole = Array(snapshot.text.utf16)
+        let textStart = formattedStart ?? start
         guard whole.count <= maximumFieldUnits else { return .failure(.fieldTooLarge) }
         guard start >= 0, start <= whole.count, count <= whole.count - start,
+              start <= Int.max - count,
+              textStart >= 0, textStart <= whole.count, count <= whole.count - textStart,
               snapshot.selectionLength == 0,
               snapshot.caretUTF16Location == start + count else { return .failure(.invalidRange) }
-        guard whole[start..<(start + count)].elementsEqual(original.utf16) else { return .failure(.originalMismatch) }
+        guard whole[textStart..<(textStart + count)].elementsEqual(original.utf16) else { return .failure(.originalMismatch) }
         // Shift+Left moves by composed character, not UTF-16 unit. A combining
         // mark just outside the proposed suffix must never be selected with it.
         let characterBoundaries = Set(snapshot.text.indices.map { $0.utf16Offset(in: snapshot.text) }
             + [whole.count])
-        guard characterBoundaries.contains(start), characterBoundaries.contains(start + count) else {
+        guard characterBoundaries.contains(textStart), characterBoundaries.contains(textStart + count) else {
             return .failure(.invalidRange)
         }
         guard let unsafeDirection,
               unsafeDirection.firstMatch(in: snapshot.text,
                   range: NSRange(location: 0, length: whole.count)) == nil else { return .failure(.unsupportedDirection) }
 
-        let prefixUnits = Array(whole[..<start])
-        let suffixUnits = Array(whole[(start + count)...])
+        let prefixUnits = Array(whole[..<textStart])
+        let suffixUnits = Array(whole[(textStart + count)...])
         guard isWellFormedUTF16(whole), isWellFormedUTF16(prefixUnits), isWellFormedUTF16(suffixUnits) else {
             return .failure(.invalidRange)
         }
@@ -107,7 +111,8 @@ struct NativeFieldEditPlan {
     /// Replace only an already existing user selection. The single native
     /// Unicode pair replaces that selection; no navigation/deletion is planned.
     static func makeSelected(original: String, replacement: String, start: Int,
-                             snapshot: NativeFieldObservation, isEditable: Bool = true)
+                             snapshot: NativeFieldObservation, isEditable: Bool = true,
+                             formattedStart: Int? = nil)
         -> Result<Self, NativeFieldEditRefusal> {
         guard isEditable else { return .failure(.readOnly) }
         let originalCount = original.utf16.count
@@ -118,14 +123,18 @@ struct NativeFieldEditPlan {
         let wholeCount = snapshot.text.utf16.count
         guard wholeCount <= maximumFieldUnits,
               originalCount <= wholeCount else { return .failure(.fieldTooLarge) }
+        let textStart = formattedStart ?? start
         guard start >= 0, start <= wholeCount, originalCount <= wholeCount - start,
+              start <= Int.max - replacementCount,
+              textStart >= 0,
+              textStart <= wholeCount, originalCount <= wholeCount - textStart,
               snapshot.caretUTF16Location == start,
               snapshot.selectionLength == originalCount else { return .failure(.invalidRange) }
         guard wholeCount - originalCount <= maximumFieldUnits - replacementCount else {
             return .failure(.fieldTooLarge)
         }
         let whole = Array(snapshot.text.utf16)
-        guard whole[start..<(start + originalCount)].elementsEqual(original.utf16) else {
+        guard whole[textStart..<(textStart + originalCount)].elementsEqual(original.utf16) else {
             return .failure(.originalMismatch)
         }
         guard let unsafeDirection,
@@ -135,8 +144,8 @@ struct NativeFieldEditPlan {
                   range: NSRange(location: 0, length: replacementCount)) == nil else {
             return .failure(.unsupportedDirection)
         }
-        let prefix = Array(whole[..<start])
-        let suffix = Array(whole[(start + originalCount)...])
+        let prefix = Array(whole[..<textStart])
+        let suffix = Array(whole[(textStart + originalCount)...])
         guard isWellFormedUTF16(whole), isWellFormedUTF16(prefix), isWellFormedUTF16(suffix) else {
             return .failure(.invalidRange)
         }

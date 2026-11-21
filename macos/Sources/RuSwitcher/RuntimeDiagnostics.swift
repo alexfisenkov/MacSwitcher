@@ -78,6 +78,8 @@ enum RuntimeDiagnosticEvent: String, CaseIterable, Sendable {
 enum RuntimeDiagnosticFailureReason: String, CaseIterable, Sendable {
     case selectionSourceMismatch, selectionStateBlocked, selectionTimeout
     case selectionInvalidExecution, selectionSnapshotMissing, selectionFieldUnavailable
+    case selectionCoordinateEvidenceUnavailable, selectionCoordinateProjectionMismatch
+    case selectionCoordinateEndpointUnproven
     case selectionFieldMismatch, selectionTextMismatch, selectionPolicyNoChange
     case selectionReplacementRejected, selectionRevalidationFailed
     case transactionCandidateUnavailable, transactionInvalidExecution
@@ -97,6 +99,8 @@ enum RuntimeDiagnosticFailureReason: String, CaseIterable, Sendable {
 }
 
 enum RuntimeDiagnostics {
+    static let secondaryClaudeBundleIDDefaultsKey = "com.macswitcher.diagnosticsClaudeSecondaryBundleID"
+
     // Local opt-in complements the existing launch flag; no input payload
     // reaches this closed-vocabulary logger.
     static var enabled: Bool {
@@ -107,6 +111,27 @@ enum RuntimeDiagnostics {
     private static let seen = SeenEvents()
 
     static func isEnabled(arguments: [String]) -> Bool { arguments.contains("--diagnostic-events") }
+
+    /// Resolves a diagnostic-only family. The owner alias is read lazily and
+    /// only when diagnostics are enabled and the built-in classifier is unknown.
+    static func applicationFamily(bundleID: String?, expectedProcessID: Int32,
+                                  observedProcessID: Int32?, secureInputActive: Bool,
+                                  diagnosticsEnabled: Bool) -> CombinedShiftApplicationFamily {
+        guard !secureInputActive, expectedProcessID > 0,
+              observedProcessID == expectedProcessID else { return .other }
+        return diagnosticApplicationFamily(bundleID: bundleID, diagnosticsEnabled: diagnosticsEnabled) {
+            UserDefaults.standard.string(forKey: secondaryClaudeBundleIDDefaultsKey)
+        }
+    }
+
+    static func diagnosticApplicationFamily(bundleID: String?, diagnosticsEnabled: Bool,
+                                            secondaryBundleID: () -> String?)
+        -> CombinedShiftApplicationFamily {
+        let known = CombinedShiftApplicationFamily.classify(bundleID: bundleID)
+        guard known == .other, diagnosticsEnabled, bundleID != nil else { return known }
+        return CombinedShiftApplicationFamily.classify(bundleID: bundleID,
+            secondaryClaudeBundleID: secondaryBundleID())
+    }
 
     static func record(_ event: RuntimeDiagnosticEvent) {
         guard enabled, seen.shouldEmit(event) else { return }

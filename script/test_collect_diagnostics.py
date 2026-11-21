@@ -26,13 +26,21 @@ def line(message, tick, seconds=1000, **extra):
 
 class CollectorTests(unittest.TestCase):
     def test_exact_closed_vocabulary_and_no_sensitive_payload(self):
-        for message in ("combined.codex.word.refused", "failure.wordNativeEditRefused",
+        for message in ("combined.codex.word.refused", "combined.vsCode.word.refused",
+                        "failure.wordNativeEditRefused",
+                        "failure.selectionCoordinateEvidenceUnavailable",
+                        "failure.selectionCoordinateProjectionMismatch",
+                        "failure.selectionCoordinateEndpointUnproven",
                         "doubleRecognized", "tapDisabledTimeout", "recoveryArchiveFailed"):
             event = collector.parse_line(line(message, 1))
             self.assertEqual(event["event"], message)
             self.assertEqual(set(event), {"id", "time", "event"})
         for message in ("soloReceived", "autoUnicodePresent", "combined.browser.word.confirmed URL secret",
-                        "combined.com.secret.word.refused", "failure.wordNativeEditRefused password",
+                        "combined.com.secret.word.refused",
+                        "combined.com.example.secondary-client.word.refused",
+                        "combined.vsCode-insiders.word.refused",
+                        "failure.wordNativeEditRefused password",
+                        "failure.selectionCoordinateProjectionMismatch path",
                         "keyDown.42", "selectionAXWritePosted"):
             self.assertIsNone(collector.parse_line(line(message, 2)))
         self.assertIsNone(collector.parse_line(line("combined.codex.word.refused", 2,

@@ -1067,9 +1067,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard RuntimeDiagnostics.enabled, case .convert = request.action else { return }
         let secure = AutoSwitchPolicy.secureInputActive
         let front = NSWorkspace.shared.frontmostApplication
-        let family = CombinedShiftApplicationFamily.classify(bundleID: secure ? nil : front?.bundleIdentifier,
+        let family = RuntimeDiagnostics.applicationFamily(bundleID: secure ? nil : front?.bundleIdentifier,
             expectedProcessID: request.frontProcessID, observedProcessID: front?.processIdentifier,
-            secureInputActive: secure)
+            secureInputActive: secure, diagnosticsEnabled: true)
         let operation: CombinedShiftDiagnostic.Operation
         if !secure, let focus = request.focus,
            focus.processID == request.frontProcessID,
@@ -1113,10 +1113,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 return self.textConverter.nativeSelectionBaseline(execution: current)?.field
             }, applicationFamily: {
                 let front = NSWorkspace.shared.frontmostApplication
-                return CombinedShiftApplicationFamily.classify(bundleID: front?.bundleIdentifier,
+                return RuntimeDiagnostics.applicationFamily(bundleID: front?.bundleIdentifier,
                     expectedProcessID: execution.focus.processID,
                     observedProcessID: front?.processIdentifier,
-                    secureInputActive: AutoSwitchPolicy.secureInputActive)
+                    secureInputActive: AutoSwitchPolicy.secureInputActive,
+                    diagnosticsEnabled: RuntimeDiagnostics.enabled)
             })
         let automaticUndo = predictionCoordinator.claimDoubleShiftAutomaticUndo(
             request: request, context: context, observedSourceID: platform.currentSourceID())

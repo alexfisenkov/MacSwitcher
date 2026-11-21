@@ -19,9 +19,9 @@ enum CombinedShiftFailure: Equatable {
 
 enum CombinedShiftApplicationFamily: String, Equatable {
     // `browser` remains in the closed vocabulary for older OSLog records.
-    case textEdit, codex, browser, chrome, safari, firefox, edge, telegram, other
+    case textEdit, codex, browser, chrome, safari, firefox, edge, telegram, vsCode, claude, claudeSecondary, other
 
-    static func classify(bundleID: String?) -> Self {
+    static func classify(bundleID: String?, secondaryClaudeBundleID: String? = nil) -> Self {
         switch bundleID {
         case "com.apple.TextEdit": return .textEdit
         case "com.openai.codex": return .codex
@@ -30,7 +30,23 @@ enum CombinedShiftApplicationFamily: String, Equatable {
         case "org.mozilla.firefox": return .firefox
         case "com.microsoft.edgemac": return .edge
         case "ru.keepcoder.Telegram", "org.telegram.desktop": return .telegram
-        default: return .other
+        case "com.microsoft.VSCode": return .vsCode
+        case "com.anthropic.claudefordesktop": return .claude
+        default:
+            guard let bundleID, let secondaryClaudeBundleID,
+                  isValidBundleIdentifier(secondaryClaudeBundleID),
+                  bundleID == secondaryClaudeBundleID else { return .other }
+            return .claudeSecondary
+        }
+    }
+
+    private static func isValidBundleIdentifier(_ bundleID: String) -> Bool {
+        let parts = bundleID.split(separator: ".", omittingEmptySubsequences: false)
+        return bundleID.utf8.count <= 255 && parts.count >= 2 && parts.allSatisfy { part in
+            !part.isEmpty && part.utf8.count <= 63 && part.utf8.allSatisfy { byte in
+                (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122)
+                    || (byte >= 48 && byte <= 57) || byte == 45
+            }
         }
     }
 
