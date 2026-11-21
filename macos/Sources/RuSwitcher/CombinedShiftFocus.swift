@@ -64,15 +64,24 @@ struct CombinedShiftFocus: @unchecked Sendable {
     /// Synthetic boundary for headless editing tests. Live captures never set it.
     let fieldBoundary: CombinedShiftFieldBoundary?
     let searchOverlay: SearchOverlayTarget.Binding?
+    /// Text after the first-tap caret, read after the key callback returned.
+    let suffixSnapshot: CaretSuffixSnapshot?
 
     init(processID: Int32, element: AXUIElement, initialSelection: CFRange? = nil,
          fieldBoundary: CombinedShiftFieldBoundary? = nil,
-         searchOverlay: SearchOverlayTarget.Binding? = nil) {
+         searchOverlay: SearchOverlayTarget.Binding? = nil,
+         suffixSnapshot: CaretSuffixSnapshot? = nil) {
         self.processID = processID
         self.element = element
         self.initialSelection = initialSelection
         self.fieldBoundary = fieldBoundary
         self.searchOverlay = searchOverlay
+        self.suffixSnapshot = suffixSnapshot
+    }
+
+    func with(suffixSnapshot: CaretSuffixSnapshot) -> CombinedShiftFocus {
+        CombinedShiftFocus(processID: processID, element: element, initialSelection: initialSelection,
+            fieldBoundary: fieldBoundary, searchOverlay: searchOverlay, suffixSnapshot: suffixSnapshot)
     }
 
     func setMessagingTimeout(_ timeout: Float) -> AXError {

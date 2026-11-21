@@ -66,6 +66,10 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         var selectionKnownWord: ((String, String) -> Bool?)?
         var gestureHostPID: Int32?
         var currentTargetPID: (() -> Int32?)?
+        /// Manual timer for the read-only late check; nil keeps the main-queue timer.
+        var lateScheduler: LateAcknowledgementCheck.Scheduler?
+        /// Repeatable edit events the converter records (field locks, late ACK).
+        var editEvents: [RuntimeDiagnosticEvent] = []
 
         lazy var converter = TextConverter(selectionPreferences: { [unowned self] in
             policySawLease = fence.hasActiveLease
@@ -107,7 +111,9 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
             return fields.first(where: { $0.pid == focus.processID
                 && CFEqual($0.element, focus.element) && $0.valid })?.observation
         }, automaticRoute: { _, _, _ in .nativeVerified },
-           recoveryFailureRecorder: { [unowned self] in recoveryFailures.append($0) })
+           recoveryFailureRecorder: { [unowned self] in recoveryFailures.append($0) },
+           editEventRecorder: { [unowned self] in editEvents.append($0) },
+           fieldLockRecorder: { [unowned self] in editEvents.append($0) })
 
         init(fields: [Field]) throws {
             let layouts = LayoutSwitcher.installedLayouts()
@@ -152,7 +158,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
                 return .init(outcome: .stopped, failureNotice: .noSafeEdit,
                     pendingSourceTargetID: nil, confirmedAutomaticUndo: nil)
             }
-            let platform = CombinedShiftTransaction.Platform(
+            var platform = CombinedShiftTransaction.Platform(
                 currentSourceID: { [unowned self] in sourceID },
                 frontProcessID: { [unowned self] in
                     currentTargetPID.map { $0() } ?? frontField.pid
@@ -178,6 +184,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
                     (currentTargetPID.map { $0() } ?? frontField.pid) == request.frontProcessID
                         ? .textEdit : .other
                 })
+            platform.lateAcknowledgementScheduler = lateScheduler
             return CombinedShiftTransaction.run(request: request, context: direction,
                 execution: execution, converter: converter, monitor: monitor,
                 platform: platform, convertWholeLine: false,
@@ -385,6 +392,27 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         XCTAssertEqual(field.text, "привет MacSwitcher")
         XCTAssertEqual(field.queuedText, 1)
         XCTAssertEqual(rig.sourceRequests, 1)
+    }
+
+    /// The production transaction starts the read-only late check after the
+    /// lease; a field that applies the text late is unlocked without a write.
+    @MainActor
+    func testTransactionConfirmsLateAppliedEditAfterLease() throws {
+        let field = Field(pid: 5150, text: "ghbdtn")
+        field.defersInsertion = true
+        let rig = try Rig(fields: [field])
+        try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+        let result = rig.run(try rig.request(rig.enToRu), direction: rig.enToRu)
+        XCTAssertEqual(result.outcome, .stopped)
+        XCTAssertTrue(rig.converter.hasUnconfirmedAXEdit(in: field.focus()))
+        let queued = (field.queuedText, field.queuedSelection)
+        field.applyDeferredInsertion()
+        XCTAssertEqual(field.text, "привет")
+        RunLoop.main.run(until: Date().addingTimeInterval(1.0))
+        XCTAssertFalse(rig.converter.hasUnconfirmedAXEdit(in: field.focus()))
+        XCTAssertEqual(field.queuedText, queued.0)
+        XCTAssertEqual(field.queuedSelection, queued.1)
+        XCTAssertEqual(rig.sourceRequests, 0, "the late check never selects an input source")
     }
 
     @MainActor
@@ -1917,5 +1945,110 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
         XCTAssertEqual(field.text, "hello привет")
         XCTAssertEqual(result.outcome, .confirmed(resultID: rig.ruToEn.targetLayoutID),
             "Unchanged Russian neighbour must not outweigh the corrected English word")
+    }
+}
+
+// MARK: Review repairs F1
+
+extension ProductionCombinedShiftTransactionTests {
+    @MainActor
+    private final class ManualLateClock {
+        var pending: [(delay: TimeInterval, work: @MainActor () -> Void)] = []
+        var scheduler: LateAcknowledgementCheck.Scheduler {
+            { [unowned self] delay, work in pending.append((delay, work)) }
+        }
+        /// Runs the checks due up to `time` (seconds after the lease is released).
+        func advance(to time: TimeInterval) {
+            let due = pending.filter { $0.delay <= time }
+            pending.removeAll { $0.delay <= time }
+            for item in due.sorted(by: { $0.delay < $1.delay }) { item.work() }
+        }
+    }
+
+    /// A Shift tap through the production recognizer and snapshot, `at` in seconds.
+    @MainActor
+    private func tap(_ rig: Rig, field: Field, press: TimeInterval, release: TimeInterval,
+                     context: CombinedShiftContext, clock: ManualLateClock,
+                     checkBeforeRelease: TimeInterval? = nil) -> CombinedShiftRequest? {
+        func at(_ seconds: TimeInterval) -> KeyboardInputClock {
+            let ns = UInt64(10_000_000_000 + seconds * 1_000_000_000)
+            return KeyboardInputClock(rawTimestamp: ns, receivedAt: ns, numerator: 1, denominator: 1)
+        }
+        clock.advance(to: press)
+        _ = rig.monitor.recognizeCombinedShift(side: .left, isPressed: true, clock: at(press), context: context)
+        if let checkBeforeRelease { clock.advance(to: checkBeforeRelease) }
+        clock.advance(to: release)
+        guard let action = rig.monitor.recognizeCombinedShift(side: .left, isPressed: false,
+                                                              clock: at(release)) else { return nil }
+        let isFirst: Bool
+        if case .switchLayout = action { isFirst = true } else { isFirst = false }
+        return rig.monitor.snapshotCombinedShiftRequest(action: action, frontProcessID: field.pid,
+            focus: isFirst ? field.focus() : nil, contextForSource: { [rig] source in
+                source == rig.enToRu.sourceLayoutID ? rig.enToRu
+                    : source == rig.ruToEn.sourceLayoutID ? rig.ruToEn : nil
+            })
+    }
+
+    /// Review F1, finding 1: a late confirmation must not break a double Shift
+    /// the user has already started; the started gesture keeps its first tap.
+    @MainActor
+    func testLateConfirmationNeverBreaksAStartedDoubleShift() throws {
+        for (index, scenario) in ["betweenTaps", "duringFirstTap"].enumerated() {
+            let field = Field(pid: 5160 + Int32(index), text: "ghbdtn")
+            field.defersInsertion = true
+            let rig = try Rig(fields: [field])
+            let clock = ManualLateClock()
+            rig.lateScheduler = clock.scheduler
+            try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+            XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome, .stopped, scenario)
+            let queued = (field.queuedText, field.queuedSelection)
+            clock.advance(to: 0.300)            // the editor has not applied the text yet
+            clock.advance(to: 0.450)
+            field.applyDeferredInsertion()      // ...and lands it before the next check
+            let first: CombinedShiftRequest?
+            if scenario == "betweenTaps" {
+                first = tap(rig, field: field, press: 0.500, release: 0.520, context: rig.enToRu, clock: clock)
+                clock.advance(to: 0.550)        // a late check is due between the two taps
+            } else {
+                first = tap(rig, field: field, press: 0.540, release: 0.560, context: rig.enToRu,
+                            clock: clock, checkBeforeRelease: 0.550)
+            }
+            XCTAssertNotNil(first, scenario)
+            let second = tap(rig, field: field, press: 0.600, release: 0.620, context: rig.ruToEn, clock: clock)
+            XCTAssertNotNil(second, "\(scenario): the double Shift is recognized")
+            if let second, case .convert = second.action {} else { XCTFail("\(scenario): not a double") }
+            clock.advance(to: 1.0)
+            XCTAssertFalse(rig.editEvents.contains(.ackLateConfirmed), scenario)
+            XCTAssertEqual(field.queuedText, queued.0, scenario)
+            XCTAssertEqual(field.queuedSelection, queued.1, scenario)
+            XCTAssertEqual(rig.sourceRequests, 0, scenario)
+        }
+    }
+
+    /// Review F1, finding 2 (story 3): the live entry check and the transaction
+    /// of a selected-text gesture in a locked field write the lock once.
+    @MainActor
+    func testSelectedGestureInLockedFieldWritesFieldLockOnce() throws {
+        let field = Field(pid: 5170, text: "ghbdtn")
+        let rig = try Rig(fields: [field])
+        let clock = ManualLateClock()
+        rig.lateScheduler = clock.scheduler
+        try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+        field.dropInsertion = true
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome, .stopped)
+        XCTAssertTrue(rig.converter.hasUnconfirmedAXEdit(in: field.focus()))
+        field.dropInsertion = false
+        field.caret = 0
+        field.selection = field.text.utf16.count
+        rig.editEvents = []
+
+        let request = try rig.request(rig.enToRu)
+        let execution = CombinedShiftExecutionContext(focus: try XCTUnwrap(request.focus),
+            inputRevision: request.inputRevision, currentInputRevision: { rig.monitor.inputRevision })
+        XCTAssertFalse(CombinedShiftTransaction.needsSelectionEvidence(execution: execution,
+            converter: rig.converter, convertByText: false, smartConversion: true, nativeRUEN: true))
+        _ = rig.run(request, direction: rig.enToRu)
+        XCTAssertEqual(rig.editEvents.filter { $0 == .recoverySameFieldBlocked }.count, 1)
+        withExtendedLifetime(clock) {}
     }
 }

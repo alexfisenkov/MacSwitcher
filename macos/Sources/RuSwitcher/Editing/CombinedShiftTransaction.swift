@@ -17,6 +17,8 @@ enum CombinedShiftTransaction {
         let noteUnconfirmedSource: (String, UInt64) -> Void
         let observeWholeField: (CombinedShiftFocus) -> NativeFieldObservation?
         let applicationFamily: () -> CombinedShiftApplicationFamily
+        /// Timer for the read-only late-acknowledgement check after the lease.
+        var lateAcknowledgementScheduler: LateAcknowledgementCheck.Scheduler? = nil
     }
 
     struct Result {
@@ -26,6 +28,17 @@ enum CombinedShiftTransaction {
         let confirmedAutomaticUndo: ConfirmedCorrectionReceipt?
     }
 
+    /// The live handler's entry check: a selected-text gesture in an unlocked
+    /// field first gathers local lexicon evidence, before `run` is called.
+    /// It writes nothing: `run` records a field lock once for the gesture.
+    static func needsSelectionEvidence(execution: CombinedShiftExecutionContext,
+                                       converter: TextConverter, convertByText: Bool,
+                                       smartConversion: Bool, nativeRUEN: Bool) -> Bool {
+        (execution.focus.initialSelection?.length ?? 0) > 0
+            && !converter.isFieldLocked(execution.focus)
+            && !convertByText && smartConversion && nativeRUEN
+    }
+
     static func run(request: CombinedShiftRequest, context: CombinedShiftContext,
                     execution: CombinedShiftExecutionContext, converter: TextConverter,
                     monitor: KeyboardMonitor, platform: Platform, convertWholeLine: Bool,
@@ -33,8 +46,11 @@ enum CombinedShiftTransaction {
                     selectionKnownWord: ((String, String) -> Bool?)? = nil,
                     automaticUndo: DoubleShiftAutomaticUndo = .manual,
                     diagnosticsEnabled: Bool = RuntimeDiagnostics.enabled,
-                    onDiagnostic: (CombinedShiftDiagnostic) -> Void = RuntimeDiagnostics.record) -> Result {
+                    onDiagnostic: (CombinedShiftDiagnostic) -> Void = RuntimeDiagnostics.record,
+                    onEvent: (RuntimeDiagnosticEvent) -> Void = RuntimeDiagnostics.record) -> Result {
         converter.beginManualTransaction()
+        converter.beginDiagnosticGesture()
+        defer { converter.endDiagnosticGesture() }
         let pendingRecovery = converter.hasUnconfirmedAXEdit(in: execution.focus)
         let automaticUndoRequested: Bool
         if case .receipt = automaticUndo { automaticUndoRequested = true }
@@ -58,6 +74,7 @@ enum CombinedShiftTransaction {
         if (execution.focus.initialSelection?.length ?? 0) > 0,
            !pendingRecovery {
             func stoppedSelection() -> Result {
+                onEvent(.doubleFailed)
                 report(.refused)
                 return Result(outcome: .stopped, failureNotice: .noSafeEdit,
                     pendingSourceTargetID: platform.pendingSourceTargetID(), confirmedAutomaticUndo: nil)
@@ -102,8 +119,8 @@ enum CombinedShiftTransaction {
             preparedSelection = nil
         }
         guard let lease = platform.beginLease(execution.focus.processID) else {
-            RuntimeDiagnostics.record(.nativeFenceUnavailable)
-            RuntimeDiagnostics.record(.doubleFailed)
+            // Its own counter; not a failed edit attempt.
+            onEvent(.nativeFenceUnavailable)
             report(.refused)
             return Result(outcome: nil, failureNotice: nil,
                 pendingSourceTargetID: platform.pendingSourceTargetID(), confirmedAutomaticUndo: nil)
@@ -148,7 +165,7 @@ enum CombinedShiftTransaction {
         }
         let outcome = CombinedShiftCompletion.finish(succeeded: succeeded, request: request,
             context: context, sourceCommit: sourceCommit, converter: converter,
-            monitor: monitor, isInputCurrent: isCurrent)
+            monitor: monitor, isInputCurrent: isCurrent, record: onEvent)
         let diagnosticResult: CombinedShiftDiagnostic.Result
         switch outcome {
         case .confirmed: diagnosticResult = .confirmed
@@ -159,6 +176,17 @@ enum CombinedShiftTransaction {
             converter.armManualRedoAfterConfirmedAutomaticUndo(receipt)
         }
         platform.finishLease(lease, sourceCommit.confirmedLayoutID)
+        if case .stopped = outcome {
+            // Only reads the field; a confirmed late result arms the ordinary repeat.
+            // Any later Shift press cancels it: its first tap revises no input.
+            let shiftPresses = monitor.combinedShiftPressCount
+            converter.scheduleLateAcknowledgement(execution: execution,
+                read: { platform.observeWholeField(execution.focus) },
+                schedule: platform.lateAcknowledgementScheduler ?? LateAcknowledgementCheck.mainQueue,
+                newGestureStarted: { monitor.combinedShiftPressCount != shiftPresses }) {
+                    monitor.markConverted()
+                }
+        }
         report(diagnosticResult)
         let confirmedAutomaticUndo: ConfirmedCorrectionReceipt?
         if case .confirmed = outcome, case .receipt(let receipt) = automaticUndo {

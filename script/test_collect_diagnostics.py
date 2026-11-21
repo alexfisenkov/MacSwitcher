@@ -35,7 +35,7 @@ class CollectorTests(unittest.TestCase):
             event = collector.parse_line(line(message, 1))
             self.assertEqual(event["event"], message)
             self.assertEqual(set(event), {"id", "time", "event"})
-        for message in ("soloReceived", "autoUnicodePresent", "combined.browser.word.confirmed URL secret",
+        for message in ("autoUnicodePresent", "combined.browser.word.confirmed URL secret",
                         "combined.com.secret.word.refused",
                         "combined.com.example.secondary-client.word.refused",
                         "combined.vsCode-insiders.word.refused",
@@ -108,6 +108,73 @@ class CollectorTests(unittest.TestCase):
         self.assertTrue((collector.DOUBLE_EVENTS | collector.HEALTH_EVENTS |
                          collector.EDIT_FAILURE_EVENTS) <= enum_cases(event_body))
         self.assertEqual(collector.FAILURES, enum_cases(failure_body))
+
+    def test_gesture_window_and_solo_codes_are_collected(self):
+        for message in ("soloReceived", "doubleWindowMissed", "doubleArrivalSkewRejected",
+                        "doubleCaretReanchored", "doubleLayoutUnconfirmed", "ackLateConfirmed",
+                        "ackDeadlineSourceVisible", "ackDeadlineCaretOnly", "ackDeadlineOther",
+                        "failure.caretReanchorRefused", "failure.staleAutomaticRequest",
+                        "failure.editBudgetExhausted", "failure.editSelectionDrifted"):
+            event = collector.parse_line(line(message, 3))
+            self.assertIsNotNone(event, message)
+            self.assertEqual(event["event"], message)
+
+    def test_log_query_has_no_info_level_and_wider_budget(self):
+        self.assertEqual(collector.QUERY_SECONDS, 30)
+        self.assertEqual(collector.RUN_SECONDS, 120)
+        commands = []
+        with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as directory:
+            path = Path(directory) / "empty.ndjson"
+            path.write_text("")
+            original_popen = subprocess.Popen
+            def fake_popen(command, **kwargs):
+                commands.append(command)
+                return original_popen(["/bin/cat", str(path)], **kwargs)
+            with patch.object(collector.subprocess, "Popen", side_effect=fake_popen):
+                collector.fetch_logs(1000, 1060)
+        self.assertEqual(len(commands), 1)
+        self.assertNotIn("--info", commands[0])
+        self.assertIn("ndjson", commands[0])
+
+    def test_report_groups_codes_into_episodes_without_ambiguity_label(self):
+        def row(index, when, event):
+            return {"id": "%064x" % index, "time": when, "event": event}
+        state = collector.empty_state()
+        state["events"] = [row(1, 1000.0, "failure.editSelectionDrifted"),
+                           row(2, 1000.1, "combined.chrome.word.refused"),
+                           row(3, 1001.0, "doubleRecognized"),
+                           row(4, 1001.1, "combined.chrome.word.confirmed"),
+                           row(5, 1100.0, "combined.textEdit.word.confirmed")]
+        text = collector.report(state, 1200, 1)
+        self.assertNotIn("ambiguous", text)
+        lines = text.splitlines()
+        self.assertIn("Episodes: 2; outcomes: 3", lines)
+        refused = next(item for item in lines if "combined.chrome.word.refused" in item)
+        self.assertIn("failure.editSelectionDrifted", refused)
+        confirmed = next(item for item in lines if "combined.chrome.word.confirmed" in item)
+        self.assertNotIn("failure.editSelectionDrifted", confirmed)
+        self.assertIn("doubleRecognized", confirmed)
+        first_episode = lines.index(next(item for item in lines if item.startswith("Episode 1:")))
+        second_episode = lines.index(next(item for item in lines if item.startswith("Episode 2:")))
+        self.assertLess(first_episode, lines.index(refused))
+        self.assertLess(lines.index(confirmed), second_episode)
+
+    def test_report_double_shift_balance_counts_terminal_events(self):
+        state = collector.empty_state()
+        events = ["doubleRecognized"] * 4 + ["doubleSucceeded", "doubleFailed",
+                                             "doubleLayoutUnconfirmed", "doubleFirstSnapshotUnavailable"]
+        state["events"] = [{"id": "%064x" % index, "time": 1000.0 + index, "event": event}
+                           for index, event in enumerate(events)]
+        lines = collector.report(state, 1100, 1).splitlines()
+        self.assertIn("Double Shift: recognized 4; succeeded 1; failed 1; layout unconfirmed 1; "
+                      "ended earlier 1", lines)
+
+    def test_report_lists_every_outcome(self):
+        state = collector.empty_state()
+        state["events"] = [{"id": "%064x" % index, "time": 1000.0 + index * 10,
+                            "event": "combined.chrome.word.refused"} for index in range(150)]
+        text = collector.report(state, 3000, 1)
+        self.assertEqual(sum("combined.chrome.word.refused" in item for item in text.splitlines()), 150)
 
     def test_distinct_events_survive_overlap_and_repeat_is_idempotent(self):
         with tempfile.TemporaryDirectory(dir=TEMP_ROOT) as directory:

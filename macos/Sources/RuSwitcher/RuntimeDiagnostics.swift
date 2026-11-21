@@ -10,6 +10,7 @@ enum RuntimeDiagnosticEvent: String, CaseIterable, Sendable {
     case doubleRevisionChanged, doubleRemoteDeferred, doubleMissingFocus, doubleInvalidExecution
     case doubleNoReconversionState, doubleMissingWordContext, doubleNoBufferOrSelection
     case doubleFailed, doubleSucceeded
+    case doubleCaretReanchored, doubleWindowMissed, doubleArrivalSkewRejected, doubleLayoutUnconfirmed
     case clipboardBegin, clipboardBeginRefused, copyInvalidExecution, copyFocusUnavailable
     case copyClipboardOwnershipLost, copyClipboardPrepared, copyPostRefused, copyPosted, copyUnchanged
     case copyChanged, copyFocusChanged, copyAXSelectionMismatch, copyClaimRefused, copyVerified
@@ -42,6 +43,7 @@ enum RuntimeDiagnosticEvent: String, CaseIterable, Sendable {
     case ackDeadline, ackGateInvalid, ackObservationLimit
     case ackObservationUnavailable, ackTextMismatch, ackCaretMismatch, ackSelectionMismatch
     case ackFocusUnavailable, ackFocusChanged, ackRevisionChanged, ackWrongProcess, ackSecureInput
+    case ackLateConfirmed, ackDeadlineSourceVisible, ackDeadlineCaretOnly, ackDeadlineOther
     case autoTextConfirmed, autoTextUnconfirmed, autoSourceConfirmed, autoSourceFailed, autoSourceUnconfirmed, heldInputRecoded
     case focusReadCannotComplete, focusReadNoValue, focusReadInvalidElement
     case focusReadOtherError, focusReadMissingValue, focusReadUnexpectedType
@@ -96,6 +98,12 @@ enum RuntimeDiagnosticFailureReason: String, CaseIterable, Sendable {
     case verifiedWordNoConversion, verifiedWordRevalidationFailed
     case recoveryNoRAMSnapshot, recoveryInputUnavailable, recoverySelectionMissing
     case recoverySelectionMismatch, recoveryEditRefused, recoveryEditUnknown
+    case editBudgetExhausted, editTimeoutUnavailable, editSelectionDrifted, editSelectionShapeInvalid
+    case editBarrierInactive, editEndpointWitnessMissing, editPreservedFieldMismatch, editSourceUnretained
+    case staleAutomaticRequest, caretReanchorRefused
+    case editorClockInvalid, editorIdentityLost, editorFieldNotEditable, editorFirstReadInvalid
+    case editorPlanRefused, editorFieldChanged, editorPreparationNotQueued, editorReplacementNotQueued
+    case editorPreparationCancelled
 }
 
 enum RuntimeDiagnostics {
@@ -135,6 +143,13 @@ enum RuntimeDiagnostics {
 
     static func record(_ event: RuntimeDiagnosticEvent) {
         guard enabled, seen.shouldEmit(event) else { return }
+        logger.notice("\(event.rawValue, privacy: .public)")
+    }
+
+    /// Bypasses the process-wide once/throttle memory. Callers own the bound:
+    /// the edit path writes each field lock at most once per manual gesture.
+    static func recordRepeatable(_ event: RuntimeDiagnosticEvent) {
+        guard enabled else { return }
         logger.notice("\(event.rawValue, privacy: .public)")
     }
 

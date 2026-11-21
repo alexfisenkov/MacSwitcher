@@ -30,6 +30,8 @@ DOUBLE_EVENTS = frozenset((
     "doubleRevisionChanged", "doubleRemoteDeferred", "doubleMissingFocus",
     "doubleInvalidExecution", "doubleNoReconversionState", "doubleMissingWordContext",
     "doubleNoBufferOrSelection", "doubleFailed", "doubleSucceeded",
+    "soloReceived", "doubleWindowMissed", "doubleArrivalSkewRejected",
+    "doubleCaretReanchored", "doubleLayoutUnconfirmed",
 ))
 FAILURES = frozenset((
     "selectionSourceMismatch", "selectionStateBlocked", "selectionTimeout",
@@ -54,6 +56,13 @@ FAILURES = frozenset((
     "verifiedWordRevalidationFailed", "recoveryNoRAMSnapshot",
     "recoveryInputUnavailable", "recoverySelectionMissing",
     "recoverySelectionMismatch", "recoveryEditRefused", "recoveryEditUnknown",
+    "editBudgetExhausted", "editTimeoutUnavailable", "editSelectionDrifted",
+    "editSelectionShapeInvalid", "editBarrierInactive", "editEndpointWitnessMissing",
+    "editPreservedFieldMismatch", "editSourceUnretained", "staleAutomaticRequest",
+    "caretReanchorRefused", "editorClockInvalid", "editorIdentityLost",
+    "editorFieldNotEditable", "editorFirstReadInvalid", "editorPlanRefused",
+    "editorFieldChanged", "editorPreparationNotQueued", "editorReplacementNotQueued",
+    "editorPreparationCancelled",
 ))
 HEALTH_EVENTS = frozenset((
     "tapDisabledTimeout", "tapDisabledUserInput", "fenceTapMissing",
@@ -76,6 +85,7 @@ EDIT_FAILURE_EVENTS = frozenset((
     "selectionAXMutationUnknown", "selectionAXReadbackMismatch",
     "unconfirmedEditBlocked", "executionFocusUnavailable", "executionFocusChanged",
     "executionWrongProcess", "executionRevisionChanged", "executionSecureInput",
+    "ackLateConfirmed", "ackDeadlineSourceVisible", "ackDeadlineCaretOnly", "ackDeadlineOther",
 ))
 EXACT_EVENTS = DOUBLE_EVENTS | HEALTH_EVENTS | EDIT_FAILURE_EVENTS | frozenset("failure." + x for x in FAILURES)
 MAX_AGE = 14 * 86400
@@ -85,8 +95,9 @@ MAX_CATCHUP = 24 * 3600
 OVERLAP = 5
 PAGE_SECONDS = 900
 MAX_PAGES = 4
-QUERY_SECONDS = 8
-RUN_SECONDS = 45
+QUERY_SECONDS = 30
+RUN_SECONDS = 120
+EPISODE_SECONDS = 3
 MAX_BUDGET_RETRIES = 3
 
 
@@ -313,7 +324,7 @@ def fetch_logs(start, end):
     cursor = start
     while cursor < end:
         window_end = min(cursor + PAGE_SECONDS, end)
-        command = ["/usr/bin/log", "show", "--style", "ndjson", "--info",
+        command = ["/usr/bin/log", "show", "--style", "ndjson",
                    "--start", local(cursor), "--end", local(window_end), "--predicate", predicate]
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         selector = selectors.DefaultSelector()
@@ -480,22 +491,51 @@ def report(state, now, hours):
     if state["budget_failure"] is not None:
         lines.append("Pending query-budget retry: %d/%d" % (
             state["budget_failure"]["count"], MAX_BUDGET_RETRIES))
-    attributed = [row for row in rows if row["event"].startswith(("combined.", "automatic."))]
-    lines.append("Attributed outcomes: %d" % len(attributed))
-    for row in attributed[-100:]:
-        nearby = [item for item in rows if item["event"].startswith("failure.")
-                  and 0 <= row["time"] - item["time"] <= 2]
-        competing = sum(abs(other["time"] - row["time"]) <= 2 for other in attributed)
-        reason = ("; nearby stage " + nearby[-1]["event"] if len(nearby) == 1 and competing == 1
-                  else "; stage ambiguous" if nearby else "")
-        lines.append("%s  %s%s" % (_time(row["time"]), row["event"], reason))
+    outcome = lambda row: row["event"].startswith(("combined.", "automatic."))
+    outcomes = [row for row in rows if outcome(row)]
+    episodes = []
+    for row in outcomes:
+        if episodes and row["time"] - episodes[-1][-1]["time"] <= EPISODE_SECONDS:
+            episodes[-1].append(row)
+        else:
+            episodes.append([row])
+    lines.append("Episodes: %d; outcomes: %d" % (len(episodes), len(outcomes)))
+    codes = [row for row in rows if not outcome(row)]
+    for number, episode in enumerate(episodes, 1):
+        begin, end = episode[0]["time"], episode[-1]["time"]
+        lines.append("Episode %d: %s — %s, outcomes %d" % (number, _time(begin), _time(end), len(episode)))
+        owned = {id(row): [] for row in episode}
+        for code in codes:
+            if not begin - EPISODE_SECONDS <= code["time"] <= end + EPISODE_SECONDS:
+                continue
+            # A stage precedes the outcome it explains: attach it to the first
+            # outcome at or after it, otherwise to the episode's last outcome.
+            owner = next((row for row in episode if row["time"] >= code["time"]), episode[-1])
+            owned[id(owner)].append(code["event"])
+        for row in episode:
+            tally = {}
+            for event in owned[id(row)]:
+                tally[event] = tally.get(event, 0) + 1
+            stages = ", ".join(event if count == 1 else "%s x%d" % (event, count)
+                               for event, count in sorted(tally.items()))
+            lines.append("  %s  %s%s" % (_time(row["time"]), row["event"],
+                                         "; codes " + stages if stages else ""))
     counts = {}
-    for row in rows:
-        if not row["event"].startswith(("combined.", "automatic.")):
-            counts[row["event"]] = counts.get(row["event"], 0) + 1
+    for row in codes:
+        counts[row["event"]] = counts.get(row["event"], 0) + 1
+    if counts.get("doubleRecognized"):
+        # Counts presses, not checks: each recognized double ends in one of these.
+        ended = sum(counts.get(name, 0) for name in
+                    ("doubleSucceeded", "doubleFailed", "doubleLayoutUnconfirmed"))
+        lines.append("Double Shift: recognized %d; succeeded %d; failed %d; layout unconfirmed %d; "
+                     "ended earlier %d" % (counts["doubleRecognized"], counts.get("doubleSucceeded", 0),
+                                           counts.get("doubleFailed", 0),
+                                           counts.get("doubleLayoutUnconfirmed", 0),
+                                           max(0, counts["doubleRecognized"] - ended)))
     for event, count in sorted(counts.items()):
         lines.append("%s: %d" % (event, count))
-    lines.append("Nearby stages are timing hints, not proven causes; browser is legacy Chrome/Safari aggregate.")
+    lines.append("Episode codes are timing neighbours within %d s, not proven causes; "
+                 "browser is legacy Chrome/Safari aggregate." % EPISODE_SECONDS)
     return "\n".join(lines)
 
 
