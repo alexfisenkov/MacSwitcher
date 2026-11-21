@@ -18,21 +18,33 @@ enum CombinedShiftFailure: Equatable {
 }
 
 enum CombinedShiftApplicationFamily: String, Equatable {
-    case textEdit, codex, browser, other
+    // `browser` remains in the closed vocabulary for older OSLog records.
+    case textEdit, codex, browser, chrome, safari, firefox, edge, telegram, other
 
     static func classify(bundleID: String?) -> Self {
         switch bundleID {
         case "com.apple.TextEdit": return .textEdit
         case "com.openai.codex": return .codex
-        case "com.google.Chrome", "com.apple.Safari": return .browser
+        case "com.google.Chrome": return .chrome
+        case "com.apple.Safari": return .safari
+        case "org.mozilla.firefox": return .firefox
+        case "com.microsoft.edgemac": return .edge
+        case "ru.keepcoder.Telegram", "org.telegram.desktop": return .telegram
         default: return .other
         }
+    }
+
+    static func classify(bundleID: String?, expectedProcessID: Int32,
+                         observedProcessID: Int32?, secureInputActive: Bool) -> Self {
+        guard !secureInputActive, expectedProcessID > 0,
+              observedProcessID == expectedProcessID else { return .other }
+        return classify(bundleID: bundleID)
     }
 }
 
 struct CombinedShiftDiagnostic: Equatable {
-    enum Operation: String, Equatable { case word, selection, undo }
-    enum Result: String, Equatable { case confirmed, refused, uncertain }
+    enum Operation: String, Equatable { case word, selection, undo, recovery }
+    enum Result: String, Equatable { case confirmed, refused, uncertain, pending, sourceUnconfirmed }
     let application: CombinedShiftApplicationFamily
     let operation: Operation
     let result: Result
@@ -56,7 +68,7 @@ enum CombinedShiftEditing {
                         automaticUndo: DoubleShiftAutomaticUndo = .manual) -> Bool {
         let wasUnconfirmed = converter.hasUnconfirmedAXEdit(in: execution.focus)
         let hasSelection = (execution.focus.initialSelection?.length ?? 0) > 0
-        let operation: CombinedShiftDiagnostic.Operation = wasUnconfirmed ? .undo
+        let operation: CombinedShiftDiagnostic.Operation = wasUnconfirmed ? .recovery
             : hasSelection ? .selection : request.reconvert ? .undo : .word
         func performEdit() -> Bool {
             if wasUnconfirmed {
@@ -103,8 +115,10 @@ enum CombinedShiftEditing {
         }
         let succeeded = performEdit()
         let uncertain = converter.hasUnconfirmedAXEdit(in: execution.focus)
+        let result: CombinedShiftDiagnostic.Result = succeeded ? .confirmed
+            : wasUnconfirmed && uncertain ? .pending : uncertain ? .uncertain : .refused
         onDiagnostic?(CombinedShiftDiagnostic(application: application, operation: operation,
-            result: succeeded ? .confirmed : uncertain ? .uncertain : .refused))
+            result: result))
         if !succeeded { onFailure?(uncertain ? .unconfirmedEdit : .noSafeEdit) }
         return succeeded
     }

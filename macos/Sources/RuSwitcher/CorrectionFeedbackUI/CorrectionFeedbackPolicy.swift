@@ -20,12 +20,12 @@ enum CorrectionFeedbackPolicy {
     static func recoveryMessage(languageCode: String, hasRecovery: Bool = true) -> String {
         if !hasRecovery {
             return languageCode == "ru"
-                ? "Не удалось проверить, изменился ли текст. Проверьте поле перед повторной попыткой."
-                : "Could not verify whether the text changed. Check the field before trying again."
+                ? "Результат правки не подтверждён. Проверьте поле. Если повтор в нём ничего не меняет, начните ввод в другом поле или окне."
+                : "The edit could not be confirmed. Check the field. If another attempt there changes nothing, start typing in a different field or window."
         }
         return languageCode == "ru"
-            ? "Не удалось проверить результат. Исходный текст сохранён в MacSwitcher."
-            : "Could not verify the result. The original text is preserved in MacSwitcher."
+            ? "Результат правки не подтверждён. Откройте исходный текст кнопкой или через меню MacSwitcher, затем скопируйте его. Если повтор в том же поле ничего не меняет, начните ввод в другом поле или окне."
+            : "The edit could not be confirmed. Open the original text with the button or MacSwitcher menu, then copy it. If another attempt in the same field changes nothing, start typing in a different field or window."
     }
 
     static func sourceMessage(languageCode: String) -> String {

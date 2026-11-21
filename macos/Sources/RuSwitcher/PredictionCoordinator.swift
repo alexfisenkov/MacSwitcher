@@ -43,6 +43,8 @@ final class PredictionCoordinator {
     private var anchorProofDeferred = false
     private let correctionReceipts: ConfirmedCorrectionReceipts
     private let receiptNow: () -> UInt64
+    private let diagnosticsEnabled: () -> Bool
+    private let recordAutomaticUncertain: (CombinedShiftApplicationFamily) -> Void
     private var confirmedAdaptiveUndo: (id: UUID, original: String, replacement: String,
                                         focus: CombinedShiftFocus)?
     private struct RecentAutomaticEdit {
@@ -76,11 +78,15 @@ final class PredictionCoordinator {
 
     init(monitor: KeyboardMonitor, converter: TextConverter,
          platform: PredictionCoordinatorPlatform? = nil, engine: PredictionEngine? = nil,
-         receiptNow: @escaping () -> UInt64 = { DispatchTime.now().uptimeNanoseconds }) {
+         receiptNow: @escaping () -> UInt64 = { DispatchTime.now().uptimeNanoseconds },
+         diagnosticsEnabled: @escaping () -> Bool = { RuntimeDiagnostics.enabled },
+         recordAutomaticUncertain: @escaping (CombinedShiftApplicationFamily) -> Void = RuntimeDiagnostics.recordAutomaticUncertain) {
         self.monitor = monitor
         self.converter = converter
         self.platform = platform ?? .live(monitor: monitor)
         self.receiptNow = receiptNow
+        self.diagnosticsEnabled = diagnosticsEnabled
+        self.recordAutomaticUncertain = recordAutomaticUncertain
         self.correctionReceipts = ConfirmedCorrectionReceipts(now: receiptNow)
         if let engine {
             engineTask = Task { engine }
@@ -446,7 +452,19 @@ final class PredictionCoordinator {
         }, onUnconfirmed: { target in
             self.platform.noteUnconfirmedSource(target, requestedAt)
         })
-        defer { platform.finishLease(lease, sourceCommit.confirmedLayoutID) }
+        var queuedUnknown = false
+        defer {
+            platform.finishLease(lease, sourceCommit.confirmedLayoutID)
+            if queuedUnknown && diagnosticsEnabled() {
+                // This only runs for an unknown queued edit, after the input
+                // lease ends. Frontmost metadata is never read for successful edits.
+                let front = platform.frontmost()
+                let family = CombinedShiftApplicationFamily.classify(bundleID: front.bundleID,
+                    expectedProcessID: snapshot.processID, observedProcessID: front.processID,
+                    secureInputActive: platform.isSecure() || focus.processID != snapshot.processID)
+                recordAutomaticUncertain(family)
+            }
+        }
         var textWasQueued = false
         let textConfirmed = converter.withNativeInputBudget({ [weak self] in
             self?.platform.leaseRemaining(lease)
@@ -469,6 +487,7 @@ final class PredictionCoordinator {
                 DispatchQueue.main.async { [weak self] in self?.onUnconfirmedEdit?() }
             }
             if textWasQueued {
+                queuedUnknown = true
                 monitor.resetPredictionContext()
                 outcome = .textUnconfirmed
                 RuntimeDiagnostics.record(.autoTextUnconfirmed)

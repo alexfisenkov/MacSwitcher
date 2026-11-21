@@ -421,16 +421,23 @@ final class ProductionCombinedShiftEditingTests: XCTestCase {
         let converter = Self.converter(for: [field])
         try type("ghbdtn", source: pair.en, monitor: monitor)
         field.dropInsertion = true
+        var diagnostics: [CombinedShiftDiagnostic] = []
 
         XCTAssertFalse(try edit(field, monitor: monitor, converter: converter,
-            context: pair.enToRu, contexts: contexts))
+            context: pair.enToRu, contexts: contexts,
+            onDiagnostic: { diagnostics.append($0) }, application: .chrome))
+        XCTAssertEqual(diagnostics, [.init(application: .chrome, operation: .word, result: .uncertain)])
         XCTAssertTrue(converter.hasUnconfirmedAXEdit(in: field.focus()))
         XCTAssertEqual(field.text, "ghbdtn")
         XCTAssertEqual(field.selection, 6)
         let queuedBeforeRecovery = field.queuedText
 
         XCTAssertFalse(try edit(field, monitor: monitor, converter: converter,
-            context: pair.enToRu, contexts: contexts))
+            context: pair.enToRu, contexts: contexts,
+            onDiagnostic: { diagnostics.append($0) }, application: .chrome))
+        XCTAssertEqual(diagnostics.last,
+            .init(application: .chrome, operation: .recovery, result: .pending))
+        XCTAssertEqual(diagnostics.count, 2)
         XCTAssertEqual(field.queuedText, queuedBeforeRecovery, "Exact read-back must not queue a no-op replacement")
         XCTAssertTrue(converter.hasUnconfirmedAXEdit(in: field.focus()),
             "An unchanged original cannot prove that queued Unicode will never arrive")
@@ -441,6 +448,28 @@ final class ProductionCombinedShiftEditingTests: XCTestCase {
             context: pair.enToRu, contexts: contexts))
         XCTAssertEqual(field.text, "ghbdtn")
         XCTAssertEqual(field.queuedText, queuedBeforeRecovery)
+        XCTAssertTrue(converter.hasUnconfirmedAXEdit(in: field.focus()))
+
+    }
+
+    @MainActor
+    func testFreshUnknownUndoIsDistinctFromExistingRecoveryLock() throws {
+        let pair = try layoutPair()
+        let contexts = [pair.en: pair.enToRu, pair.ru: pair.ruToEn]
+        let monitor = KeyboardMonitor()
+        let field = Field(pid: 1017, text: "ghbdtn")
+        let converter = Self.converter(for: [field])
+        try type("ghbdtn", source: pair.en, monitor: monitor)
+        XCTAssertTrue(try edit(field, monitor: monitor, converter: converter,
+            context: pair.enToRu, contexts: contexts))
+        monitor.markConverted()
+        field.dropInsertion = true
+        var diagnostics: [CombinedShiftDiagnostic] = []
+        XCTAssertFalse(try edit(field, monitor: monitor, converter: converter,
+            context: pair.enToRu, contexts: contexts,
+            onDiagnostic: { diagnostics.append($0) }, application: .chrome))
+        XCTAssertEqual(diagnostics, [.init(application: .chrome,
+            operation: .undo, result: .uncertain)])
         XCTAssertTrue(converter.hasUnconfirmedAXEdit(in: field.focus()))
     }
 
@@ -526,8 +555,16 @@ final class ProductionCombinedShiftEditingTests: XCTestCase {
     func testDiagnosticApplicationFamilyContainsNoTypedContent() {
         XCTAssertEqual(CombinedShiftApplicationFamily.classify(bundleID: "com.apple.TextEdit"), .textEdit)
         XCTAssertEqual(CombinedShiftApplicationFamily.classify(bundleID: "com.openai.codex"), .codex)
-        XCTAssertEqual(CombinedShiftApplicationFamily.classify(bundleID: "com.google.Chrome"), .browser)
+        XCTAssertEqual(CombinedShiftApplicationFamily.classify(bundleID: "com.google.Chrome"), .chrome)
+        XCTAssertEqual(CombinedShiftApplicationFamily.classify(bundleID: "com.apple.Safari"), .safari)
+        XCTAssertEqual(CombinedShiftApplicationFamily.classify(bundleID: "org.mozilla.firefox"), .firefox)
+        XCTAssertEqual(CombinedShiftApplicationFamily.classify(bundleID: "com.microsoft.edgemac"), .edge)
+        XCTAssertEqual(CombinedShiftApplicationFamily.classify(bundleID: "ru.keepcoder.Telegram"), .telegram)
         XCTAssertEqual(CombinedShiftApplicationFamily.classify(bundleID: "user.private.editor"), .other)
+        XCTAssertEqual(CombinedShiftApplicationFamily.classify(bundleID: "com.google.Chrome",
+            expectedProcessID: 123, observedProcessID: 456, secureInputActive: false), .other)
+        XCTAssertEqual(CombinedShiftApplicationFamily.classify(bundleID: "com.google.Chrome",
+            expectedProcessID: 123, observedProcessID: 123, secureInputActive: true), .other)
     }
 
     @MainActor

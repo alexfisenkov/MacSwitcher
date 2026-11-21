@@ -92,6 +92,8 @@ enum RuntimeDiagnosticFailureReason: String, CaseIterable, Sendable {
     case verifiedWordFieldMismatch, verifiedWordTrailingSpaceLimit, verifiedWordNoFinalLetter
     case verifiedWordTokenLimit, verifiedWordBoundaryInvalid, verifiedWordTokenInvalid
     case verifiedWordNoConversion, verifiedWordRevalidationFailed
+    case recoveryNoRAMSnapshot, recoveryInputUnavailable, recoverySelectionMissing
+    case recoverySelectionMismatch, recoveryEditRefused, recoveryEditUnknown
 }
 
 enum RuntimeDiagnostics {
@@ -130,8 +132,25 @@ enum RuntimeDiagnostics {
     /// Opt-in outcome metadata only. All three fields come from closed enums;
     /// no typed text, key, AX value, clipboard content or arbitrary app ID enters OSLog.
     static func record(_ outcome: CombinedShiftDiagnostic) {
-        guard enabled else { return }
-        logger.notice("combined.\(outcome.application.rawValue, privacy: .public).\(outcome.operation.rawValue, privacy: .public).\(outcome.result.rawValue, privacy: .public)")
+        guard let identifier = combinedIdentifier(outcome, enabled: enabled) else { return }
+        logger.notice("\(identifier, privacy: .public)")
+    }
+
+    static func combinedIdentifier(_ outcome: CombinedShiftDiagnostic, enabled: Bool) -> String? {
+        guard enabled else { return nil }
+        return "combined.\(outcome.application.rawValue).\(outcome.operation.rawValue).\(outcome.result.rawValue)"
+    }
+
+    /// Emitted only after an automatic text batch was queued but its edit was
+    /// not confirmed. The application is a closed family captured at attempt time.
+    static func recordAutomaticUncertain(_ application: CombinedShiftApplicationFamily) {
+        guard let identifier = automaticUncertainIdentifier(application, enabled: enabled) else { return }
+        logger.notice("\(identifier, privacy: .public)")
+    }
+
+    static func automaticUncertainIdentifier(_ application: CombinedShiftApplicationFamily,
+                                             enabled: Bool) -> String? {
+        enabled ? "automatic.\(application.rawValue).uncertain" : nil
     }
 
     static func beginNativeFocusReadAttempt() {
