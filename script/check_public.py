@@ -88,6 +88,23 @@ def validate_supplemental(manifest, failures):
             failures.append((entry.get("output", "dictionaries/manifest.json"), f"invalid supplemental SQLite: {error}"))
 
 
+def validate_second_sources(manifest, failures):
+    """The second frequency source must be named with its license and SHA-256 in NOTICE.md too."""
+    record = manifest.get("second_sources")
+    try:
+        notice = (ROOT / "dictionaries/NOTICE.md").read_text(encoding="utf-8")
+        if not isinstance(record, dict) or not record.get("license") or set(record.get("sources", {})) != {"ru", "en"}:
+            raise ValueError("missing second source record")
+        if record["license"].replace("-", " ") not in notice.replace("-", " "):
+            raise ValueError("license missing from NOTICE.md")
+        for items in record["sources"].values():
+            for item in items:
+                if not re.fullmatch(r"[0-9a-f]{64}", item["sha256"]) or item["sha256"] not in notice or record["name"] not in notice or record["commit"] not in notice:
+                    raise ValueError(f"{item.get('name')} hash/name missing from NOTICE.md")
+    except (OSError, KeyError, TypeError, ValueError, AttributeError) as error:
+        failures.append(("dictionaries/manifest.json", f"second source record invalid: {error}"))
+
+
 def main():
     paths = subprocess.check_output(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], cwd=ROOT).decode().split("\0")
     failures = []
@@ -163,6 +180,7 @@ def main():
         failures.append(("dictionaries/manifest.json", "missing/invalid curated resource record"))
     if manifest.get("schema") == 3:
         validate_supplemental(manifest, failures)
+        validate_second_sources(manifest, failures)
     for path, reason in failures:
         print(f"FAIL {path}: {reason}", file=sys.stderr)
     if failures:

@@ -31,7 +31,7 @@ final class ExpandedLexiconTests: XCTestCase {
     func testBundledFullCountsAreInclusiveAndRareTailIsExactlyQueryable() throws {
         let lexicon = try bundled()
         XCTAssertEqual(lexicon.wordCounts, ["ru": 200_000, "en": 200_000])
-        XCTAssertEqual(lexicon.fullWordCounts, ["ru": 1_178_533, "en": 1_387_382])
+        XCTAssertEqual(lexicon.fullWordCounts, ["ru": 1_193_638, "en": 1_418_148])
         XCTAssertEqual(lexicon.fullFrequency(of: "RFR", language: "en-US"), 4)
         XCTAssertEqual(lexicon.frequency(of: "rfr", language: "en"), 0)
         XCTAssertEqual(lexicon.fullFrequency(of: "electroencephalographically", language: "en"), 1)

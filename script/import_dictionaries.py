@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Rebuild public trigger/full/curated lexicons from pinned data, never user data."""
 import argparse
+from collections import Counter
 from contextlib import closing, contextmanager
 import fcntl
 import hashlib
@@ -20,6 +21,16 @@ SOURCE_HASHES = {
     "ru": "32dfd94138aea2667ec455dcc8512029e39bd4b8ea70b09410d569b69d511a30",
     "en": "7fea67ab954e2c01df6c608c9826e594cf36f8823b3243554f88245fb75dc506",
 }
+# Second frequency source: Wikipedia word counts by Ilya Semenov (MIT script, data from Wikipedia dumps, CC BY-SA).
+SECOND_COMMIT = "d11c4fab211156e96ab5943850dd6f98604707fb"
+SECOND_URL = "https://raw.githubusercontent.com/IlyaSemenov/wikipedia-word-frequency/" + SECOND_COMMIT + "/results/{name}.txt"
+SECOND_SOURCES = {
+    "ru": [{"name": "ruwiki-2022-08-29", "kind": "Wikipedia dump 2022-08-29", "sha256": "48c94b85f17afcb1b1cb432601337579a7188b445c42b9324d52c91dc863cf5a"}],
+    "en": [{"name": "enwiki-2023-04-13", "kind": "Wikipedia dump 2023-04-13", "sha256": "e2071140a49a6c40c732bd68c36836ef13c0978233fb3d5e1b2a3c2d34faef59"}],
+}
+SECOND_WEIGHT = 0.2  # share of the subtitle scale given to the second source's rate
+SECOND_MIN_LENGTH = 4  # shorter forms are mostly acronyms; they would swallow wrong-layout text
+SECOND_MIN_COUNT = 200  # the Wikipedia lists are ~3x the subtitle volume; rarer words are mostly names and noise
 PATTERNS = {"ru": r"[а-яё]+(?:-[а-яё]+)*", "en": r"[a-z]+(?:['-][a-z]+)*"}
 
 
@@ -39,6 +50,53 @@ def filtered_words(raw, language):
         except ValueError:
             continue
     return words
+
+
+def second_source_words(raw, language):
+    """Words of one Wikipedia list (`word count` lines): case forms summed, same alphabet/length filter as subtitles."""
+    words = Counter()
+    for line in raw.decode("utf-8").splitlines():
+        try:
+            word, count = line.rsplit(" ", 1)
+            word = unicodedata.normalize("NFC", word.lower())
+            count = int(count)
+        except ValueError:
+            continue
+        if count > 0 and 1 <= len(word) <= 40 and re.fullmatch(PATTERNS[language], word):
+            words[word] += count
+    return dict(words)
+
+
+def unweighted_spellings(language):
+    """Curated modern spellings: present as exact spellings only, never with a frequency."""
+    path = ROOT / "dictionaries/modern-spellings-source.tsv"
+    rows = [line.split("\t") for line in path.read_text(encoding="utf-8").splitlines() if line and not line.startswith("#")]
+    return frozenset(unicodedata.normalize("NFC", row[1].lower()) for row in rows if len(row) == 2 and row[0] == language)
+
+
+def merge_frequencies(base, extras, unweighted=frozenset()):
+    """Subtitle counts stay as they are; a word the second source sees often is lifted to its scaled rate.
+
+    Forms shorter than SECOND_MIN_LENGTH (abbreviations that collide with wrong-layout text) and the curated
+    modern spellings (`unweighted`, kept frequency-free by design) are left to the subtitles alone."""
+    pooled = Counter()
+    for words in extras:
+        pooled.update(words)
+    merged = dict(base)
+    scale = SECOND_WEIGHT * sum(base.values()) / sum(pooled.values())
+    for word, count in pooled.items():
+        if count >= SECOND_MIN_COUNT and len(word) >= SECOND_MIN_LENGTH and word not in unweighted:
+            merged[word] = max(merged.get(word, 0), max(1, round(count * scale)))
+    return merged
+
+
+def trigger_selection(base, merged, limit=LIMIT):
+    """Top `limit` by merged frequency, except that short subtitle-only forms of the old trigger set stay in."""
+    ranked = sorted(base.items(), key=lambda item: (-item[1], item[0]))[:limit]
+    pinned = {word for word, _ in ranked if len(word) < SECOND_MIN_LENGTH}
+    rest = sorted(((word, count) for word, count in merged.items() if word not in pinned), key=lambda item: (-item[1], item[0]))
+    chosen = [(word, merged[word]) for word in pinned] + rest[:limit - len(pinned)]
+    return sorted(chosen, key=lambda item: (-item[1], item[0]))
 
 
 @contextmanager
@@ -76,6 +134,7 @@ def write_full_database(output, language, words, reported_output=None):
             database.executemany("INSERT INTO metadata VALUES (?, ?)", [("entries", str(len(words))), ("language", language)])
             database.commit()
             database.execute("VACUUM")
+        temporary.chmod(0o644)
         temporary.replace(output)
     finally:
         temporary.unlink(missing_ok=True)
@@ -101,6 +160,19 @@ def protected_data(raw):
     return "".join(f"{language}\t{term}\t{category}\n" for (language, term), category in sorted(terms.items())).encode("utf-8")
 
 
+def refresh_supplemental_counts(manifest, resources, full_stages):
+    """Overlap/union figures of the spelling bases depend on the frequency base; keep them true."""
+    languages = manifest.get("supplemental_spellings", {}).get("languages", {})
+    for language, entry in languages.items():
+        with closing(sqlite3.connect(resources / f"{language}-spellings.sqlite")) as database:
+            database.execute("ATTACH DATABASE ? AS frequency", (str(full_stages[language]),))
+            count = database.execute("SELECT COUNT(*) FROM spellings").fetchone()[0]
+            overlap = database.execute("SELECT COUNT(*) FROM spellings s JOIN frequency.frequencies f ON s.word=f.word").fetchone()[0]
+            full_count = database.execute("SELECT COUNT(*) FROM frequency.frequencies").fetchone()[0]
+        entry.update({"overlap_with_frequency": overlap, "new_unique_against_frequency": count - overlap,
+                      "union_with_frequency": full_count + count - overlap})
+
+
 def import_project(source_dir, download=False):
     """All inputs are pinned/validated before publishing; manifest is replaced last."""
     with import_lock():
@@ -120,16 +192,31 @@ def import_project(source_dir, download=False):
                 if digest(raw) != SOURCE_HASHES[language]:
                     raise ValueError(f"Pinned upstream SHA-256 mismatch for {language}; refusing import")
                 raw_sources[language] = raw
+            second_raw = {}
+            for language, sources in SECOND_SOURCES.items():
+                for item in sources:
+                    source = source_dir / "second" / f"{item['name']}.txt"
+                    if download:
+                        source = stage / f"{item['name']}.txt"
+                        subprocess.run(["curl", "--fail", "--location", "--silent", "--show-error", "--max-time", "300",
+                                        SECOND_URL.format(name=item["name"]), "-o", str(source)], check=True)
+                    raw = source.read_bytes()
+                    if digest(raw) != item["sha256"]:
+                        raise ValueError(f"Second source SHA-256 mismatch for {item['name']}; refusing import")
+                    second_raw[item["name"]] = raw
             curated_source = ROOT / "dictionaries/protected-terms-source.tsv"
             curated_raw = curated_source.read_bytes()
             curated = protected_data(curated_raw)
             resources = ROOT / "macos/Sources/RuSwitcher/Resources"
             records = {}
+            full_stages = {}
             staged = []
             for language in PATTERNS:
                 raw = raw_sources[language]
-                words = filtered_words(raw, language)
-                selected = sorted(words.items(), key=lambda item: (-item[1], item[0]))[:LIMIT]
+                subtitle_words = filtered_words(raw, language)
+                words = merge_frequencies(subtitle_words, [second_source_words(second_raw[item["name"]], language)
+                                                            for item in SECOND_SOURCES[language]], unweighted_spellings(language))
+                selected = trigger_selection(subtitle_words, words)
                 data = "".join(f"{word}\t{count}\n" for word, count in selected).encode("utf-8")
                 output = resources / f"{language}.tsv"
                 temporary = stage / output.name
@@ -139,6 +226,7 @@ def import_project(source_dir, download=False):
                 full_stage = stage / full_output.name
                 full = write_full_database(full_stage, language, words, reported_output=full_output)
                 staged.append((full_stage, full_output))
+                full_stages[language] = full_stage
                 records[language] = {"source_url": source_urls[language], "source_sha256": digest(raw),
                     "output": str(output.relative_to(ROOT)), "output_sha256": digest(data), "entries": len(selected), "bytes": len(data), "full": full}
                 print(f"{language}: {len(selected):,} trigger entries; {len(words):,} full entries; {full['bytes']:,} SQLite bytes")
@@ -152,11 +240,22 @@ def import_project(source_dir, download=False):
                 "counts": counts, "bytes": len(curated),
                 "provenance": "Project-curated public spellings of brands, technology, common given/family names, IT words and place names; no personal contacts or user text",
                 "license": "CC0-1.0", "license_url": "https://creativecommons.org/publicdomain/zero/1.0/"}
-            manifest = {"schema": 2, "upstream": "https://github.com/hermitdave/FrequencyWords", "revision": REVISION,
+            manifest_path = ROOT / "dictionaries/manifest.json"
+            manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
+            manifest.update({"schema": 3, "upstream": "https://github.com/hermitdave/FrequencyWords", "revision": REVISION,
                 "corpus": "OpenSubtitles 2018", "license": "CC-BY-SA-4.0", "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
                 "max_trigger_entries_per_language": LIMIT,
-                "transformation": "NFC/lowercase/alphabet and length 1...40 filter/max frequency duplicates; top 200k frequency descending then lexical for triggers; all filtered words sorted into read-only exact SQLite",
-                "sqlite_builder_version": sqlite3.sqlite_version, "languages": records, "protected_terms": protected}
+                "transformation": "NFC/lowercase/alphabet and length 1...40 filter/max frequency duplicates; merged with the second source (see second_sources); top 200k by merged frequency descending then lexical for triggers, short subtitle forms of the old trigger set kept; all filtered words sorted into read-only exact SQLite",
+                "sqlite_builder_version": sqlite3.sqlite_version, "languages": records, "protected_terms": protected,
+                "second_sources": {
+                    "name": "wikipedia-word-frequency", "url": "https://github.com/IlyaSemenov/wikipedia-word-frequency",
+                    "commit": SECOND_COMMIT, "code_license": "MIT",
+                    "license": "CC-BY-SA-4.0", "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+                    "merge": f"word frequency = max(subtitle count, round({SECOND_WEIGHT} * subtitle total / second total * second count)); second-source words seen fewer than {SECOND_MIN_COUNT} times, shorter than {SECOND_MIN_LENGTH} letters, or listed as curated modern spellings are skipped",
+                    "weight": SECOND_WEIGHT, "min_count": SECOND_MIN_COUNT, "min_length": SECOND_MIN_LENGTH,
+                    "sources": {language: [{**item, "url": SECOND_URL.format(name=item["name"]), "bytes": len(second_raw[item["name"]])}
+                                           for item in items] for language, items in SECOND_SOURCES.items()}}})
+            refresh_supplemental_counts(manifest, resources, full_stages)
             manifest_stage = stage / "manifest.json"
             manifest_stage.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
             if download:
@@ -169,6 +268,10 @@ def import_project(source_dir, download=False):
                         Path(filename).replace(source_dir / f"{language}_full.txt")
                     finally:
                         Path(filename).unlink(missing_ok=True)
+            if download:
+                (source_dir / "second").mkdir(parents=True, exist_ok=True)
+                for name, raw in second_raw.items():
+                    (source_dir / "second" / f"{name}.txt").write_bytes(raw)
             # Every artifact is complete before replacing published files. A concurrent
             # importer cannot enter; an interrupted publication is detected against the
             # previous manifest by check_public rather than accepted as a valid set.

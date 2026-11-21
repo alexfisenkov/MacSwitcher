@@ -18,6 +18,26 @@ importer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(importer)
 
 
+# Public work, business and IT words; film subtitles alone under-represent them.
+WORK_VOCABULARY = {
+    "ru": ("бюджет дедлайн рентабельность аутентификация "
+           "облачные кредитование "
+           "аналитика отчётность договор менеджер заказчик исполнитель поставщик логистика регламент согласование "
+           "инвестор инвестиции акционер дивиденды выручка налогообложение бухгалтерия аудит спецификация интеграция "
+           "алгоритм сервер браузер приложение разработчик программист фреймворк интерфейс платформа шифрование "
+           "авторизация конфигурация инфраструктура мониторинг процессор протокол маршрутизатор трафик скрипт "
+           "компилятор тестирование релиз резюме собеседование вакансия сотрудник руководитель подразделение стратегия "
+           "презентация консалтинг маркетинг стартап").split(),
+    "en": ("deadline budget stakeholder roadmap backlog sprint workflow outsourcing invoice quarterly revenue "
+           "margin shareholder dividend compliance procurement logistics deliverable milestone repository algorithm "
+           "backend database framework compiler debugging refactoring deployment kubernetes fintech saas cryptocurrencies workflows "
+           "scalability encryption authentication authorization configuration infrastructure bandwidth "
+           "latency throughput firmware cybersecurity blockchain analytics dashboard spreadsheet integration timeline "
+           "freelancer entrepreneur startup monetization prototype usability responsive typescript "
+           "username password browser server").split(),
+}
+
+
 class LexiconImportTests(unittest.TestCase):
     def test_filter_is_normalized_bounded_and_retains_full_rare_tail(self):
         raw = "HELLO 50\nhello 40\nrareword 1\ncan't 3\nfoo-bar 2\ninvalid123 900\nbad -1\ninvalid count\n".encode()
@@ -149,6 +169,82 @@ module.main()
                 self.assertEqual(validator.main(), 1)
                 (root / "terms.tsv").write_bytes(b"invalid\n")
                 self.assertEqual(validator.main(), 1)
+
+    def test_second_source_words_merge_case_forms_and_drop_punctuation(self):
+        raw = "Hello 10\nhello 5\n! 99\nJSON 7\nbad123 50\nx not-a-number\n".encode()
+        self.assertEqual(importer.second_source_words(raw, "en"), {"hello": 15, "json": 7})
+
+    def test_merge_adds_work_words_and_keeps_subtitle_frequencies(self):
+        base = {"привет": 1000, "сервер": 2}
+        extra = {"сервер": 1000, "дедлайн": 500, "редко": 150}
+        # Hand-computed: scale = 0.2 * 1002 / 1650; words below the floor of 200 are not added.
+        self.assertEqual(importer.merge_frequencies(base, [extra]), {"привет": 1000, "сервер": 121, "дедлайн": 61})
+
+    def test_merge_never_weights_short_acronyms_or_unweighted_spellings(self):
+        base = {"привет": 1000, "ток": 3}
+        extra = {"нфр": 400, "ток": 400, "кринж": 300, "дедлайн": 500}
+        # Three-letter forms collide with text typed in the wrong layout; curated modern spellings stay unweighted.
+        self.assertEqual(importer.merge_frequencies(base, [extra], unweighted={"кринж"}),
+                         {"привет": 1000, "ток": 3, "дедлайн": round(0.2 * 1003 / 1600 * 500)})
+
+    def test_trigger_selection_keeps_short_subtitle_forms_inside_the_limit(self):
+        base = {"hello": 1000, "world": 900, "abc": 12, "rare1": 13}
+        merged = {**base, "newword": 800}
+        # "abc" is a short form near the cutoff; wrong-layout detection relies on it staying known.
+        self.assertEqual(importer.trigger_selection(base, merged, 4), [("hello", 1000), ("world", 900), ("newword", 800), ("abc", 12)])
+        self.assertEqual(importer.trigger_selection(base, merged, 10)[:3], [("hello", 1000), ("world", 900), ("newword", 800)])
+
+    def test_wrong_second_source_hash_changes_no_published_resource(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sources = root / "sources"
+            (sources / "second").mkdir(parents=True)
+            fixture = "привет 50\n".encode()
+            (sources / "ru_full.txt").write_bytes(fixture)
+            (sources / "en_full.txt").write_bytes(fixture)
+            (sources / "second" / "ruwiki-2022-08-29.txt").write_bytes(b"not the pinned second source")
+            destination = root / "macos/Sources/RuSwitcher/Resources/ru.tsv"
+            destination.parent.mkdir(parents=True)
+            destination.write_bytes(b"previous verified artifact")
+            with patch.object(importer, "ROOT", root), patch.dict(importer.SOURCE_HASHES, {"ru": importer.digest(fixture), "en": importer.digest(fixture)}):
+                with self.assertRaisesRegex(ValueError, "Second source SHA-256 mismatch"):
+                    importer.import_project(sources)
+            self.assertEqual(destination.read_bytes(), b"previous verified artifact")
+            self.assertFalse((root / "dictionaries/manifest.json").exists())
+
+    def test_public_validator_requires_second_source_license_and_hash_in_notice(self):
+        spec = importlib.util.spec_from_file_location("check_public", ROOT / "script/check_public.py")
+        validator = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(validator)
+        digest = "a" * 64
+        record = {"name": "wikipedia-word-frequency", "commit": "c" * 40, "license": "CC-BY-SA-4.0", "sources": {"ru": [{"name": "x", "sha256": digest}], "en": [{"name": "y", "sha256": digest}]}}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "dictionaries").mkdir()
+            notice = root / "dictionaries/NOTICE.md"
+            with patch.object(validator, "ROOT", root):
+                failures = []
+                notice.write_text("no mention of the corpora")
+                validator.validate_second_sources({"second_sources": record}, failures)
+                self.assertTrue(failures)
+                failures = []
+                notice.write_text(f"wikipedia-word-frequency {'c' * 40} CC BY-SA 4.0 {digest}")
+                validator.validate_second_sources({"second_sources": record}, failures)
+                self.assertEqual(failures, [])
+                failures = []
+                validator.validate_second_sources({}, failures)
+                self.assertTrue(failures)
+
+    def test_shipped_trigger_set_is_bounded_and_has_work_vocabulary(self):
+        resources = ROOT / "macos/Sources/RuSwitcher/Resources"
+        for language, words in WORK_VOCABULARY.items():
+            self.assertGreaterEqual(len(words), 50)
+            trigger = {line.split("\t")[0] for line in (resources / f"{language}.tsv").read_text(encoding="utf-8").splitlines()}
+            self.assertLessEqual(len(trigger), 200_000)
+            self.assertEqual([word for word in words if word not in trigger], [])
+            with closing(sqlite3.connect((resources / f"{language}-full.sqlite").as_uri() + "?mode=ro&immutable=1", uri=True)) as database:
+                known = {row[0] for row in database.execute("SELECT word FROM frequencies WHERE word IN (%s)" % ",".join("?" * len(words)), words)}
+            self.assertEqual([word for word in words if word not in known], [])
 
     def test_curated_terms_are_deduplicated_and_not_case_rewritten_at_runtime(self):
         raw = b"# public examples\nen\tChatGPT\tbrand\nen\tchatgpt\tbrand\nru\t" + "Фёдор".encode() + b"\tname\n"
