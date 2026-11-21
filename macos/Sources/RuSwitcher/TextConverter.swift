@@ -341,6 +341,14 @@ final class TextConverter {
     private var lastProjectedEndpointWitness = false
     private var lastWasAXEdit = false
     private struct UnconfirmedAXEdit {
+        struct PlannedReverse {
+            let after: ProjectedFieldReceipt
+            let rawStart: Int
+            let formattedStart: Int?
+            let original: String
+            let replacement: String
+            let requiresEndpointWitness: Bool
+        }
         let id: UUID
         let focus: CombinedShiftFocus
         let original: CombinedShiftSelectionSnapshot
@@ -349,16 +357,19 @@ final class TextConverter {
         let predictionLayouts: (source: String, target: String)?
         let requiresExplicitSelection: Bool
         let lastNativeObservation: NativeFieldObservation?
+        let plannedReverse: PlannedReverse?
         var archive: RecoveryArchive.Receipt?
         init(focus: CombinedShiftFocus, original: CombinedShiftSelectionSnapshot, replacement: String,
              layoutContext: CombinedShiftContext?, predictionLayouts: (source: String, target: String)?,
              requiresExplicitSelection: Bool = false, lastNativeObservation: NativeFieldObservation? = nil,
+             plannedReverse: PlannedReverse? = nil,
              id: UUID = UUID(), archive: RecoveryArchive.Receipt? = nil) {
             self.id = id; self.archive = archive
             self.focus = focus; self.original = original; self.replacement = replacement
             self.layoutContext = layoutContext; self.predictionLayouts = predictionLayouts
             self.requiresExplicitSelection = requiresExplicitSelection
             self.lastNativeObservation = lastNativeObservation
+            self.plannedReverse = plannedReverse
         }
     }
     // Kept separately from confirmed history. clearState intentionally does not
@@ -1263,6 +1274,39 @@ final class TextConverter {
                 return .unknown
             }
             let actual = observation ?? prepared
+            var plannedReverse: UnconfirmedAXEdit.PlannedReverse?
+            if preservedOriginal == nil {
+                let forward = selected
+                    ? NativeFieldEditPlan.makeSelected(original: original.text,
+                        replacement: replacement, start: original.range.location,
+                        snapshot: prepared, formattedStart: resolvedFormattedStart)
+                    : NativeFieldEditPlan.make(original: original.text,
+                        replacement: replacement, start: original.range.location,
+                        snapshot: prepared, formattedStart: resolvedFormattedStart)
+                if case .success(let plan) = forward,
+                   case .success = NativeFieldEditPlan.make(original: replacement,
+                       replacement: original.text, start: original.range.location,
+                       snapshot: plan.resultSnapshot,
+                       formattedStart: resolvedFormattedStart) {
+                    var needsWitness = requiresEndpointWitness
+                    if resolvedFormattedStart != nil,
+                       let projected = NativeSelectedTextProjection(
+                           formatted: plan.resultSnapshot.text,
+                           flat: plan.resultSnapshot.text.replacingOccurrences(of: "\n", with: "")) {
+                        needsWitness = needsWitness
+                            || projected.unambiguousFormattedCaret(
+                                rawLocation: original.range.location) == nil
+                            || projected.unambiguousFormattedCaret(
+                                rawLocation: plan.resultSnapshot.caretUTF16Location) == nil
+                    }
+                    plannedReverse = UnconfirmedAXEdit.PlannedReverse(
+                        after: ProjectedFieldReceipt(plan.resultSnapshot),
+                        rawStart: original.range.location,
+                        formattedStart: resolvedFormattedStart,
+                        original: original.text, replacement: replacement,
+                        requiresEndpointWitness: needsWitness)
+                }
+            }
             // Repeated uncertain recovery keeps the first source forever. Only
             // the last actual observation is replaced; predictions are not evidence.
             retainUnconfirmed(UnconfirmedAXEdit(focus: execution.focus, original: wholeSource,
@@ -1270,6 +1314,7 @@ final class TextConverter {
                 layoutContext: preservedOriginal?.layoutContext ?? context,
                 predictionLayouts: preservedOriginal?.predictionLayouts ?? layouts,
                 requiresExplicitSelection: true, lastNativeObservation: actual,
+                plannedReverse: plannedReverse,
                 id: preservedOriginal?.id ?? UUID(), archive: preservedOriginal?.archive))
             return .unknown
         }
@@ -1333,6 +1378,10 @@ final class TextConverter {
             recoveryFailureRecorder(.recoverySelectionMissing)
             return false
         }
+        if pending.requiresExplicitSelection && current.length == 0 {
+            return recoverCollapsedPlanned(pending, current: current, execution: execution,
+                inputBarrierIsActive: inputBarrierIsActive)
+        }
         guard !pending.requiresExplicitSelection || current.length > 0 else {
             recoveryFailureRecorder(.recoverySelectionMissing)
             return false
@@ -1380,6 +1429,84 @@ final class TextConverter {
         commitAXEdit(original: result, replacement: pending.original.text, focus: execution.focus,
             context: pending.layoutContext?.reversed,
             layouts: pending.predictionLayouts.map { ($0.target, $0.source) })
+        return true
+    }
+
+    /// A fresh explicit gesture may reverse an originally queued edit only if
+    /// the complete intended result and caret are now independently observed.
+    /// No result receipt, changed text, or an old selected range permits replay.
+    private func recoverCollapsedPlanned(_ pending: UnconfirmedAXEdit, current: CFRange,
+                                         execution: CombinedShiftExecutionContext,
+                                         inputBarrierIsActive: (() -> Bool)?) -> Bool {
+        guard let inputBarrierIsActive, let planned = pending.plannedReverse,
+              let initial = execution.focus.initialSelection,
+              initial.location == current.location, initial.length == 0,
+              hasSafeNativeEditBudget, inputBarrierIsActive() else {
+            recoveryFailureRecorder(.recoverySelectionMissing); return false
+        }
+        let focus = execution.focus
+        let deadline = ProcessInfo.processInfo.systemUptime + 0.050
+        let prepareRead = {
+            guard ProcessInfo.processInfo.systemUptime < deadline,
+                  inputBarrierIsActive(),
+                  execution.inputRevision == execution.currentInputRevision(),
+                  !AutoSwitchPolicy.secureInputActive,
+                  (focus.fieldBoundary != nil
+                      || focus.currentTargetProcessID() == focus.processID),
+                  let timeout = NativeAXMessagingPolicy.remainingTimeout(until: deadline,
+                      now: ProcessInfo.processInfo.systemUptime,
+                      configuredTimeout: TimeInterval(self.nativeAXTimeout)),
+                  focus.setMessagingTimeout(timeout) == .success else { return false }
+            return ProcessInfo.processInfo.systemUptime < deadline && inputBarrierIsActive()
+        }
+        guard let observed = wholeFieldObservation(focus: focus, prepareRead: prepareRead),
+              planned.after.matches(observed),
+              current.location == observed.caretUTF16Location,
+              observed.selectionLength == 0,
+              execution.isValid(timeout: nativeAXTimeout) else {
+            recoveryFailureRecorder(.recoverySelectionMismatch); return false
+        }
+        if let formattedStart = planned.formattedStart {
+            let contract = NativeProjectedReadContract(rawStart: planned.rawStart,
+                formattedStart: formattedStart,
+                original: planned.replacement, replacement: planned.original,
+                replacingSelection: false,
+                requiresEndpointWitness: planned.requiresEndpointWitness)
+            guard focus.nativeProjectedObservation(observed, contract: contract,
+                      textBatchQueued: false, phaseDeadline: deadline,
+                      prepareRead: prepareRead) != nil else {
+                recoveryFailureRecorder(.recoverySelectionMismatch); return false
+            }
+        }
+        guard planned.rawStart >= 0,
+              planned.rawStart <= Int.max - planned.replacement.utf16.count,
+              current.location == planned.rawStart + planned.replacement.utf16.count,
+              let reverse = CombinedShiftSelectionSnapshot(range: CFRange(
+                  location: planned.rawStart, length: planned.replacement.utf16.count),
+                  text: planned.replacement),
+              inputBarrierIsActive(), execution.isValid(timeout: nativeAXTimeout) else {
+            recoveryFailureRecorder(.recoverySelectionMismatch); return false
+        }
+        isConverting = true
+        defer { isConverting = false }
+        let outcome = replaceNativeRange(original: reverse,
+            replacement: planned.original, expectedSelection: current,
+            execution: execution, inputBarrierIsActive: inputBarrierIsActive,
+            context: pending.layoutContext?.reversed,
+            layouts: pending.predictionLayouts.map { ($0.target, $0.source) },
+            formattedStart: planned.formattedStart,
+            requiresEndpointWitness: planned.requiresEndpointWitness,
+            expectedBaseline: observed, preservedOriginal: pending)
+        guard outcome == .confirmed else {
+            recoveryFailureRecorder(outcome == .unknown ? .recoveryEditUnknown : .recoveryEditRefused)
+            return false
+        }
+        removeUnconfirmed(in: focus)
+        commitAXEdit(original: reverse, replacement: planned.original, focus: focus,
+            context: pending.layoutContext?.reversed,
+            layouts: pending.predictionLayouts.map { ($0.target, $0.source) },
+            formattedStart: planned.formattedStart,
+            requiresEndpointWitness: planned.requiresEndpointWitness)
         return true
     }
 
