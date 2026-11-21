@@ -20,6 +20,8 @@ enum PredictionEvaluationOutcome: String, Equatable, Sendable {
     case notScheduled, cancelledBeforeEvaluation, stale, engineUnavailable
     case mappingUnavailable, noProposal, rejected, suppressed, refused, renderRetryExhausted
     case textUnconfirmed, sourceUnconfirmed, applied
+    /// The engine only offered a word; nothing was written.
+    case hinted
 }
 
 /// Dictionary loading/scoring runs outside the HID callback. The first event of
@@ -59,6 +61,9 @@ final class PredictionCoordinator {
     }
     private var recentAutomaticEdit: RecentAutomaticEdit?
     private var undoHeldFocus: (focus: CombinedShiftFocus, sourceLayoutID: String)?
+    /// The last offered (never written) word for the current word. Any new
+    /// typing retires it. Showing and accepting it belong to the hint UI.
+    private(set) var latestHint: PredictionProposal?
     /// AppDelegate supplies a saved choice. Legacy call sites default to off.
     var russianPriorityProvider: () -> Bool = { false }
     /// Exact displayed source phrase and language; storage belongs to the caller.
@@ -177,6 +182,7 @@ final class PredictionCoordinator {
 
     func invalidate() {
         if !monitor.predictionIsWaitingForUndoBoundary { undoHeldFocus = nil }
+        latestHint = nil
         debounce?.cancel(); debounce = nil
         if let pendingDebounceID {
             self.pendingDebounceID = nil
@@ -357,14 +363,24 @@ final class PredictionCoordinator {
         let alwaysConvertWords = SettingsManager.shared.alwaysConvertWordsSet
         let russianPriority = russianPriorityProvider()
         let adaptiveRules = adaptiveRulesProvider()
-        let proposal = await Task.detached(priority: .userInitiated) {
+        let decision = await Task.detached(priority: .userInitiated) {
             engine.evaluate(suffix: snapshot.suffix, sourceLanguage: language,
                 atBoundary: snapshot.atBoundary, precedingWords: snapshot.precedingWords,
                 alwaysConvertWords: alwaysConvertWords, characterMapping: characterMapping,
                 russianPriority: russianPriority, adaptiveRules: adaptiveRules)
         }.value
         guard isCurrent(snapshot) else { outcome = .stale; RuntimeDiagnostics.record(.autoEvaluationStale); return }
-        guard let proposal else { outcome = .noProposal; RuntimeDiagnostics.record(.autoNoProposal); return }
+        let proposal: PredictionProposal
+        switch decision {
+        case .none:
+            outcome = .noProposal; RuntimeDiagnostics.record(.autoNoProposal); return
+        case .hint(let offered):
+            // Never written here: a hint is kept only for this exact typed suffix.
+            if offered.originalSuffix == snapshot.suffix { latestHint = offered }
+            outcome = .hinted; return
+        case .apply(let applied):
+            proposal = applied
+        }
         // A floating search field may acquire input after this word's first
         // event. Never commit a proposal to the stale underlay anchor.
         guard !platform.searchOverlayActive() else { outcome = .stale; return }

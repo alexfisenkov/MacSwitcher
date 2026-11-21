@@ -11,51 +11,51 @@ final class RussianPriorityPunctuationTests: XCTestCase {
 
     func testRussianPriorityResolvesExactTerminalSemicolonCollisionAtBoundary() {
         let policy = engine()
-        XCTAssertNil(policy.evaluate(suffix: "rhby; ", sourceLanguage: "en", atBoundary: true,
+        XCTAssertNil(policy.appliedProposal(suffix: "rhby; ", sourceLanguage: "en", atBoundary: true,
                                      russianPriority: false))
-        XCTAssertEqual(policy.evaluate(suffix: "rhby; ", sourceLanguage: "en", atBoundary: true,
+        XCTAssertEqual(policy.appliedProposal(suffix: "rhby; ", sourceLanguage: "en", atBoundary: true,
                                        russianPriority: true)?.replacementSuffix, "кринж ")
-        XCTAssertNil(policy.evaluate(suffix: "rhby;", sourceLanguage: "en", russianPriority: true))
+        XCTAssertNil(policy.appliedProposal(suffix: "rhby;", sourceLanguage: "en", russianPriority: true))
     }
 
     func testSourceAndTechnicalProtectionStillRefusePriority() {
         let input = "rhby; "
-        XCTAssertNil(engine(sourceWords: ["rhby"]).evaluate(suffix: input, sourceLanguage: "en",
+        XCTAssertNil(engine(sourceWords: ["rhby"]).appliedProposal(suffix: input, sourceLanguage: "en",
             atBoundary: true, russianPriority: true))
-        XCTAssertNil(engine(sourceFrequency: ["rhby": 1]).evaluate(suffix: input,
+        XCTAssertNil(engine(sourceFrequency: ["rhby": 1]).appliedProposal(suffix: input,
             sourceLanguage: "en", atBoundary: true, russianPriority: true))
-        XCTAssertNil(engine(fullSource: ["rhby": 1]).evaluate(suffix: input,
+        XCTAssertNil(engine(fullSource: ["rhby": 1]).appliedProposal(suffix: input,
             sourceLanguage: "en", atBoundary: true, russianPriority: true))
-        XCTAssertNil(engine().evaluate(suffix: input, sourceLanguage: "en", atBoundary: true,
+        XCTAssertNil(engine().appliedProposal(suffix: input, sourceLanguage: "en", atBoundary: true,
             precedingWords: ["code"], russianPriority: true))
         for token in ["RHBY;", "rhby;123", "rhby;_", "rhby;/path", "https://rhby;", "@rhby;"] {
-            XCTAssertNil(engine().evaluate(suffix: token + " ", sourceLanguage: "en",
+            XCTAssertNil(engine().appliedProposal(suffix: token + " ", sourceLanguage: "en",
                 atBoundary: true, russianPriority: true), token)
         }
     }
 
     func testPriorityDoesNotGeneralizeToOtherPunctuationOrLiteralOnlyMatches() {
         let policy = engine()
-        XCTAssertNil(policy.evaluate(suffix: "rhby` ", sourceLanguage: "en", atBoundary: true,
+        XCTAssertNil(policy.appliedProposal(suffix: "rhby` ", sourceLanguage: "en", atBoundary: true,
             russianPriority: true))
-        XCTAssertNil(policy.evaluate(suffix: "rhby' ", sourceLanguage: "en", atBoundary: true,
+        XCTAssertNil(policy.appliedProposal(suffix: "rhby' ", sourceLanguage: "en", atBoundary: true,
             russianPriority: true))
-        XCTAssertNil(engine(targetWords: ["крин", "кринжж"]).evaluate(
+        XCTAssertNil(engine(targetWords: ["крин", "кринжж"]).appliedProposal(
             suffix: "rhby;; ", sourceLanguage: "en", atBoundary: true, russianPriority: true))
-        XCTAssertNil(engine(targetWords: ["крин", "криню"]).evaluate(
+        XCTAssertNil(engine(targetWords: ["крин", "криню"]).appliedProposal(
             suffix: "rhby. ", sourceLanguage: "en", atBoundary: true, russianPriority: true))
-        XCTAssertEqual(engine(targetWords: ["крин"]).evaluate(
+        XCTAssertEqual(engine(targetWords: ["крин"]).appliedProposal(
             suffix: "rhby; ", sourceLanguage: "en", atBoundary: true,
             russianPriority: true)?.replacementSuffix, "крин; ")
     }
 
     func testExistingPunctuationDecisionsStayUnchanged() {
-        XCTAssertEqual(engine(targetWords: ["привет"]).evaluate(
+        XCTAssertEqual(engine(targetWords: ["привет"]).appliedProposal(
             suffix: "ghbdtn; ", sourceLanguage: "en", atBoundary: true,
             russianPriority: true)?.replacementSuffix, "привет; ")
-        XCTAssertNil(engine(targetWords: ["дума", "думаю"]).evaluate(
+        XCTAssertNil(engine(targetWords: ["дума", "думаю"]).appliedProposal(
             suffix: "levf. ", sourceLanguage: "en", atBoundary: true, russianPriority: true))
-        XCTAssertEqual(engine(targetWords: ["думаю"]).evaluate(
+        XCTAssertEqual(engine(targetWords: ["думаю"]).appliedProposal(
             suffix: "levf. ", sourceLanguage: "en", atBoundary: true,
             russianPriority: true)?.replacementSuffix, "думаю ")
     }

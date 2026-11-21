@@ -1249,18 +1249,18 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
             "en": ["hello": 900_000, "press": 500_000, "f": 20_000]
         ])
         let engine = PredictionEngine(lexicon: lexicon)
-        XCTAssertEqual(engine.evaluate(suffix: "ghbd", sourceLanguage: "en")?.replacementSuffix, "прив")
-        XCTAssertNil(engine.evaluate(suffix: "ghb", sourceLanguage: "en"))
-        XCTAssertNil(engine.evaluate(suffix: "f", sourceLanguage: "en"))
-        XCTAssertNil(engine.evaluate(suffix: "f ", sourceLanguage: "en", atBoundary: true))
-        XCTAssertEqual(engine.evaluate(suffix: "f привет", sourceLanguage: "ru")?.replacementSuffix,
+        XCTAssertEqual(engine.appliedProposal(suffix: "ghbd", sourceLanguage: "en")?.replacementSuffix, "прив")
+        XCTAssertNil(engine.appliedProposal(suffix: "ghb", sourceLanguage: "en"))
+        XCTAssertNil(engine.appliedProposal(suffix: "f", sourceLanguage: "en"))
+        XCTAssertNil(engine.appliedProposal(suffix: "f ", sourceLanguage: "en", atBoundary: true))
+        XCTAssertEqual(engine.appliedProposal(suffix: "f привет", sourceLanguage: "ru")?.replacementSuffix,
             "а привет")
-        XCTAssertNil(engine.evaluate(suffix: "f привет", sourceLanguage: "ru",
+        XCTAssertNil(engine.appliedProposal(suffix: "f привет", sourceLanguage: "ru",
             precedingWords: ["press"]))
-        XCTAssertNil(engine.evaluate(suffix: "hello", sourceLanguage: "en", atBoundary: true))
+        XCTAssertNil(engine.appliedProposal(suffix: "hello", sourceLanguage: "en", atBoundary: true))
         for protected in ["API", "MacSwitcher", "iPhone", "/tmp/ghbdtn", "foo.com",
                           "user@example.com", "ghbdtn_foo"] {
-            XCTAssertNil(engine.evaluate(suffix: protected, sourceLanguage: "en", atBoundary: true),
+            XCTAssertNil(engine.appliedProposal(suffix: protected, sourceLanguage: "en", atBoundary: true),
                 protected)
         }
     }

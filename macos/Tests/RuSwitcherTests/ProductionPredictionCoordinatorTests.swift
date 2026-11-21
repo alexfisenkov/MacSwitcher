@@ -231,6 +231,38 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
     }
 
     @MainActor
+    func testHintedTypoWritesNothingAndIsKeptForTheField() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2093, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        _ = rig.coordinator
+        rig.deliver("ghbdtv ")
+        rig.settle(expected: .hinted)
+        XCTAssertEqual(field.text, "ghbdtv ")
+        XCTAssertEqual(rig.beginLeaseAttempts, 0)
+        XCTAssertTrue(rig.applied.isEmpty)
+        XCTAssertEqual(rig.coordinator.latestHint?.replacementSuffix, "привет ")
+        XCTAssertEqual(rig.coordinator.latestHint?.reason, .typo)
+        // Typing on retires the hint.
+        rig.deliver("a")
+        rig.settle()
+        XCTAssertNil(rig.coordinator.latestHint)
+    }
+
+    @MainActor
+    func testTwoInitialCapitalsAreFixedInTheSameLayout() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2094, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        rig.sourceID = pair.ru
+        _ = rig.coordinator
+        rig.deliver("ПРивет ")
+        rig.settle(expected: .applied)
+        XCTAssertEqual(field.text, "Привет ")
+        XCTAssertEqual(rig.sourceID, pair.ru)
+    }
+
+    @MainActor
     func testFrozenLoopGuardLeavesTextUntouched() throws {
         let pair = try layoutIDs()
         let field = Field(pid: 2091, text: "")

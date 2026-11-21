@@ -69,6 +69,7 @@ struct PredictionLexicon: Sendable {
     private let fullLexicon: FullFrequencyLexicon
     private let spellingLexicon: SupplementalSpellingLexicon
     private let protectedTerms: ProtectedTerms
+    private let trigramModels: [String: TrigramModel]
 
     init(wordsByLanguage: [String: [String: Int]],
          fullWordsByLanguage: [String: [String: Int]] = [:],
@@ -76,7 +77,8 @@ struct PredictionLexicon: Sendable {
          protectedTermsByLanguage: [String: Set<String>] = [:],
          neutralContextEntitiesByLanguage: [String: Set<String>] = [:],
          fullLexicon: FullFrequencyLexicon? = nil,
-         spellingLexicon: SupplementalSpellingLexicon? = nil) {
+         spellingLexicon: SupplementalSpellingLexicon? = nil,
+         trigramModels: [String: TrigramModel] = [:]) {
         var grouped: [String: [String: Int]] = [:]
         for (language, words) in wordsByLanguage {
             let code = Self.languageCode(language)
@@ -90,14 +92,17 @@ struct PredictionLexicon: Sendable {
         self.spellingLexicon = spellingLexicon ?? SupplementalSpellingLexicon(wordsByLanguage: spellingWordsByLanguage)
         protectedTerms = ProtectedTerms(termsByLanguage: protectedTermsByLanguage,
             neutralContextEntitiesByLanguage: neutralContextEntitiesByLanguage)
+        self.trigramModels = Dictionary(uniqueKeysWithValues: trigramModels.map { (Self.languageCode($0.key), $0.value) })
     }
 
     private init(indexes: [String: LanguageIndex], fullLexicon: FullFrequencyLexicon,
-                 spellingLexicon: SupplementalSpellingLexicon, protectedTerms: ProtectedTerms) {
+                 spellingLexicon: SupplementalSpellingLexicon, protectedTerms: ProtectedTerms,
+                 trigramModels: [String: TrigramModel]) {
         self.indexes = indexes
         self.fullLexicon = fullLexicon
         self.spellingLexicon = spellingLexicon
         self.protectedTerms = protectedTerms
+        self.trigramModels = trigramModels
     }
 
     init(tsvByLanguage: [String: String]) throws {
@@ -146,11 +151,19 @@ struct PredictionLexicon: Sendable {
         guard let termsURL = bundle.url(forResource: "protected-terms", withExtension: "tsv") else {
             throw LoadError.missingResource("protected-terms")
         }
+        var trigrams: [String: TrigramModel] = [:]
+        for language in ["ru", "en"] {
+            guard let url = bundle.url(forResource: language + "-trigrams", withExtension: "tsv") else {
+                throw LoadError.missingResource(language + "-trigrams")
+            }
+            trigrams[language] = try TrigramModel(tsv: String(contentsOf: url, encoding: .utf8))
+        }
         let triggerLexicon = try PredictionLexicon(tsvByLanguage: contents)
         return try PredictionLexicon(indexes: triggerLexicon.indexes,
                                      fullLexicon: FullFrequencyLexicon(urlsByLanguage: fullURLs),
                                      spellingLexicon: SupplementalSpellingLexicon(urlsByLanguage: spellingURLs),
-                                     protectedTerms: ProtectedTerms(tsv: String(contentsOf: termsURL, encoding: .utf8)))
+                                     protectedTerms: ProtectedTerms(tsv: String(contentsOf: termsURL, encoding: .utf8)),
+                                     trigramModels: trigrams)
     }
 
     /// Counts are separate: full corpus includes trigger entries, so do not sum them.
@@ -184,6 +197,11 @@ struct PredictionLexicon: Sendable {
 
     func frequency(of word: String, language: String) -> Int {
         indexes[Self.languageCode(language)]?.frequencies[Self.normalize(word)] ?? 0
+    }
+
+    /// Mean letter-trigram log-probability; nil when no table is loaded for the language.
+    func trigramScore(of word: String, language: String) -> Double? {
+        trigramModels[Self.languageCode(language)]?.score(word)
     }
 
     func prefixEvidence(for prefix: String, language: String) -> PrefixEvidence {

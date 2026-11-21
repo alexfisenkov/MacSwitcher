@@ -65,6 +65,22 @@ final class PredictionQualityTests: XCTestCase {
         XCTAssertEqual(report.categories["typo-context"]?.cases, 0)
     }
 
+    func testHintsAreCountedApartFromCorrections() {
+        // Hand-derived: ghbdtv (→ привем) is one letter from привет and only hinted, never written.
+        let typo = PredictionBenchmark.Quality.Case(id: "h", category: "typo", language: "ru", tokens: [
+            .init(typed: "ghbdtv", expected: "привет", layout: "en", typo: true),
+            .init(typed: "vbh", expected: "мир", layout: "en"),
+        ])
+        let report = PredictionBenchmark.Quality.run(engine: tinyEngine(), cases: [typo], mapping: { _ in nil })
+        let counts = report.categories["typo"]
+        XCTAssertEqual(counts?.truePositive, 0)
+        XCTAssertEqual(counts?.falseNegative, 1)
+        XCTAssertEqual(counts?.hintRight, 1)
+        XCTAssertEqual(counts?.hintWrong, 0)
+        XCTAssertEqual(counts?.recallWithHints ?? -1, 1.0, accuracy: 1e-9)
+        XCTAssertTrue(PredictionBenchmark.Quality.table(report).contains("hint-ok"))
+    }
+
     func testTableListsPrecisionAndRecallForEveryCategory() {
         let cases = [phrase("a", "wrong-layout", "ghbdtn", "привет"), phrase("d", "correct", "hello", "hello")]
         let report = PredictionBenchmark.Quality.run(engine: tinyEngine(), cases: cases, mapping: { _ in nil })

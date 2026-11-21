@@ -89,7 +89,7 @@ enum PredictionBenchmark {
             let actual = engine.evaluate(suffix: item.input, sourceLanguage: item.sourceLanguage,
                                          atBoundary: item.atBoundary, precedingWords: item.precedingWords,
                                          characterMapping: mapping(item.sourceLanguage),
-                                         russianPriority: russianPriority)?.replacementSuffix
+                                         russianPriority: russianPriority).applied?.replacementSuffix
             durations.append(DispatchTime.now().uptimeNanoseconds - before)
             if let expected = item.expectedReplacement {
                 expectedCorrection += 1
@@ -152,7 +152,13 @@ extension PredictionBenchmark {
         struct Counts: Encodable, Sendable, Equatable {
             var cases = 0, truePositive = 0, wrongReplacement = 0, falseNegative = 0, falsePositive = 0
             var keptWords = 0, changedCorrectCases = 0
+            /// Hints are offered, never written: right = the expected word on a missed word;
+            /// wrong = another word, or any hint on a word that was already right.
+            var hintRight = 0, hintWrong = 0
             var needingWords: Int { truePositive + wrongReplacement + falseNegative }
+            var recallWithHints: Double? {
+                needingWords == 0 ? nil : Double(truePositive + hintRight) / Double(needingWords)
+            }
             var precision: Double? {
                 let changed = truePositive + wrongReplacement + falsePositive
                 return changed == 0 ? nil : Double(truePositive) / Double(changed)
@@ -163,6 +169,7 @@ extension PredictionBenchmark {
                 cases += other.cases; truePositive += other.truePositive; wrongReplacement += other.wrongReplacement
                 falseNegative += other.falseNegative; falsePositive += other.falsePositive
                 keptWords += other.keptWords; changedCorrectCases += other.changedCorrectCases
+                hintRight += other.hintRight; hintWrong += other.hintWrong
             }
         }
         struct Report: Encodable, Sendable {
@@ -184,19 +191,24 @@ extension PredictionBenchmark {
             return corpus.cases
         }
 
-        /// Types one phrase and returns the final words plus what happened to each.
+        /// Types one phrase and returns the final words plus the hint left on each word.
         private static func simulate(_ item: Case, engine: PredictionEngine,
                                      mapping: (String) -> [Character: Character]?,
-                                     russianPriority: Bool) -> [String] {
+                                     russianPriority: Bool) -> (words: [String], hints: [Int: String]) {
             var buffer = PredictionInputBuffer()
-            for token in item.tokens {
+            var hints: [Int: String] = [:]
+            for (index, token) in item.tokens.enumerated() {
                 var language = token.layout
                 func evaluate() {
-                    guard let snapshot = buffer.snapshot(sourceLayoutID: "quality", inputRevision: 0, generation: 0),
-                          let proposal = engine.evaluate(suffix: snapshot.suffix, sourceLanguage: language,
-                              atBoundary: snapshot.atBoundary, precedingWords: snapshot.precedingWords,
-                              characterMapping: mapping(language), russianPriority: russianPriority),
-                          proposal.originalSuffix == snapshot.suffix,
+                    guard let snapshot = buffer.snapshot(sourceLayoutID: "quality", inputRevision: 0, generation: 0)
+                    else { return }
+                    let decision = engine.evaluate(suffix: snapshot.suffix, sourceLanguage: language,
+                        atBoundary: snapshot.atBoundary, precedingWords: snapshot.precedingWords,
+                        characterMapping: mapping(language), russianPriority: russianPriority)
+                    if let hint = decision.hinted, snapshot.atBoundary, hint.originalSuffix == snapshot.suffix {
+                        hints[index] = hint.replacementSuffix.split(whereSeparator: \.isWhitespace).last.map(String.init)
+                    }
+                    guard let proposal = decision.applied, proposal.originalSuffix == snapshot.suffix,
                           buffer.replaceSuffix(original: proposal.originalSuffix,
                                                replacement: proposal.replacementSuffix) else { return }
                     language = proposal.targetLanguage  // the layout follows the applied correction
@@ -204,14 +216,14 @@ extension PredictionBenchmark {
                 buffer.append(token.typed, processID: 1); evaluate()
                 buffer.append(" ", processID: 1); evaluate()
             }
-            return buffer.text.split(whereSeparator: \.isWhitespace).map(String.init)
+            return (buffer.text.split(whereSeparator: \.isWhitespace).map(String.init), hints)
         }
 
         static func run(engine: PredictionEngine, cases: [Case],
                         mapping: (String) -> [Character: Character]?, russianPriority: Bool = true) -> Report {
             var categories: [String: Counts] = [:]
             for item in cases {
-                let final = simulate(item, engine: engine, mapping: mapping, russianPriority: russianPriority)
+                let (final, hints) = simulate(item, engine: engine, mapping: mapping, russianPriority: russianPriority)
                 let sameShape = final.count == item.tokens.count
                 categories[item.category, default: Counts()].cases += 1
                 var changedKept = false
@@ -223,8 +235,13 @@ extension PredictionBenchmark {
                     if token.typed == token.expected {
                         counts.keptWords = 1
                         if result != token.typed { counts.falsePositive = 1; changedKept = true }
+                        if hints[index] != nil { counts.hintWrong = 1 }
                     } else if result == token.expected { counts.truePositive = 1
-                    } else if result == token.typed { counts.falseNegative = 1
+                    } else if result == token.typed {
+                        counts.falseNegative = 1
+                        if let hint = hints[index] {
+                            if hint == token.expected { counts.hintRight = 1 } else { counts.hintWrong = 1 }
+                        }
                     } else { counts.wrongReplacement = 1 }
                     categories[bucket, default: Counts()].add(counts)
                 }
@@ -244,11 +261,13 @@ extension PredictionBenchmark {
                 name.padding(toLength: 14, withPad: " ", startingAt: 0)
                     + [String(c.cases), String(c.needingWords), String(c.truePositive), String(c.wrongReplacement),
                        String(c.falseNegative), String(c.falsePositive), percent(c.precision), percent(c.recall),
-                       percent(c.falsePositiveRate)]
+                       percent(c.falsePositiveRate), String(c.hintRight), String(c.hintWrong),
+                       percent(c.recallWithHints)]
                         .map { String(repeating: " ", count: max(0, 11 - $0.count)) + $0 }.joined()
             }
             let head = "category".padding(toLength: 14, withPad: " ", startingAt: 0)
-                + ["cases", "needing", "right", "wrong", "missed", "false", "precision", "recall", "false/kept"]
+                + ["cases", "needing", "right", "wrong", "missed", "false", "precision", "recall", "false/kept",
+                   "hint-ok", "hint-bad", "+hints"]
                     .map { String(repeating: " ", count: max(0, 11 - $0.count)) + $0 }.joined()
             let lines = report.categories.keys.sorted().map { row($0, report.categories[$0]!) }
             return ([head] + lines + [row("ALL", report.overall), "layout table: \(report.layoutMapping)"])
