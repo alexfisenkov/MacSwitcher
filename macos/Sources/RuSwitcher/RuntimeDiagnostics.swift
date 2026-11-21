@@ -11,6 +11,7 @@ enum RuntimeDiagnosticEvent: String, CaseIterable, Sendable {
     case doubleNoReconversionState, doubleMissingWordContext, doubleNoBufferOrSelection
     case doubleFailed, doubleSucceeded
     case doubleCaretReanchored, doubleWindowMissed, doubleArrivalSkewRejected, doubleLayoutUnconfirmed
+    case secureFlagWithEvents, autocompleteSuggestionRefused
     case clipboardBegin, clipboardBeginRefused, copyInvalidExecution, copyFocusUnavailable
     case copyClipboardOwnershipLost, copyClipboardPrepared, copyPostRefused, copyPosted, copyUnchanged
     case copyChanged, copyFocusChanged, copyAXSelectionMismatch, copyClaimRefused, copyVerified

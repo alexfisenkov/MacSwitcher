@@ -148,7 +148,8 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
 
         func run(_ request: CombinedShiftRequest,
                  direction: CombinedShiftContext,
-                 onDiagnostic: @escaping (CombinedShiftDiagnostic) -> Void = { _ in }) -> CombinedShiftTransaction.Result {
+                 onDiagnostic: @escaping (CombinedShiftDiagnostic) -> Void = { _ in },
+                 onEvent: @escaping (RuntimeDiagnosticEvent) -> Void = { RuntimeDiagnostics.record($0) }) -> CombinedShiftTransaction.Result {
             let execution = CombinedShiftExecutionContext(focus: request.focus!,
                 inputRevision: request.inputRevision,
                 currentInputRevision: { [unowned self] in monitor.inputRevision })
@@ -192,7 +193,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
                     source == enToRu.sourceLayoutID ? enToRu
                         : source == ruToEn.sourceLayoutID ? ruToEn : nil
                 }, selectionKnownWord: selectionKnownWord,
-                diagnosticsEnabled: true, onDiagnostic: onDiagnostic)
+                diagnosticsEnabled: true, onDiagnostic: onDiagnostic, onEvent: onEvent)
         }
     }
 
@@ -2050,5 +2051,112 @@ extension ProductionCombinedShiftTransactionTests {
         _ = rig.run(request, direction: rig.enToRu)
         XCTAssertEqual(rig.editEvents.filter { $0 == .recoverySameFieldBlocked }.count, 1)
         withExtendedLifetime(clock) {}
+    }
+}
+
+// MARK: - Secure Input decided per field; inline autocomplete suggestions
+
+extension ProductionCombinedShiftTransactionTests {
+    @MainActor
+    func testRaisedFlagWithDeliveredKeysConvertsInAnOrdinaryField() throws {
+        let restore = raiseSyntheticSecureFlag(holder: 77)
+        defer { restore() }
+        let field = Field(pid: 5301, text: "ghbdtn")
+        let rig = try Rig(fields: [field])
+        rig.monitor.secureFieldProbe = { .ordinary }
+        try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+        rig.sourceID = rig.enToRu.targetLayoutID
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome,
+            .confirmed(resultID: rig.enToRu.targetLayoutID))
+        XCTAssertEqual(field.text, "привет")
+    }
+
+    @MainActor
+    func testRaisedFlagRefusesPasswordUnknownAndHolderFieldsWithoutReading() throws {
+        for gate in 0..<3 {
+            let field = Field(pid: Int32(5310 + gate), text: "ghbdtn")
+            let restore = raiseSyntheticSecureFlag(holder: gate == 2 ? field.pid : 77)
+            defer { restore() }
+            let rig = try Rig(fields: [field])
+            // Worst case: the buffer exists, as if keys had been recorded before.
+            rig.monitor.secureFieldProbe = { .ordinary }
+            try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+            rig.sourceID = rig.enToRu.targetLayoutID
+            switch gate {
+            case 0: field.subrole = (.success, kAXSecureTextFieldSubrole as NSString)
+            case 1: field.subrole = (.cannotComplete, nil)
+            default: break
+            }
+            XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome, .stopped, "\(gate)")
+            XCTAssertEqual(field.text, "ghbdtn")
+            XCTAssertEqual(field.queuedText, 0)
+            XCTAssertEqual(field.queuedSelection, 0)
+            XCTAssertEqual(field.substringCount, 0, "No text is read from the field")
+            XCTAssertEqual(rig.sourceRequests, 0)
+        }
+    }
+
+    @MainActor
+    private func suggestionRig(_ pid: Int32,
+                               setter: @escaping (Field, CFRange) -> Bool) throws -> (Rig, Field) {
+        let field = Field(pid: pid, text: "ghbdtn")
+        let rig = try Rig(fields: [field])
+        try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+        rig.sourceID = rig.enToRu.targetLayoutID
+        field.text = "ghbdtnxy" // the field appended its selected suggestion
+        field.selection = 2
+        field.selectionSetter = { [unowned field] range in setter(field, range) }
+        return (rig, field)
+    }
+
+    @MainActor
+    func testInlineSuggestionIsDismissedByCaretMoveThenTheWordIsCorrected() throws {
+        var requested: [CFRange] = []
+        let (rig, field) = try suggestionRig(5320) { field, range in
+            requested.append(range)
+            guard range.length == 0 else { return false }
+            field.text = "ghbdtn" // Spotlight/Chrome drop their own suggestion
+            field.caret = range.location
+            field.selection = 0
+            return true
+        }
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome,
+            .confirmed(resultID: rig.enToRu.targetLayoutID))
+        XCTAssertEqual(field.text, "привет")
+        XCTAssertEqual(requested.map { [$0.location, $0.length] }, [[6, 0]])
+        XCTAssertEqual(field.queuedText, 1, "One word replacement; the suggestion is never converted")
+    }
+
+    @MainActor
+    func testFieldThatKeepsTheSuggestionSelectedIsRefusedWithoutWrites() throws {
+        let (rig, field) = try suggestionRig(5321) { _, _ in false }
+        var events: [RuntimeDiagnosticEvent] = []
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu,
+            onEvent: { events.append($0) }).outcome, .stopped)
+        XCTAssertEqual(field.text, "ghbdtnxy")
+        XCTAssertEqual(field.selection, 2)
+        XCTAssertEqual(field.queuedText, 0)
+        XCTAssertEqual(field.queuedSelection, 0)
+        XCTAssertEqual(events.filter { $0 == .autocompleteSuggestionRefused }.count, 1)
+        XCTAssertEqual(rig.sourceRequests, 0)
+    }
+
+    @MainActor
+    func testSuggestionKeptAsTextIsReselectedAndRefused() throws {
+        var requested: [CFRange] = []
+        let (rig, field) = try suggestionRig(5322) { field, range in
+            requested.append(range)
+            field.caret = range.location
+            field.selection = range.length
+            return true
+        }
+        var events: [RuntimeDiagnosticEvent] = []
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu,
+            onEvent: { events.append($0) }).outcome, .stopped)
+        XCTAssertEqual(field.text, "ghbdtnxy")
+        XCTAssertEqual([field.caret, field.selection], [6, 2], "The suggestion is restored")
+        XCTAssertEqual(requested.map { [$0.location, $0.length] }, [[6, 0], [6, 2]])
+        XCTAssertEqual(field.queuedText, 0)
+        XCTAssertEqual(events.filter { $0 == .autocompleteSuggestionRefused }.count, 1)
     }
 }

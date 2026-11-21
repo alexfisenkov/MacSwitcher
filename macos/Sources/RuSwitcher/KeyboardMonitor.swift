@@ -329,6 +329,50 @@ final class KeyboardMonitor: @unchecked Sendable {
     var onRuntimeSecureInputResumed: (@MainActor () -> Void)?
     var onRuntimeNormalKeyboardActivity: (@MainActor () -> Bool)?
     private var secureInputObservedInEvents = false
+    /// Verdict for the focused field while Secure Input is raised. The live
+    /// probe asks AX about the field itself; tests supply a synthetic verdict.
+    var secureFieldProbe: () -> SecureFieldVerdict = { SecureFieldPolicy.liveFocusedFieldVerdict() }
+    /// Front process whose character key reached the tap while the flag was raised.
+    private(set) var secureFlagDeliveryProcessID: Int32?
+    /// One probe answer shared by every check of the current tap event.
+    private var currentEventSecureVerdict: SecureFieldVerdict?
+
+    /// Flag down: the unchanged hot path, nothing is asked. Flag raised: the
+    /// focused field must be positively ordinary and outside the flag holder;
+    /// otherwise this key is neither buffered nor counted as delivery proof.
+    func secureFieldAdmitsInput(characterKey: Bool) -> Bool {
+        guard AutoSwitchPolicy.secureInputActive else {
+            secureFlagDeliveryProcessID = nil
+            return true
+        }
+        let verdict = currentEventSecureVerdict ?? secureFieldProbe()
+        guard SecureFieldPolicy.mayUse(focus: verdict, flagRaised: true) else {
+            secureFlagDeliveryProcessID = nil
+            return false
+        }
+        if characterKey {
+            secureFlagDeliveryProcessID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        }
+        return true
+    }
+
+    /// Tap boundary: asks the field once per keyboard event under the flag.
+    /// Returns whether the flag pauses this event (the pre-existing latch input).
+    fileprivate func beginSecureFlagEvent(isKeyboardEvent: Bool, isCharacterKey: Bool) -> Bool {
+        currentEventSecureVerdict = nil
+        guard AutoSwitchPolicy.secureInputActive else {
+            secureFlagDeliveryProcessID = nil
+            return false
+        }
+        guard isKeyboardEvent else { return true }
+        currentEventSecureVerdict = secureFieldProbe()
+        return !secureFieldAdmitsInput(characterKey: isCharacterKey)
+    }
+
+    fileprivate func endSecureFlagEvent() { currentEventSecureVerdict = nil }
+
+    /// The poll observed the flag down; a later raise needs fresh proof.
+    func clearSecureFlagDelivery() { secureFlagDeliveryProcessID = nil }
 
     /// Event-time guard catches Secure Input intervals shorter than the status
     /// timer when the OS still delivers at least one callback during the pause.
@@ -662,8 +706,9 @@ final class KeyboardMonitor: @unchecked Sendable {
     /// performs one bounded original-field capture before deferred prediction.
     private func recordPredictionKey(keyCode: UInt16, flags: CGEventFlags, renderedText: String?,
                                      renderedSourceLayoutID: String?) {
+        let fieldAdmitted = secureFieldAdmitsInput(characterKey: true)
         if SettingsManager.shared.automaticTextEnabled,
-           !AutoSwitchPolicy.secureInputActive,
+           fieldAdmitted,
            flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskSecondaryFn]).isEmpty,
            keyCode != KC.backspace, keyCode != KC.enter, keyCode != KC.tab,
            !(keyCode >= KC.left && keyCode <= KC.up) {
@@ -671,7 +716,7 @@ final class KeyboardMonitor: @unchecked Sendable {
             RuntimeDiagnostics.record(renderedText?.isEmpty == false ? .autoUnicodePresent : .autoUnicodeMissing)
         }
         guard SettingsManager.shared.automaticTextEnabled,
-              !AutoSwitchPolicy.secureInputActive,
+              fieldAdmitted,
               flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskSecondaryFn]).isEmpty,
               keyCode != KC.backspace, keyCode != KC.enter, keyCode != KC.tab,
               !(keyCode >= KC.left && keyCode <= KC.up),
@@ -884,7 +929,7 @@ final class KeyboardMonitor: @unchecked Sendable {
 
     private func handleCombinedShift(flags: CGEventFlags, keyCode: UInt16, clock: KeyboardInputClock) {
         let otherModifiers: CGEventFlags = [.maskCommand, .maskControl, .maskAlternate, .maskSecondaryFn]
-        guard SettingsManager.shared.manualShiftEnabled, !AutoSwitchPolicy.secureInputActive,
+        guard SettingsManager.shared.manualShiftEnabled, secureFieldAdmitsInput(characterKey: false),
               flags.intersection(otherModifiers).isEmpty,
               keyCode == KC.leftShift || keyCode == KC.rightShift else {
             interruptCombinedShift()
@@ -994,6 +1039,12 @@ final class KeyboardMonitor: @unchecked Sendable {
 
     func handleKeyDown(keyCode: UInt16, flags: CGEventFlags, char: Character? = nil,
                        renderedText: String? = nil, renderedSourceLayoutID: String? = nil) {
+        // Under the raised flag a password/unknown field keeps nothing: no
+        // word, line or prediction buffer, and the open word is dropped.
+        guard secureFieldAdmitsInput(characterKey: true) else {
+            invalidateRuntimeInputContext()
+            return
+        }
         interruptCombinedShift()
         // Submit after existing buffer mutation. Structural/reset branches clear it.
         defer { recordPredictionKey(keyCode: keyCode, flags: flags, renderedText: renderedText,
@@ -1455,8 +1506,13 @@ private func processKeyboardInput(type: CGEventType, event: CGEvent, monitor: Ke
            (!monitor.nativeInputTransportAvailable || !diagnosticFixtureEventIsAdmitted(event)) {
             return nil
         }
-        let secureInput = AutoSwitchPolicy.secureInputActive
+        // A raised flag alone no longer drops the event: a key that reached the
+        // tap was not hidden by macOS. The focused field decides; a password,
+        // unknown or flag-holder field keeps the previous paused behaviour.
         let isKeyboardEvent = type == .keyDown || type == .keyUp || type == .flagsChanged
+        let secureInput = monitor.beginSecureFlagEvent(isKeyboardEvent: isKeyboardEvent,
+            isCharacterKey: type == .keyDown)
+        defer { monitor.endSecureFlagEvent() }
         let mayProcess = monitor.noteRuntimeSecureInput(secureInput,
             isKeyboardEvent: isKeyboardEvent)
         if !mayProcess { return diagnosticFixture ? nil : Unmanaged.passUnretained(event) }

@@ -932,7 +932,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
               SettingsManager.shared.manualShiftEnabled else {
             if isDouble { RuntimeDiagnostics.record(.doubleDisabled); reportEarlyCombinedShiftRefusal(request) }; return
         }
-        guard !AutoSwitchPolicy.secureInputActive else {
+        let secureFlag = AutoSwitchPolicy.secureInputActive
+        // Raised flag: the gesture proceeds only after character keys reached
+        // us in this target (not the holder); every field read and write then
+        // re-checks the exact field (`SecureFieldPolicy`).
+        guard SecureFlagGestureGate.evaluate(isDouble: isDouble, targetProcessID: request.frontProcessID,
+                  deliveredProcessID: keyboardMonitor.secureFlagDeliveryProcessID, flagRaised: secureFlag,
+                  holderProcessID: secureFlag ? AutoSwitchPolicy.secureInputHolderProcessID() : nil) != .refused else {
             if isDouble { RuntimeDiagnostics.record(.doubleSecureInput); reportEarlyCombinedShiftRefusal(request) }
             keyboardMonitor.resetCombinedShift()
             notifySecureInputPaused()
@@ -1016,10 +1022,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let settings = SettingsManager.shared
         let languages = LayoutSwitcher.currentAndOppositeLanguage(context: context)
         let nativeRUEN = languages.map { Set([$0.current, $0.opposite]) == Set(["ru", "en"]) } == true
-        if CombinedShiftTransaction.needsSelectionEvidence(execution: execution,
+        // A selection claim is never an automatic undo (`claimDoubleShiftAutomaticUndo`
+        // requires a collapsed caret), so the suggestion check uses `.manual`.
+        if CombinedShiftTransaction.needsSelectionEvidence(request: request, execution: execution,
                converter: textConverter, convertByText: settings.convertByText,
-               smartConversion: settings.smartConversion, nativeRUEN: nativeRUEN) {
-            guard !AutoSwitchPolicy.secureInputActive,
+               smartConversion: settings.smartConversion, nativeRUEN: nativeRUEN,
+               automaticUndo: .manual) {
+            guard execution.focus.secureFlagPermits(),
                   LayoutSwitcher.currentLayoutID() == context.targetLayoutID,
                   let baseline = textConverter.nativeSelectionBaseline(execution: execution),
                   let queries = SmartConvert.requiredNativeWordEvidence(baseline.selection.text,
@@ -1039,7 +1048,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                       baseline.matches(current),
                       self.keyboardMonitor.inputRevision == execution.inputRevision,
                       execution.focus.currentTargetProcessID() == execution.focus.processID,
-                      !AutoSwitchPolicy.secureInputActive,
+                      execution.focus.secureFlagPermits(),
                       LayoutSwitcher.currentLayoutID() == context.targetLayoutID else {
                     self.showCombinedShiftRefusal()
                     self.reportEarlyCombinedShiftRefusal(request)
@@ -1764,18 +1773,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func runtimeHealthSnapshot() -> RuntimeHealthSnapshot {
-        RuntimeHealthSnapshot(monitoring: monitoringActive,
+        let secureFlag = AutoSwitchPolicy.secureInputActive
+        if !secureFlag { keyboardMonitor.clearSecureFlagDelivery() }
+        // The flag pauses us only until a character key proves delivery.
+        let securePaused = secureFlag && keyboardMonitor.secureFlagDeliveryProcessID == nil
+        return RuntimeHealthSnapshot(monitoring: monitoringActive,
             masterEnabled: SettingsManager.shared.monitorLifecycleEnabled,
             accessibilityGranted: AXIsProcessTrusted(),
             inputMonitoringGranted: CGPreflightListenEventAccess(),
-            secureInput: AutoSwitchPolicy.secureInputActive,
+            secureInput: securePaused,
             sleeping: systemSleeping,
             tap: keyboardMonitor.nativeTapRecoveryStatus,
             nativeLeaseActive: keyboardMonitor.hasNativeInputLease,
             shellEditActive: shellCoordinator.hasInFlightEdit,
             unknownEditRetained: textConverter.hasUnconfirmedAXEdit
                 || !shellCoordinator.uncertainOriginals.isEmpty,
-            shell: shellCoordinator.health)
+            shell: shellCoordinator.health, secureFlagRaised: secureFlag)
     }
 
     private func mayReconfigureRuntimeTap() -> Bool {

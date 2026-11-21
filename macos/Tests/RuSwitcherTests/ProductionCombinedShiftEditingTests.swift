@@ -27,6 +27,8 @@ final class ProductionCombinedShiftEditingTests: XCTestCase {
         var substringCount = 0
         var substringReadDelay: TimeInterval = 0
         var subrole: (AXError, AnyObject?) = (.attributeUnsupported, nil)
+        /// Opt-in synthetic AX caret setter; nil keeps the setter unavailable.
+        var selectionSetter: ((CFRange) -> Bool)?
         var queuedLayoutTargets: [String] = []
         /// Opt-in capture of the editor's closed diagnostic codes.
         var capturesEditorDiagnostics = false
@@ -72,7 +74,10 @@ final class ProductionCombinedShiftEditingTests: XCTestCase {
                     },
                     selectionRange: { [self] in selectedRange() },
                     text: { [self] in substring($0) },
-                    secureSubrole: { [self] in subrole }))
+                    secureSubrole: { [self] in subrole },
+                    selectRange: selectionSetter == nil ? nil : { [self] range in
+                        selectionSetter?(range) ?? false
+                    }))
         }
 
         var observation: NativeFieldObservation {

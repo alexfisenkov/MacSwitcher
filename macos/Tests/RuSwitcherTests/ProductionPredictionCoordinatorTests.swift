@@ -1107,3 +1107,59 @@ final class ProductionPredictionCoordinatorTests: XCTestCase {
         XCTAssertEqual(field.queuedText, 2)
     }
 }
+
+// MARK: - Secure Input decided per field; inline autocomplete suggestions
+
+extension ProductionPredictionCoordinatorTests {
+    @MainActor
+    func testRaisedFlagWithDeliveredKeysCorrectsInAnOrdinaryField() throws {
+        let restore = raiseSyntheticSecureFlag(holder: 77)
+        defer { restore() }
+        let pair = try layoutIDs()
+        let field = Field(pid: 2301, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        _ = rig.coordinator
+        rig.deliver("ghbd")
+        rig.settle(expected: .applied)
+        XCTAssertEqual(field.text, "прив")
+    }
+
+    @MainActor
+    func testRaisedFlagNeverCorrectsPasswordUnknownOrHolderField() throws {
+        let pair = try layoutIDs()
+        for gate in 0..<3 {
+            let field = Field(pid: Int32(2310 + gate), text: "")
+            let restore = raiseSyntheticSecureFlag(holder: gate == 2 ? field.pid : 77)
+            defer { restore() }
+            switch gate {
+            case 0: field.subrole = (.success, kAXSecureTextFieldSubrole as NSString)
+            case 1: field.subrole = (.cannotComplete, nil)
+            default: break
+            }
+            let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+            _ = rig.coordinator
+            rig.deliver("ghbd")
+            rig.settle()
+            XCTAssertEqual(field.text, "ghbd", "\(gate)")
+            XCTAssertEqual(field.queuedText, 0)
+            XCTAssertEqual(field.substringCount, 0, "No text is read from the field")
+            XCTAssertEqual(rig.applied, [])
+        }
+    }
+
+    @MainActor
+    func testAutomaticCorrectionNeverWritesIntoAnInlineSuggestion() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2320, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        _ = rig.coordinator
+        rig.deliver("ghbd")
+        field.text = "ghbdxy" // a selected suggestion appears before evaluation
+        field.selection = 2
+        rig.settle()
+        XCTAssertEqual(field.text, "ghbdxy")
+        XCTAssertEqual(field.selection, 2)
+        XCTAssertEqual(field.queuedText, 0)
+        XCTAssertEqual(rig.applied, [])
+    }
+}

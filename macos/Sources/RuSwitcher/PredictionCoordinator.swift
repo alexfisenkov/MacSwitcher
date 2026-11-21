@@ -118,7 +118,7 @@ final class PredictionCoordinator {
             undoHeldFocus = nil
             return true // Existing source/PID reset handles the new input.
         }
-        guard !platform.isSecure() else { return false }
+        guard !platform.secureFlagBlocks(held.focus) else { return false }
         let currentElement: AXUIElement?
         if let focusedIdentity = platform.focusedIdentity {
             currentElement = focusedIdentity(processID)
@@ -246,12 +246,16 @@ final class PredictionCoordinator {
         guard !platform.searchOverlayActive(),
               snapshot.sessionID == monitor.predictionSessionID,
               snapshot.isCurrent(processID: platform.frontmost().processID,
-                  revision: monitor.inputRevision, generation: monitor.predictionGeneration),
-              !platform.isSecure() else {
+                  revision: monitor.inputRevision, generation: monitor.predictionGeneration) else {
             RuntimeDiagnostics.record(.autoAnchorStale); return
         }
         guard let focus = platform.captureFocus(snapshot.processID) else {
             RuntimeDiagnostics.record(.autoAnchorUnavailable); return
+        }
+        // The capture reads only the selected range, itself refused under the
+        // raised flag for anything but an ordinary non-holder field.
+        guard !platform.secureFlagBlocks(focus) else {
+            RuntimeDiagnostics.record(.autoAnchorStale); return
         }
         guard let selection = focus.initialSelection, selection.length == 0,
               let pending = PredictionPendingCaretAnchor(sessionID: snapshot.sessionID,
@@ -308,7 +312,7 @@ final class PredictionCoordinator {
     }
 
     private func isCurrent(_ snapshot: PredictionSnapshot) -> Bool {
-        if platform.isSecure() {
+        if platform.secureFlagBlocks(anchorFocus) {
             monitor.resetPredictionContext()
             return false
         }
@@ -440,12 +444,15 @@ final class PredictionCoordinator {
             RuntimeDiagnostics.record(.nativeFenceUnavailable); return
         }
         var requestedAt: UInt64 = 0
+        let securePermit = SecureFlagFieldPermit(focus: focus, flagRaised: { [platform] in
+            platform.secureFlagRaised()
+        })
         let sourceCommit = NativeQueuedSourceCommit(isCurrent: { [weak self] in
             guard let self else { return false }
             return self.platform.leaseIsCurrent(lease)
                 && monitor.inputRevision == snapshot.inputRevision
                 && self.platform.frontmost().processID == snapshot.processID
-                && !self.platform.isSecure()
+                && securePermit.allows()
         }, request: { target in
             requestedAt = self.platform.sourceRequestedAt()
             return self.platform.selectSource(target)
@@ -461,7 +468,7 @@ final class PredictionCoordinator {
                 let front = platform.frontmost()
                 let family = RuntimeDiagnostics.applicationFamily(bundleID: front.bundleID,
                     expectedProcessID: snapshot.processID, observedProcessID: front.processID,
-                    secureInputActive: platform.isSecure() || focus.processID != snapshot.processID,
+                    secureInputActive: platform.secureFlagRaised() || focus.processID != snapshot.processID,
                     diagnosticsEnabled: true)
                 recordAutomaticUncertain(family)
             }
@@ -586,7 +593,7 @@ final class PredictionCoordinator {
               monitor.inputRevision == recent.inputRevision else { return .manual }
         guard focus.initialSelection?.length == 0 else { return .manual }
         guard monitor.predictionSessionID == recent.sessionID,
-              !platform.isSecure(), !platform.remoteDeferred(),
+              !platform.secureFlagBlocks(focus), !platform.remoteDeferred(),
               !platform.deniedApp(platform.frontmost().bundleID),
               platform.frontmost().processID == focus.processID,
               platform.focusIsCurrent(focus),
@@ -639,7 +646,7 @@ final class PredictionCoordinator {
     private func performUndoCorrection(id: UUID) -> CorrectionUndoResult {
         guard let receipt = correctionReceipts.claim(id) else { return .refused }
         let focus = receipt.focus
-        guard !platform.isSecure(), !platform.remoteDeferred(),
+        guard !platform.secureFlagBlocks(focus), !platform.remoteDeferred(),
               !platform.deniedApp(platform.frontmost().bundleID),
               platform.frontmost().processID == focus.processID,
               platform.focusIsCurrent(focus),
@@ -652,12 +659,15 @@ final class PredictionCoordinator {
               currentSelection.length == receipt.after.selectionLength,
               let lease = platform.beginLease(focus.processID) else { return .refused }
         var requestedAt: UInt64 = 0
+        let securePermit = SecureFlagFieldPermit(focus: focus, flagRaised: { [platform] in
+            platform.secureFlagRaised()
+        })
         let sourceCommit = NativeQueuedSourceCommit(isCurrent: { [weak self] in
             guard let self else { return false }
             return self.platform.leaseIsCurrent(lease)
                 && self.monitor.inputRevision == receipt.inputRevision
                 && self.platform.frontmost().processID == focus.processID
-                && !self.platform.isSecure()
+                && securePermit.allows()
         }, request: { [weak self] target in
             guard let self else { return .refused }
             requestedAt = self.platform.sourceRequestedAt()

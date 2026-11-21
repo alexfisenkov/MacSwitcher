@@ -177,14 +177,36 @@ enum LayoutDetector {
 
 /// Политика безопасности авто-конвертации.
 enum AutoSwitchPolicy {
-    /// Активен ли защищённый ввод (поле пароля, Secure Keyboard Entry в терминале) —
-    /// тогда авто-конвертацию НЕ делаем (приватность; пароль не трогаем).
-    static var secureInputActive: Bool { IsSecureEventInputEnabled() }
+    /// Общий флаг сессии «защищённый ввод». Сам по себе он не решает, можно ли
+    /// трогать поле: решение принимает `SecureFieldPolicy` по конкретному полю.
+    /// Шов для тестов; в приложении — всегда `IsSecureEventInputEnabled()`.
+    nonisolated(unsafe) static var secureInputProbe: () -> Bool = { IsSecureEventInputEnabled() }
+    /// PID держателя флага (IORegistry). Шов для тестов.
+    nonisolated(unsafe) static var secureInputHolderProbe: () -> Int32? = { liveSecureInputHolderProcessID() }
+
+    static var secureInputActive: Bool { secureInputProbe() }
+
+    static func secureInputHolderProcessID() -> Int32? { secureInputHolderProbe() }
+
+    /// Читаем PID из IORegistry (то же, что `ioreg`: IOConsoleUsers → kCGSSessionSecureInputPID).
+    static func liveSecureInputHolderProcessID() -> Int32? {
+        let entry = IORegistryEntryFromPath(kIOMainPortDefault, "IOService:/IOResources")
+        guard entry != 0 else { return nil }
+        defer { IOObjectRelease(entry) }
+        guard let sessions = IORegistryEntryCreateCFProperty(
+            entry, "IOConsoleUsers" as CFString, kCFAllocatorDefault, 0
+        )?.takeRetainedValue() as? [[String: Any]] else { return nil }
+        for s in sessions {
+            guard let raw = s["kCGSSessionSecureInputPID"] as? Int, raw > 0,
+                  let pid = Int32(exactly: raw) else { continue }
+            return pid
+        }
+        return nil
+    }
 
     /// Имя приложения, удерживающего защищённый ввод (Word, Terminal, менеджер
     /// паролей, loginwindow при системном запросе пароля и т.п.), или nil если
-    /// определить не удалось. Читаем PID из IORegistry (то же, что `ioreg`:
-    /// IOConsoleUsers → kCGSSessionSecureInputPID) и резолвим в человекочитаемое имя.
+    /// определить не удалось. Только для подсказки пользователю, не для журнала.
     static func secureInputHolderName() -> String? {
         let entry = IORegistryEntryFromPath(kIOMainPortDefault, "IOService:/IOResources")
         guard entry != 0 else { return nil }

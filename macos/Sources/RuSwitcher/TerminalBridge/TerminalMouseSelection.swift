@@ -198,8 +198,8 @@ enum TerminalMouseSelection {
 
     private static func liveWindow(_ focus: CombinedShiftFocus, _ budget: Budget) -> AXUIElement? {
         let app = AXUIElementCreateApplication(focus.processID)
-        guard !AutoSwitchPolicy.secureInputActive,
-              NSWorkspace.shared.frontmostApplication?.processIdentifier == focus.processID,
+        // Structure only (focus and window identity); the field decision is `liveSecure`.
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == focus.processID,
               let (fieldStatus, fieldRaw) = read(app,
                   attribute: kAXFocusedUIElementAttribute as CFString, budget: budget),
               fieldStatus == .success, let fieldRaw,
@@ -230,17 +230,13 @@ enum TerminalMouseSelection {
     }
 
     private static func liveSecure(_ focus: CombinedShiftFocus, _ budget: Budget) -> Bool? {
-        guard !AutoSwitchPolicy.secureInputActive,
-              let (status, raw) = read(focus.element,
+        guard let (status, raw) = read(focus.element,
                   attribute: kAXSubroleAttribute as CFString, budget: budget) else { return nil }
-        switch status {
-        case .success:
-            guard let role = raw as? String else { return nil }
-            return role == kAXSecureTextFieldSubrole
-        case .attributeUnsupported, .noValue:
-            return false
-        default:
-            return nil
+        switch SecureFieldPolicy.effectiveVerdict(SecureFieldPolicy.verdict(subroleStatus: status, subrole: raw),
+                                                  fieldProcessID: focus.processID) {
+        case .ordinary: return false
+        case .secure: return true
+        case .unknown: return nil
         }
     }
 
