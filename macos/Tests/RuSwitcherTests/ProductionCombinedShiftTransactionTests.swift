@@ -1922,7 +1922,6 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
 
     @MainActor
     func testChangedRussianTokenChoosesRussianDespiteLongUnchangedBrand() throws {
-        Dict.warmUp() // isolate result-source policy; the slow-policy test covers lease timing
         let field = Field(pid: 5114, text: "ghbdtn MacSwitcher")
         field.caret = 0
         field.selection = field.text.utf16.count
@@ -1936,7 +1935,6 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
 
     @MainActor
     func testChangedEnglishTokenChoosesEnglishDespiteLongUnchangedRussianWord() throws {
-        Dict.warmUp()
         let field = Field(pid: 5115, text: "руддщ привет")
         field.caret = 0
         field.selection = field.text.utf16.count

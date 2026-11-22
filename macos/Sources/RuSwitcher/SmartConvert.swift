@@ -157,7 +157,7 @@ enum SmartConvert {
         let core = letterCore(w)
         let script = dominantScript(core)
         guard core.count >= 1, script == .cyr || script == .lat else { return .keep }
-        // Акронимы и код — как в LayoutDetector.decide.
+        // Акронимы и код не трогаем.
         if LayoutDetector.isAllCaps(core) || LayoutDetector.looksLikeCodeIdentifier(core) { return .keep }
 
         let wordLang = (script == .cyr) ? cyrLang : latLang
