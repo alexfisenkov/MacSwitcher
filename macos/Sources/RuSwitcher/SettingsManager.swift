@@ -60,6 +60,8 @@ final class SettingsManager: @unchecked Sendable {
         static let alwaysConvertWords = "com.ruswitcher.alwaysConvertWords"
         static let adaptiveLearning = "com.macswitcher.adaptiveLearning"
         static let automaticRecoveryArchive = "com.macswitcher.automaticRecoveryArchive"
+        static let freshInstallProfile = "com.macswitcher.freshInstallProfile"
+        static let compactMenu = "com.macswitcher.compactMenu"
     }
 
     init(defaults: UserDefaults, combinedShiftDefault: Bool = Bundle.main.object(forInfoDictionaryKey: "LocalCombinedShiftDefault") as? Bool ?? true,
@@ -91,10 +93,42 @@ final class SettingsManager: @unchecked Sendable {
     /// Cache is set once at startup, before any keyboard monitor is configured.
     @discardableResult
     func activateNativeShift(backupDirectory: URL) -> Bool {
+        let fresh = classifyInstallBeforeActivation()
         let result = ShiftBehaviorPolicy.activate(defaults: defaults, directory: backupDirectory)
         verifiedNativeShift = result.applied
         verifiedNativeShiftBackup = result.backupVerified
+        if fresh { applyFreshInstallDefaults() }
         return verifiedNativeShift
+    }
+
+    /// New install = neither onboarding question was ever answered, judged before the
+    /// migration runs. The verdict is stored on the first alpha.38 launch and kept, so
+    /// existing users never receive the new defaults. Returns true only on that launch.
+    private func classifyInstallBeforeActivation() -> Bool {
+        guard defaults.object(forKey: Keys.freshInstallProfile) == nil else { return false }
+        let fresh = !launchAtLoginAsked && !autoConvertOffered
+        defaults.set(fresh, forKey: Keys.freshInstallProfile)
+        return fresh
+    }
+
+    /// Written once; explicit earlier choices win over every new default.
+    private func applyFreshInstallDefaults() {
+        if defaults.object(forKey: Keys.compactMenu) == nil { compactMenu = true }
+        if defaults.object(forKey: Keys.monochromeIcon) == nil { monochromeIcon = true }
+        let automaticChosen = defaults.object(forKey: Keys.autoConvert) != nil
+            || defaults.object(forKey: ShiftBehaviorPolicy.automaticOverrideKey) != nil
+        if !automaticChosen { automaticTextEnabled = true }
+    }
+
+    /// Installs classified as new on their first alpha.38 launch get the welcome screen
+    /// instead of the old prompts.
+    var freshInstallProfile: Bool { defaults.bool(forKey: Keys.freshInstallProfile) }
+
+    /// Status menu with only automatic correction, Settings and Quit. Existing users keep
+    /// the previous menu unless they turn this on in «More».
+    var compactMenu: Bool {
+        get { defaults.object(forKey: Keys.compactMenu) as? Bool ?? false }
+        set { defaults.set(newValue, forKey: Keys.compactMenu) }
     }
 
     var nativeShiftMigrationApplied: Bool { verifiedNativeShift }
@@ -408,7 +442,8 @@ final class SettingsManager: @unchecked Sendable {
     }
 
     /// Иконка меню-бара в системном стиле: монохромная плашка «РУ/EN» (template)
-    /// вместо цветного флага-эмодзи. По умолчанию OFF — флаг привычнее.
+    /// вместо цветного флага-эмодзи. Новые установки получают плашку (applyFreshInstallDefaults);
+    /// у существующих без явного выбора — флаг, как было.
     var monochromeIcon: Bool {
         get { defaults.bool(forKey: Keys.monochromeIcon) }
         set { defaults.set(newValue, forKey: Keys.monochromeIcon) }

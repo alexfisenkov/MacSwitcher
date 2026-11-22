@@ -13,19 +13,21 @@ final class AdaptiveRulesView: NSView, NSTableViewDataSource, NSTableViewDelegat
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        // Content spans the whole frame width: the settings column places this view.
+        let width = frameRect.width
         toggle.title = text("Запоминать мои исправления на этом компьютере",
             "Remember my corrections on this computer")
         toggle.target = self
         toggle.action = #selector(toggleChanged)
-        toggle.frame = NSRect(x: 20, y: 435, width: 420, height: 28)
+        toggle.frame = NSRect(x: 0, y: 435, width: width, height: 28)
         addSubview(toggle)
         let explanation = NSTextField(wrappingLabelWithString: text(
             "После двух независимых исправлений одного слова MacSwitcher запомнит выбор только на этом Mac. История набора и текст полей не сохраняются. Можно отключить, удалить правило или очистить список.",
             "After two separate corrections of a word, MacSwitcher remembers the choice only on this Mac. Typed history and field text are not saved. You can turn this off or delete rules."))
         explanation.textColor = .secondaryLabelColor
-        explanation.frame = NSRect(x: 20, y: 367, width: 420, height: 62)
+        explanation.frame = NSRect(x: 0, y: 367, width: width, height: 62)
         addSubview(explanation)
-        for (name, title, width) in [("pair", "RU / EN", 265.0),
+        for (name, title, width) in [("pair", "RU / EN", max(265.0, Double(width) - 170)),
                                      ("preferred", text("Выбор", "Choice"), 80.0),
                                      ("count", text("Случаи", "Cases"), 70.0)] {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(name))
@@ -34,16 +36,17 @@ final class AdaptiveRulesView: NSView, NSTableViewDataSource, NSTableViewDelegat
         }
         table.dataSource = self; table.delegate = self
         table.allowsMultipleSelection = false
-        let scroll = NSScrollView(frame: NSRect(x: 20, y: 80, width: 420, height: 280))
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 80, width: width, height: 280))
         scroll.documentView = table; scroll.hasVerticalScroller = true
         scroll.borderType = .bezelBorder
         addSubview(scroll)
+        let half = (width - 10) / 2
         let delete = NSButton(title: text("Удалить выбранное", "Delete selected"), target: self, action: #selector(deleteSelected))
-        delete.frame = NSRect(x: 20, y: 43, width: 195, height: 28); addSubview(delete)
+        delete.frame = NSRect(x: 0, y: 43, width: half, height: 28); addSubview(delete)
         let reset = NSButton(title: text("Очистить все правила…", "Clear all rules…"), target: self, action: #selector(resetRules))
-        reset.frame = NSRect(x: 225, y: 43, width: 215, height: 28); addSubview(reset)
+        reset.frame = NSRect(x: half + 10, y: 43, width: half, height: 28); addSubview(reset)
         status.textColor = .secondaryLabelColor
-        status.frame = NSRect(x: 20, y: 10, width: 420, height: 27); addSubview(status)
+        status.frame = NSRect(x: 0, y: 10, width: width, height: 27); addSubview(status)
         NotificationCenter.default.addObserver(self, selector: #selector(ruleStoreChanged),
             name: AdaptiveRuleStore.didChange, object: nil)
         reload()

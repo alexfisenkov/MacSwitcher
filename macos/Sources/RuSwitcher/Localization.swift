@@ -245,6 +245,44 @@ enum L10n {
     static var onboardAutoConvertTitle: String { s("onboard.autoConvert.title") }
     static var onboardAutoConvertText: String { s("onboard.autoConvert.text") }
 
+    // MARK: - Приветствие, настройки и обучение (alpha.38: ru/en, остальные языки — задача 08)
+    static var welcomeWindowTitle: String { s("welcome.window.title") }
+    static var welcomeTitle: String { s("welcome.title") }
+    static var welcomeLead: String { s("welcome.lead") }
+    static var welcomeAccessibilityTitle: String { s("welcome.accessibility.title") }
+    static var welcomeAccessibilityText: String { s("welcome.accessibility.text") }
+    static var welcomeInputMonitoringTitle: String { s("welcome.inputMonitoring.title") }
+    static var welcomeInputMonitoringText: String { s("welcome.inputMonitoring.text") }
+    static var welcomeOpenSettings: String { s("welcome.openSettings") }
+    static var welcomeGranted: String { s("welcome.granted") }
+    static var welcomeMissing: String { s("welcome.missing") }
+    static var welcomeAutoCorrectionHint: String { s("welcome.autoCorrection.hint") }
+    static var welcomeLaunchAtLogin: String { s("welcome.launchAtLogin") }
+    static var welcomeLaunchAtLoginHint: String { s("welcome.launchAtLogin.hint") }
+    static var welcomeDone: String { s("welcome.done") }
+    static var permissionsResetBody: String { s("permissions.reset.body") }
+    static var adaptiveIntroTitle: String { s("adaptive.intro.title") }
+    static var adaptiveIntroBody: String { s("adaptive.intro.body") }
+    static var adaptiveIntroAction: String { s("adaptive.intro.action") }
+    static var settingsGesturesGroup: String { s("settings.gestures.group") }
+    static var settingsStartupIconGroup: String { s("settings.startupIcon.group") }
+    static var settingsIcon: String { s("settings.icon") }
+    static var settingsIconBadge: String { s("settings.icon.badge") }
+    static var settingsIconFlag: String { s("settings.icon.flag") }
+    static var settingsMoreEntry: String { s("menu.more") + "…" }
+    static var settingsCheckSection: String { s("settings.section.check") }
+    static var settingsExpertSection: String { s("settings.section.expert") }
+    static var settingsCompactMenu: String { s("settings.compactMenu") }
+    static var settingsCompactMenuHint: String { s("settings.compactMenu.hint") }
+    static var wordsDictionaryDetail: String { s("words.dictionary.detail") }
+    static var wordsNeverDetail: String { s("words.never.detail") }
+    static var wordsAlwaysDetail: String { s("words.always.detail") }
+    static var wordsAppsDetail: String { s("words.apps.detail") }
+    static var wordsLearningDetail: String { s("words.learning.detail") }
+    static func settingsIntervalValue(_ milliseconds: Int) -> String {
+        String(format: s("settings.interval.value"), milliseconds)
+    }
+
     // MARK: - Обновления
     static var updateAvailable: String { s("update.available") }
     static var updateBeta: String { s("update.beta") }
@@ -368,7 +406,41 @@ enum L10n {
             "shell.setup.done.granted": ("Доступ к вкладке терминала разрешён.", "Terminal tab access is allowed."),
             "shell.setup.done.denied": ("Доступ к вкладке пока не получен: нажмите кнопку ещё раз, когда будете готовы.", "Tab access was not granted yet: press the button again when you are ready."),
             "shell.setup.done.noTerminal": ("Откройте один терминал (например, Ghostty) и нажмите кнопку ещё раз, чтобы выдать доступ.", "Open one terminal (for example Ghostty) and press the button again to grant access."),
-            "shell.setup.done.newWindow": ("Откройте новое окно терминала, чтобы подключение заработало.", "Open a new terminal window for the setup to take effect.")
+            "shell.setup.done.newWindow": ("Откройте новое окно терминала, чтобы подключение заработало.", "Open a new terminal window for the setup to take effect."),
+            // Задача 06 (alpha.38): приветствие, настройки, обучение. Переводы — задача 08.
+            "welcome.window.title": ("Добро пожаловать", "Welcome"),
+            "welcome.title": ("Добро пожаловать в MacSwitcher", "Welcome to MacSwitcher"),
+            "welcome.lead": ("Один Shift меняет раскладку, два Shift подряд исправляют слово. Для этого macOS нужно два разрешения: нажмите «Открыть настройки» и включите MacSwitcher в списке. Этот экран сам заметит, когда разрешения выданы.", "One Shift changes the layout, two quick Shifts fix a word. For this, macOS needs two permissions: press “Open Settings” and turn MacSwitcher on in the list. This screen notices by itself when they are granted."),
+            "welcome.accessibility.title": ("Универсальный доступ", "Accessibility"),
+            "welcome.accessibility.text": ("Чтобы исправлять слово прямо в поле, где вы печатаете.", "To fix a word right in the field where you type."),
+            "welcome.inputMonitoring.title": ("Мониторинг ввода", "Input Monitoring"),
+            "welcome.inputMonitoring.text": ("Чтобы замечать Shift и конец слова. Набранный текст не сохраняется и никуда не отправляется. После включения MacSwitcher перезапустится сам.", "To notice Shift and the end of a word. What you type is not saved or sent anywhere. MacSwitcher restarts by itself once this is on."),
+            "welcome.openSettings": ("Открыть настройки", "Open Settings"),
+            "welcome.granted": ("Разрешено", "Allowed"),
+            "welcome.missing": ("Ещё не разрешено", "Not allowed yet"),
+            "welcome.autoCorrection.hint": ("Исправляет слова, набранные не в той раскладке. Выключить можно здесь, в меню или в настройках.", "Fixes words typed in the wrong layout. You can turn it off here, in the menu or in Settings."),
+            "welcome.launchAtLogin": ("Запуск при входе", "Open at login"),
+            "welcome.launchAtLogin.hint": ("MacSwitcher будет запускаться сам, когда вы входите в систему.", "MacSwitcher starts by itself when you log in."),
+            "welcome.done": ("Готово", "Done"),
+            "permissions.reset.body": ("macOS отозвала одно из разрешений MacSwitcher. Проверьте «Универсальный доступ» и «Мониторинг ввода» в Системных настройках. Действующие разрешения сохраняются.", "macOS revoked a MacSwitcher permission. Check Accessibility and Input Monitoring in System Settings. Existing permissions are preserved."),
+            "adaptive.intro.title": ("Локальное обучение MacSwitcher", "MacSwitcher learns locally"),
+            "adaptive.intro.body": ("После двух независимых исправлений одного слова выбор запоминается только на этом Mac. Отключить обучение и удалить правила можно в «Слова и исключения → Запомненные исправления». История набора не сохраняется.", "After two separate corrections of a word, the choice is remembered only on this Mac. To turn learning off or delete rules, open “Words & exceptions → Remembered corrections”. Typing history is not saved."),
+            "adaptive.intro.action": ("Открыть", "Open"),
+            "settings.gestures.group": ("Shift и автоисправление", "Shift and automatic correction"),
+            "settings.startupIcon.group": ("Запуск, обновления и значок", "Startup, updates and icon"),
+            "settings.icon": ("Значок в строке меню:", "Menu bar icon:"),
+            "settings.icon.badge": ("РУ/EN", "RU/EN"),
+            "settings.icon.flag": ("Флаг", "Flag"),
+            "settings.section.check": ("Проверка", "Check"),
+            "settings.section.expert": ("Для опытных", "For advanced users"),
+            "settings.compactMenu": ("Короткое меню", "Short menu"),
+            "settings.compactMenu.hint": ("В меню остаются «Автоисправление», «Настройки…» и «Выход». «Как пользоваться» и «Слова и исключения» — внутри настроек.", "The menu keeps “Automatic correction”, “Settings…” and “Quit”. “How to use” and “Words & exceptions” stay inside Settings."),
+            "words.dictionary.detail": ("Имена и бренды, которые нужно оставлять как есть, и точные фразы-исключения.", "Names and brands to keep as typed, and exact phrase exceptions."),
+            "words.never.detail": ("Эти слова автоисправление всегда оставляет как есть.", "Automatic correction always leaves these words as typed."),
+            "words.always.detail": ("Эти слова исправляются, даже если их нет в словаре.", "These words are corrected even when they are not in the dictionary."),
+            "words.apps.detail": ("В этих приложениях автоисправление не работает; Shift работает как обычно.", "Automatic correction is off in these apps; Shift works as usual."),
+            "words.learning.detail": ("Что запомнено по вашим исправлениям; здесь же обучение выключается.", "What was remembered from your corrections; learning is turned off here."),
+            "settings.interval.value": ("%d мс", "%d ms")
         ]
         if let pair = own[key] { return currentLang == "ru" ? pair.0 : pair.1 }
         return strings[currentLang]?[key] ?? strings["en"]![key] ?? key

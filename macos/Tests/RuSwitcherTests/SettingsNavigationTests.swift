@@ -97,10 +97,12 @@ final class SettingsNavigationTests: XCTestCase {
         let actions = Set(controls.compactMap { ($0 as? NSControl)?.action.map(NSStringFromSelector) })
         for action in ["shellBridgeSetupRequested", "runtimeCheckRequested",
             "permissionCheckRequested", "updateCheckRequested", "recoveryArchiveChanged:",
-            "inputSourceRequested", "recoveryOriginalsRequested",
+            "recoveryOriginalsRequested",
             "recoveryArchiveFolderRequested", "perAppLayoutChanged:", "openAboutSettings"] {
             XCTAssertTrue(actions.contains(action), "missing \(action)")
         }
+        // The layout chooser is in the menu when a source change waits for confirmation.
+        XCTAssertFalse(actions.contains("inputSourceRequested"))
     }
 
     @MainActor
@@ -280,7 +282,7 @@ final class SettingsNavigationTests: XCTestCase {
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         func render(appearanceName: String, appearance: NSAppearance.Name,
                     index: Int, wholeLine: Bool = false, support: Bool = false,
-                    suffix: String) throws {
+                    wordsSection: Int? = nil, suffix: String) throws {
             let controller = SettingsWindowController()
             let tabs = controller.makeNativeTabs(nativeShiftApplied: true, wholeLine: wholeLine,
                 backupVerified: true)
@@ -288,6 +290,9 @@ final class SettingsNavigationTests: XCTestCase {
             tabs.selectTabViewItem(at: index)
             if support, let settings = tabs.tabViewItem(at: 2).view as? NSTabView {
                 settings.selectTabViewItem(at: 1)
+            }
+            if let wordsSection, let words = tabs.tabViewItem(at: 1).view as? NSTabView {
+                words.selectTabViewItem(at: wordsSection)
             }
             root.frame = NSRect(x: 0, y: 0, width: 600, height: 520)
             root.appearance = try XCTUnwrap(NSAppearance(named: appearance))
@@ -308,6 +313,23 @@ final class SettingsNavigationTests: XCTestCase {
                 index: 0, wholeLine: true, suffix: "whole-line")
             try render(appearanceName: appearanceName, appearance: appearance,
                 index: 2, support: true, suffix: "support")
+            for (section, name) in [(1, "words-dictionary"), (2, "words-exceptions"), (3, "words-learning")] {
+                try render(appearanceName: appearanceName, appearance: appearance,
+                    index: 1, wordsSection: section, suffix: name)
+            }
+            let welcome = WelcomeWindowController().makeContent(accessibility: true,
+                inputMonitoring: false, automaticCorrection: true, launchAtLogin: false)
+            welcome.appearance = try XCTUnwrap(NSAppearance(named: appearance))
+            let backdrop = NSView(frame: welcome.frame)
+            backdrop.wantsLayer = true
+            backdrop.appearance = welcome.appearance
+            backdrop.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+            backdrop.addSubview(welcome)
+            backdrop.layoutSubtreeIfNeeded()
+            let bitmap = try XCTUnwrap(backdrop.bitmapImageRepForCachingDisplay(in: backdrop.bounds))
+            backdrop.cacheDisplay(in: backdrop.bounds, to: bitmap)
+            let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+            try png.write(to: output.appendingPathComponent("\(appearanceName)-welcome.png"))
         }
     }
     @MainActor

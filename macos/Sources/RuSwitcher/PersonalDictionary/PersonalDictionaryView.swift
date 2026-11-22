@@ -17,16 +17,18 @@ final class PersonalDictionaryView: NSView, NSTableViewDataSource, NSTableViewDe
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        // Content spans the whole frame width: the settings column places this view.
+        let width = frameRect.width
         let title = NSTextField(labelWithString: text("Личный словарь и исключения", "Personal dictionary and exceptions"))
         title.font = .boldSystemFont(ofSize: 13)
-        title.frame = NSRect(x: 20, y: 447, width: 420, height: 22)
+        title.frame = NSRect(x: 0, y: 447, width: width, height: 22)
         addSubview(title)
 
         let hint = NSTextField(wrappingLabelWithString: text(
             "Добавляйте имена и бренды вручную. Фразы ниже сохраняются как точные исключения автокоррекции.",
             "Add names and brands explicitly. Phrases below are exact autocorrection exceptions."))
         hint.textColor = .secondaryLabelColor
-        hint.frame = NSRect(x: 20, y: 405, width: 420, height: 38)
+        hint.frame = NSRect(x: 0, y: 405, width: width, height: 38)
         addSubview(hint)
 
         let kind = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("kind"))
@@ -39,25 +41,26 @@ final class PersonalDictionaryView: NSView, NSTableViewDataSource, NSTableViewDe
         table.addTableColumn(language)
         let value = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("value"))
         value.title = text("Запись", "Entry")
-        value.width = 270
+        value.width = max(270, width - 150)
         table.addTableColumn(value)
         table.dataSource = self
         table.delegate = self
         table.allowsMultipleSelection = false
         table.usesAlternatingRowBackgroundColors = true
-        let scroll = NSScrollView(frame: NSRect(x: 20, y: 120, width: 420, height: 275))
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 120, width: width, height: 275))
         scroll.documentView = table
         scroll.hasVerticalScroller = true
         scroll.borderType = .bezelBorder
         addSubview(scroll)
 
-        addButton(text("Добавить слово", "Add word"), #selector(addWord), x: 20, y: 83, width: 135)
-        addButton(text("Добавить фразу", "Add phrase"), #selector(addPhrase), x: 162, y: 83, width: 135)
-        addButton(text("Удалить", "Remove"), #selector(removeSelected), x: 304, y: 83, width: 136)
-        addButton(text("Импорт", "Import"), #selector(importFile), x: 20, y: 44, width: 202)
-        addButton(text("Экспорт", "Export"), #selector(exportFile), x: 230, y: 44, width: 210)
+        let third = (width - 16) / 3, half = (width - 8) / 2
+        addButton(text("Добавить слово", "Add word"), #selector(addWord), x: 0, y: 83, width: third)
+        addButton(text("Добавить фразу", "Add phrase"), #selector(addPhrase), x: third + 8, y: 83, width: third)
+        addButton(text("Удалить", "Remove"), #selector(removeSelected), x: 2 * (third + 8), y: 83, width: third)
+        addButton(text("Импорт", "Import"), #selector(importFile), x: 0, y: 44, width: half)
+        addButton(text("Экспорт", "Export"), #selector(exportFile), x: half + 8, y: 44, width: half)
         status.textColor = .secondaryLabelColor
-        status.frame = NSRect(x: 20, y: 9, width: 420, height: 29)
+        status.frame = NSRect(x: 0, y: 9, width: width, height: 29)
         addSubview(status)
         reload()
     }

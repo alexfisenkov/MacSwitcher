@@ -61,6 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let rivalTapWatch = RivalKeyboardTapWatch()
     private let secureNotice = SecureInputNotice()  // issue #27: подсказка о защ. вводе без кражи фокуса
     private let correctionExceptionOffer = CorrectionExceptionOffer()
+    private let welcome = WelcomeWindowController()
     private var lastFlagShown: String?            // идентичность раскладки для детекта смены (не title!)
     private var badgeCache: [String: NSImage] = [:]  // монохромные плашки, чтобы не перерисовывать 2с-опросом
     private var diagnosticRepro: DiagnosticReproController?
@@ -254,6 +255,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         settingsController.onStatusAppearanceChanged = { [weak self] in
             self?.updateStatusIcon()
+        }
+        settingsController.onCompactMenuChanged = { [weak self] in
+            self?.rebuildMenu()
         }
     }
 
@@ -594,6 +598,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let inp = CGPreflightListenEventAccess()
         rslog("Permissions: accessibility=\(acc) inputMonitoring=\(inp)")
 
+        let settings = SettingsManager.shared
+        let plan = FirstRunPlan.decide(freshProfile: settings.freshInstallProfile,
+            welcomeCompleted: settings.autoConvertOffered, accessibility: acc,
+            inputMonitoring: inp, permissionsWereGranted: settings.permissionsWereGranted)
+        if plan == .welcome {
+            if acc && inp && interactive { showPermissionsOKAlert() }
+            showWelcome(accessibility: acc, inputMonitoring: inp)
+            return
+        }
+
         if acc && inp {
             // Запоминаем что разрешения были даны
             SettingsManager.shared.permissionsWereGranted = true
@@ -635,9 +649,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let alert = NSAlert()
         alert.alertStyle = .informational
         alert.messageText = L10n.wizardPermissionsResetTitle
-        alert.informativeText = L10n.languageCode == "ru"
-            ? "macOS отозвала одно из разрешений MacSwitcher. Проверьте Accessibility и Input Monitoring в Системных настройках. Действующие разрешения сохраняются."
-            : "macOS revoked a MacSwitcher permission. Check Accessibility and Input Monitoring in System Settings. Existing permissions are preserved."
+        alert.informativeText = L10n.permissionsResetBody
         alert.addButton(withTitle: "OK")
         alert.runModal()
 
@@ -700,6 +712,84 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func restartApp() {
         rslog("Restarting from: \(Bundle.main.bundlePath)")
         AppRelauncher.relaunch()
+    }
+
+    // MARK: - Welcome (new installs only)
+
+    /// One explaining screen replaces the bare system requests and the two alerts. Grants
+    /// still happen only in System Settings; the 1.5 s poll reports them back, and a new
+    /// Input Monitoring grant restarts the app as before.
+    private func showWelcome(accessibility: Bool, inputMonitoring: Bool) {
+        let settings = SettingsManager.shared
+        if accessibility && inputMonitoring {
+            settings.permissionsWereGranted = true
+            if !monitoringActive { startMonitoring() }
+        }
+        welcome.onOpenSettings = { [weak self] in self?.openPermissionSettings($0) }
+        welcome.onAutomaticCorrectionChanged = { [weak self] in self?.setAutomaticFromWelcome($0) }
+        welcome.onLaunchAtLoginChanged = { SettingsManager.shared.launchAtLogin = $0 }
+        welcome.onFinish = { [weak self] in self?.finishWelcome() }
+        welcome.show(accessibility: accessibility, inputMonitoring: inputMonitoring,
+            automaticCorrection: settings.automaticTextEnabled, launchAtLogin: settings.launchAtLogin)
+        if !(accessibility && inputMonitoring) {
+            watchWelcomePermissions(restartAfterInputMonitoring: !inputMonitoring)
+        }
+    }
+
+    private func watchWelcomePermissions(restartAfterInputMonitoring: Bool) {
+        permissionCheckTimer?.invalidate()
+        permissionCheckTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                let acc = AXIsProcessTrusted()
+                let inp = CGPreflightListenEventAccess()
+                self.welcome.update(accessibility: acc, inputMonitoring: inp)
+                guard acc && inp else { return }
+                SettingsManager.shared.permissionsWereGranted = true
+                self.permissionCheckTimer?.invalidate()
+                self.permissionCheckTimer = nil
+                if restartAfterInputMonitoring {
+                    rslog("Input Monitoring granted! Restarting...")
+                    self.restartApp()
+                } else if !self.monitoringActive {
+                    self.startMonitoring()
+                }
+            }
+        }
+    }
+
+    /// The system request lists MacSwitcher in the pane; the user still flips the switch.
+    private func openPermissionSettings(_ permission: WelcomePermission) {
+        let anchor: String
+        switch permission {
+        case .accessibility:
+            let options = ["AXTrustedCheckOptionPrompt" as CFString: true as CFBoolean] as CFDictionary
+            _ = AXIsProcessTrustedWithOptions(options)
+            anchor = "Privacy_Accessibility"
+        case .inputMonitoring:
+            CGRequestListenEventAccess()
+            anchor = "Privacy_ListenEvent"
+        }
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    private func setAutomaticFromWelcome(_ enabled: Bool) {
+        SettingsManager.shared.automaticTextEnabled = enabled
+        predictionCoordinator.invalidate()
+        keyboardMonitor.resetPredictionContext()
+        reconfigureTap()
+        settingsController.updateAutoConvertState(SettingsManager.shared.automaticTextEnabled)
+        rebuildMenu()
+    }
+
+    private func finishWelcome() {
+        let settings = SettingsManager.shared
+        settings.launchAtLoginAsked = true
+        settings.autoConvertOffered = true
+        // After the window has actually closed: the intro waits for the welcome screen.
+        DispatchQueue.main.async { [weak self] in self?.showAdaptiveIntroIfNeeded() }
     }
 
     // MARK: - Start Monitoring
@@ -933,9 +1023,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             startPerAppLayout()
         }
 
-        // Предлагаем автозагрузку и автозамену при первом запуске (по разу)
-        offerLaunchAtLoginIfNeeded()
-        offerAutoConvertIfNeeded()
+        // Предлагаем автозагрузку и автозамену при первом запуске (по разу) — только
+        // существующим установкам: новые получают те же переключатели на экране приветствия.
+        if FirstRunPlan.offersLegacyPrompts(freshProfile: SettingsManager.shared.freshInstallProfile) {
+            offerLaunchAtLoginIfNeeded()
+            offerAutoConvertIfNeeded()
+        }
     }
 
     /// One native handler owns switching and correction. The first tap is already visible;
@@ -1223,13 +1316,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func showAdaptiveIntroIfNeeded() {
         let key = "com.macswitcher.adaptiveLearningIntroShown"
-        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        guard !UserDefaults.standard.bool(forKey: key), !welcome.isVisible else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
-            guard let self, !UserDefaults.standard.bool(forKey: key) else { return }
-            let shown = self.showFeedback(title: "Локальное обучение MacSwitcher",
-                body: "После двух независимых исправлений одного слова выбор запоминается только на этом Mac. В настройках → Обучение можно отключить функцию и удалить правила. История набора не сохраняется.",
-                kind: .adaptiveIntro, actionTitle: "Настройки", onAction: { [weak self] in
-                    self?.settingsController.showWindow()
+            guard let self, !UserDefaults.standard.bool(forKey: key), !self.welcome.isVisible else { return }
+            let shown = self.showFeedback(title: L10n.adaptiveIntroTitle,
+                body: L10n.adaptiveIntroBody,
+                kind: .adaptiveIntro, actionTitle: L10n.adaptiveIntroAction, onAction: { [weak self] in
+                    self?.settingsController.showLearning()
                 })
             if shown {
                 UserDefaults.standard.set(true, forKey: key)
@@ -1339,7 +1432,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Production menu factory is also inspectable offscreen without a status item.
     func makeStatusMenu(
         nativeShiftApplied: Bool = SettingsManager.shared.nativeShiftMigrationApplied,
-        automaticEnabled: Bool = SettingsManager.shared.automaticTextEnabled
+        automaticEnabled: Bool = SettingsManager.shared.automaticTextEnabled,
+        compact: Bool = SettingsManager.shared.compactMenu
     ) -> NSMenu {
         let menu = NSMenu()
         if !nativeShiftApplied {
@@ -1355,14 +1449,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         automatic.state = automaticEnabled ? .on : .off
         menu.addItem(automatic)
 
-        let instructions = NSMenuItem(title: L10n.nativeInstructionsTab,
-            action: #selector(openInstructions), keyEquivalent: "")
-        instructions.target = self
-        menu.addItem(instructions)
-        let words = NSMenuItem(title: L10n.nativeWordsTab,
-            action: #selector(openWords), keyEquivalent: "")
-        words.target = self
-        menu.addItem(words)
+        // The short menu leaves «How to use» and «Words» inside Settings.
+        if !(compact && nativeShiftApplied) {
+            let instructions = NSMenuItem(title: L10n.nativeInstructionsTab,
+                action: #selector(openInstructions), keyEquivalent: "")
+            instructions.target = self
+            menu.addItem(instructions)
+            let words = NSMenuItem(title: L10n.nativeWordsTab,
+                action: #selector(openWords), keyEquivalent: "")
+            words.target = self
+            menu.addItem(words)
+        }
         let settings = NSMenuItem(title: L10n.menuSettings,
             action: #selector(openSettings), keyEquivalent: ",")
         settings.target = self
