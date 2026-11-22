@@ -115,7 +115,16 @@ final class WelcomeWindowController: NSObject, NSWindowDelegate {
 
     private func permissionBox(_ permission: WelcomePermission, title: String, text: String,
                                width: CGFloat) -> NSBox {
-        let pad: CGFloat = 16, buttonWidth: CGFloat = 170
+        let pad: CGFloat = 16
+        // The right column fits the longest status or button text of the current language.
+        let longest = [L10n.welcomeGranted, L10n.welcomeMissing].map { text -> CGFloat in
+            let probe = NSTextField(labelWithString: text)
+            probe.font = .systemFont(ofSize: 12, weight: .medium)
+            return ceil(probe.cell?.cellSize.width ?? 0) + 4 }.max() ?? 0
+        let openProbe = NSButton(title: L10n.welcomeOpenSettings, target: nil, action: nil)
+        openProbe.bezelStyle = .rounded
+        let openWidth = ceil(openProbe.cell?.cellSize.width ?? 0) + 4
+        let buttonWidth = max(170, longest, openWidth)
         let textWidth = width - 2 * pad - buttonWidth - 12
         let detail = Self.wrapping(text, size: 12, width: textWidth, secondary: true)
         let height = max(84, pad + 20 + 4 + detail.frame.height + pad)

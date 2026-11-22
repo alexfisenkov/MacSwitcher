@@ -3,33 +3,29 @@ import AppKit
 @MainActor
 final class AdaptiveRulesView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let store = AdaptiveRuleStore.shared
-    private let toggle = NSButton(checkboxWithTitle: "Запоминать мои исправления на этом компьютере",
+    private let toggle = NSButton(checkboxWithTitle: L10n.text("adaptive.toggle"),
                                   target: nil, action: nil)
     private let table = NSTableView()
     private let status = NSTextField(wrappingLabelWithString: "")
     private var rows: [AdaptiveRule] = []
     var onChanged: (() -> Void)?
-    private func text(_ ru: String, _ en: String) -> String { L10n.languageCode == "ru" ? ru : en }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         // Content spans the whole frame width: the settings column places this view.
         let width = frameRect.width
-        toggle.title = text("Запоминать мои исправления на этом компьютере",
-            "Remember my corrections on this computer")
+        toggle.title = L10n.text("adaptive.toggle")
         toggle.target = self
         toggle.action = #selector(toggleChanged)
         toggle.frame = NSRect(x: 0, y: 435, width: width, height: 28)
         addSubview(toggle)
-        let explanation = NSTextField(wrappingLabelWithString: text(
-            "После двух независимых исправлений одного слова MacSwitcher запомнит выбор только на этом Mac. История набора и текст полей не сохраняются. Можно отключить, удалить правило или очистить список.",
-            "After two separate corrections of a word, MacSwitcher remembers the choice only on this Mac. Typed history and field text are not saved. You can turn this off or delete rules."))
+        let explanation = NSTextField(wrappingLabelWithString: L10n.text("adaptive.explain"))
         explanation.textColor = .secondaryLabelColor
         explanation.frame = NSRect(x: 0, y: 367, width: width, height: 62)
         addSubview(explanation)
         for (name, title, width) in [("pair", "RU / EN", max(265.0, Double(width) - 170)),
-                                     ("preferred", text("Выбор", "Choice"), 80.0),
-                                     ("count", text("Случаи", "Cases"), 70.0)] {
+                                     ("preferred", L10n.text("adaptive.col.choice"), 80.0),
+                                     ("count", L10n.text("adaptive.col.cases"), 70.0)] {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(name))
             column.title = title; column.width = width
             table.addTableColumn(column)
@@ -41,9 +37,9 @@ final class AdaptiveRulesView: NSView, NSTableViewDataSource, NSTableViewDelegat
         scroll.borderType = .bezelBorder
         addSubview(scroll)
         let half = (width - 10) / 2
-        let delete = NSButton(title: text("Удалить выбранное", "Delete selected"), target: self, action: #selector(deleteSelected))
+        let delete = NSButton(title: L10n.text("adaptive.delete"), target: self, action: #selector(deleteSelected))
         delete.frame = NSRect(x: 0, y: 43, width: half, height: 28); addSubview(delete)
-        let reset = NSButton(title: text("Очистить все правила…", "Clear all rules…"), target: self, action: #selector(resetRules))
+        let reset = NSButton(title: L10n.text("adaptive.reset"), target: self, action: #selector(resetRules))
         reset.frame = NSRect(x: half + 10, y: 43, width: half, height: 28); addSubview(reset)
         status.textColor = .secondaryLabelColor
         status.frame = NSRect(x: 0, y: 10, width: width, height: 27); addSubview(status)
@@ -62,7 +58,8 @@ final class AdaptiveRulesView: NSView, NSTableViewDataSource, NSTableViewDelegat
         rows = store.allRules().sorted { $0.confirmedAt > $1.confirmedAt }
         table.reloadData()
         status.stringValue = store.readOnlyError ??
-            "\(text("Кандидатов", "Candidates")): \(rows.filter { $0.confirmations == 1 }.count) · \(text("Активных", "Active")): \(rows.filter { $0.confirmations == 2 }.count)"
+            L10n.text("adaptive.status", rows.filter { $0.confirmations == 1 }.count,
+                rows.filter { $0.confirmations == 2 }.count)
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
@@ -90,19 +87,19 @@ final class AdaptiveRulesView: NSView, NSTableViewDataSource, NSTableViewDelegat
     @objc private func deleteSelected() {
         guard rows.indices.contains(table.selectedRow) else { return }
         do { try store.delete(rows[table.selectedRow].pair); onChanged?() }
-        catch { status.stringValue = store.readOnlyError ?? text("Не удалось сохранить изменение", "Could not save the change"); return }
+        catch { status.stringValue = store.readOnlyError ?? L10n.text("adaptive.saveFailed"); return }
         reload()
     }
 
     @objc private func resetRules() {
         let alert = NSAlert()
-        alert.messageText = text("Очистить все выученные правила?", "Clear all learned rules?")
-        alert.informativeText = text("Ручной словарь останется без изменений.", "The manual dictionary will remain unchanged.")
-        alert.addButton(withTitle: text("Очистить", "Clear"))
-        alert.addButton(withTitle: text("Отмена", "Cancel"))
+        alert.messageText = L10n.text("adaptive.reset.title")
+        alert.informativeText = L10n.text("adaptive.reset.body")
+        alert.addButton(withTitle: L10n.text("adaptive.reset.confirm"))
+        alert.addButton(withTitle: L10n.commonCancel)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         do { try store.reset(); onChanged?() }
-        catch { status.stringValue = store.readOnlyError ?? text("Не удалось сохранить изменение", "Could not save the change"); return }
+        catch { status.stringValue = store.readOnlyError ?? L10n.text("adaptive.saveFailed"); return }
         reload()
     }
 }

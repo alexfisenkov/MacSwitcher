@@ -65,7 +65,7 @@ final class SecureInputNotice {
         actionButton.controlSize = .small
         actionButton.isHidden = true
 
-        let closeLabel = L10n.languageCode == "ru" ? "Закрыть уведомление" : "Close notification"
+        let closeLabel = L10n.text("notice.close")
         closeButton = NSButton(image: NSImage(systemSymbolName: "xmark", accessibilityDescription: closeLabel)!,
                                target: nil, action: nil)
         closeButton.bezelStyle = .inline

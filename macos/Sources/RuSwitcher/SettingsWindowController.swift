@@ -259,9 +259,14 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
             (L10n.nativeWordsApps, L10n.wordsAppsDetail),
             (L10n.nativeLearningEntry, L10n.wordsLearningDetail)]
         let column = Self.columnWidth, pad = Self.groupPadding
+        var top: CGFloat = 388
         for (index, row) in rows.enumerated() {
-            let group = nativeGroup(NSRect(x: Self.columnX, y: 330 - CGFloat(index) * 66,
-                width: column, height: 58))
+            // The explanation wraps instead of being cut: long translations get a taller row.
+            let detailWidth = column - 2 * pad - 32
+            let detail = Self.measuredLabel(row.1, size: 11, width: detailWidth, secondary: true)
+            let height = max(58, 9 + detail.frame.height + 4 + 22 + 8)
+            let group = nativeGroup(NSRect(x: Self.columnX, y: top - height, width: column, height: height))
+            top -= height + 8
             let button = NSButton(title: row.0, target: self, action: #selector(openWordEditor(_:)))
             button.isBordered = false
             button.alignment = .left
@@ -270,21 +275,17 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
                 .font: NSFont.systemFont(ofSize: 14, weight: .medium),
                 .foregroundColor: NSColor.labelColor
             ])
-            button.frame = NSRect(x: pad, y: 28, width: column - 2 * pad - 30, height: 22)
+            button.frame = NSRect(x: pad, y: height - 30, width: column - 2 * pad - 30, height: 22)
             button.tag = index
             group.contentView?.addSubview(button)
-            let detail = NSTextField(labelWithString: row.1)
             detail.identifier = NSUserInterfaceItemIdentifier("words.row.detail")
-            detail.font = .systemFont(ofSize: 11)
-            detail.textColor = .secondaryLabelColor
-            detail.lineBreakMode = .byTruncatingTail
             detail.toolTip = row.1
-            detail.frame = NSRect(x: pad - 1, y: 9, width: column - 2 * pad - 32, height: 16)
+            detail.frame.origin = NSPoint(x: pad - 1, y: 9)
             group.contentView?.addSubview(detail)
             let chevron = NSTextField(labelWithString: "›")
             chevron.font = .systemFont(ofSize: 22)
             chevron.textColor = .tertiaryLabelColor
-            chevron.frame = NSRect(x: column - pad - 20, y: 14, width: 20, height: 30)
+            chevron.frame = NSRect(x: column - pad - 20, y: height / 2 - 15, width: 20, height: 30)
             group.contentView?.addSubview(chevron)
             view.addSubview(group)
         }
@@ -792,47 +793,36 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
         autoSwitchCheckbox = autoSwitch
         y -= 30
 
-        let combinedShift = NSButton(checkboxWithTitle: L10n.languageCode == "ru"
-            ? "Один Shift — раскладка, два — исправить текст"
-            : "One Shift changes layout; two fix the text",
+        let combinedShift = NSButton(checkboxWithTitle: L10n.text("settings.combinedShift"),
                                      target: self, action: #selector(combinedShiftChanged))
         combinedShift.frame = NSRect(x: 20, y: y, width: 420, height: 22)
         combinedShift.state = SettingsManager.shared.combinedShiftEnabled ? .on : .off
-        combinedShift.toolTip = L10n.languageCode == "ru"
-            ? "Оба Shift: короткое нажатие меняет раскладку, двойное исправляет последнее слово или выделение. Обычные сочетания и удержание работают как раньше."
-            : "Press either Shift briefly to change layout; double-press to fix the last word or selection. Other shortcuts and holding Shift work as usual."
+        combinedShift.toolTip = L10n.text("settings.combinedShift.tip")
         view.addSubview(combinedShift)
         y -= 30
 
-        let shellBridge = NSButton(checkboxWithTitle: L10n.languageCode == "ru"
-            ? "Исправлять ввод в zsh (после настройки)"
-            : "Correct zsh input (setup required)",
+        let shellBridge = NSButton(checkboxWithTitle: L10n.nativeShellEnabled,
             target: self, action: #selector(shellBridgeChanged))
         shellBridge.frame = NSRect(x: 40, y: y, width: 390, height: 22)
         shellBridge.state = SettingsManager.shared.shellBridgeEnabled ? .on : .off
-        shellBridge.toolTip = L10n.languageCode == "ru"
-            ? "Требуется настройка zsh и доступ к вкладке. После перезапуска MacSwitcher откройте новое окно терминала. Команды не запускаются."
-            : "Requires zsh setup and tab access. Open a new terminal window after restarting MacSwitcher. Commands are never run."
+        shellBridge.toolTip = L10n.text("settings.shellBridge.tip")
         view.addSubview(shellBridge)
         y -= 30
 
-        let shellSetup = NSButton(title: L10n.languageCode == "ru"
-            ? "Настроить zsh и доступ к вкладке…"
-            : "Set up zsh and tab access…",
+        let shellSetup = NSButton(title: L10n.nativeShellSetup,
             target: self, action: #selector(shellBridgeSetupRequested))
         shellSetup.frame = NSRect(x: 40, y: y, width: 300, height: 26)
         view.addSubview(shellSetup)
         y -= 36
 
-        let runtimeCheck = NSButton(title: L10n.languageCode == "ru"
-            ? "Проверить работу…" : "Check operation…",
+        let runtimeCheck = NSButton(title: L10n.nativeRuntimeCheck,
             target: self, action: #selector(runtimeCheckRequested))
         runtimeCheck.frame = NSRect(x: 40, y: y, width: 300, height: 26)
         view.addSubview(runtimeCheck)
         y -= 36
 
         if SettingsManager.shared.combinedShiftEnabled {
-        let intervalTitle = NSTextField(labelWithString: L10n.languageCode == "ru" ? "Интервал двух Shift" : "Double Shift interval")
+        let intervalTitle = NSTextField(labelWithString: L10n.nativeShiftInterval)
         intervalTitle.frame = NSRect(x: 20, y: y, width: 175, height: 22)
         view.addSubview(intervalTitle)
         let interval = NSSlider(frame: NSRect(x: 190, y: y - 2, width: 175, height: 25))
@@ -842,7 +832,7 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
         interval.target = self
         interval.action = #selector(doubleShiftIntervalChanged)
         view.addSubview(interval)
-        let value = NSTextField(labelWithString: "\(interval.integerValue) ms")
+        let value = NSTextField(labelWithString: L10n.settingsIntervalValue(interval.integerValue))
         value.frame = NSRect(x: 370, y: y, width: 70, height: 22)
         view.addSubview(value)
         intervalValueLabel = value
@@ -1047,14 +1037,11 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
         view.addSubview(acHint)
         y -= 38
 
-        let russianPriority = NSButton(checkboxWithTitle: L10n.languageCode == "ru"
-            ? "Приоритет русского в неоднозначных фразах" : "Prefer Russian in ambiguous phrases",
+        let russianPriority = NSButton(checkboxWithTitle: L10n.text("settings.russianPriority"),
             target: self, action: #selector(russianPriorityChanged))
         russianPriority.frame = NSRect(x: 0, y: y - 22, width: 560, height: 22)
         russianPriority.state = SettingsManager.shared.russianPriorityEnabled ? .on : .off
-        russianPriority.toolTip = L10n.languageCode == "ru"
-            ? "Действует только при отдельно включённой автокоррекции."
-            : "Takes effect only when autocorrection is enabled separately."
+        russianPriority.toolTip = L10n.text("settings.russianPriority.tip")
         view.addSubview(russianPriority)
         y -= 32
 
@@ -1190,7 +1177,7 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
         siteLink.frame = NSRect(x: 0, y: 150, width: 560, height: 22)
         view.addSubview(siteLink)
 
-        let contactBtn = NSButton(title: L10n.languageCode == "ru" ? "Сообщить о проблеме" : "Report a problem",
+        let contactBtn = NSButton(title: L10n.text("settings.report"),
                                   target: self, action: #selector(openContact))
         contactBtn.frame = NSRect(x: 0, y: 102, width: 560, height: 32)
         contactBtn.bezelStyle = .rounded
@@ -1267,13 +1254,9 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
             NSButton(title: L10n.nativeOpenOriginals, target: self, action: #selector(recoveryOriginalsRequested)),
             NSButton(title: L10n.nativeOpenArchive, target: self, action: #selector(recoveryArchiveFolderRequested))],
             gap: 12)
-        _ = checkbox(L10n.languageCode == "ru"
-            ? "Автоматически сохранять исходники после сбоя"
-            : "Automatically save originals after an uncertain edit",
+        _ = checkbox(L10n.text("settings.recoveryAuto"),
             #selector(recoveryArchiveChanged(_:)), settings.automaticRecoveryArchiveEnabled,
-            hint: L10n.languageCode == "ru"
-                ? "Только при неподтверждённой правке: полный текст поля локально в Library/Application Support/MacSwitcher/Recovery. Обычный ввод не сохраняется; передачи в сеть нет. По умолчанию выключено."
-                : "Only after an uncertain edit: the full field text is saved locally in Library/Application Support/MacSwitcher/Recovery. Ordinary typing is not saved; nothing is sent over the network. Off by default.")
+            hint: L10n.text("settings.recoveryAuto.hint"))
         _ = checkbox(L10n.settingsBetaChannel, #selector(betaChannelChanged), settings.betaChannelEnabled,
             hint: L10n.settingsBetaChannelHint)
         _ = checkbox(L10n.settingsSmartConversion, #selector(smartConversionChanged), settings.smartConversion,
@@ -1327,14 +1310,10 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
         let enabled = sender.state == .on
         if enabled {
             let alert = NSAlert()
-            alert.messageText = L10n.languageCode == "ru"
-                ? "Сохранять полные исходники локально?"
-                : "Save full originals locally?"
-            alert.informativeText = L10n.languageCode == "ru"
-                ? "При неподтверждённой правке MacSwitcher автоматически сохранит полный исходный текст поля в личной папке Recovery. Обычный ввод не записывается и ничего не отправляется в сеть. Архивы остаются до вашего удаления."
-                : "After an uncertain edit, MacSwitcher will save the full original field text in your private Recovery folder. Ordinary typing is not recorded and nothing is sent over the network. Archives remain until you delete them."
-            alert.addButton(withTitle: L10n.languageCode == "ru" ? "Включить" : "Enable")
-            alert.addButton(withTitle: L10n.languageCode == "ru" ? "Отмена" : "Cancel")
+            alert.messageText = L10n.text("settings.recoveryAuto.alert.title")
+            alert.informativeText = L10n.text("settings.recoveryAuto.alert.body")
+            alert.addButton(withTitle: L10n.text("settings.recoveryAuto.alert.enable"))
+            alert.addButton(withTitle: L10n.commonCancel)
             if alert.runModal() != .alertFirstButtonReturn { sender.state = .off; return }
         }
         SettingsManager.shared.automaticRecoveryArchiveEnabled = enabled

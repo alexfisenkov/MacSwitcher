@@ -104,9 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     if let directory = try? self.recoveryDirectory() {
                         self.shellCoordinator.scheduleAutomaticArchive(in: directory) { [weak self] in
                             self?.showFeedback(title: "MacSwitcher",
-                                body: L10n.languageCode == "ru"
-                                    ? "Исходная строка терминала осталась в памяти; локальное сохранение не удалось."
-                                    : "The original terminal line remains in memory; local saving failed.",
+                                body: L10n.text("shell.terminalLine.memoryLocalFailed"),
                                 kind: .saveFailure)
                         }
                     }
@@ -299,9 +297,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Showing this preview does not change the profile.
     private func showShellBridgeManagement() {
         guard let resource = ShellBridgeProfilePatch.packagedResourceURL else {
-            showShellBridgeSetupResult(success: false, detail: L10n.languageCode == "ru"
-                ? "Ресурс подключения отсутствует в приложении."
-                : "The packaged shell resource is missing.")
+            showShellBridgeSetupResult(success: false, detail: L10n.text("shell.bridge.resourceMissing"))
             return
         }
         let profile = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".zshrc")
@@ -315,38 +311,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 resourcePath: resource.path, uninstall: uninstall)
             let alert = NSAlert()
             alert.alertStyle = .informational
-            alert.messageText = L10n.languageCode == "ru"
-                ? (uninstall ? "Подключение zsh установлено" : "Подключить zsh к MacSwitcher?")
-                : (uninstall ? "zsh integration is installed" : "Connect zsh to MacSwitcher?")
-            alert.informativeText = (L10n.languageCode == "ru"
-                ? "При установке или удалении меняется только одна строка ~/.zshrc. Перед записью сохранится точная приватная копия (0600). После изменения откройте новое окно терминала. Доступ к вкладке запрашивается отдельно.\n\n"
-                : "Installing or removing changes exactly one line in ~/.zshrc. A byte-exact private backup (0600) is saved first. Open a new terminal window afterward. Tab access is requested separately.\n\n")
-                + plan.sourceLine
+            alert.messageText = L10n.text(uninstall ? "shell.bridge.title.installed" : "shell.bridge.title.connect")
+            alert.informativeText = L10n.text("shell.bridge.body") + "\n\n" + plan.sourceLine
             if uninstall {
-                alert.addButton(withTitle: L10n.languageCode == "ru" ? "Запросить доступ к вкладке" : "Request tab access")
-                alert.addButton(withTitle: L10n.languageCode == "ru" ? "Удалить строку" : "Remove line")
-                alert.addButton(withTitle: L10n.languageCode == "ru" ? "Отмена" : "Cancel")
+                alert.addButton(withTitle: L10n.text("shell.bridge.requestTabAccess"))
+                alert.addButton(withTitle: L10n.text("shell.bridge.removeLine"))
+                alert.addButton(withTitle: L10n.commonCancel)
                 let choice = alert.runModal()
                 if choice == .alertFirstButtonReturn { showShellBridgeConsent(); return }
                 guard choice == .alertSecondButtonReturn else { return }
             } else {
-                alert.addButton(withTitle: L10n.languageCode == "ru" ? "Установить строку" : "Install line")
-                alert.addButton(withTitle: L10n.languageCode == "ru" ? "Отмена" : "Cancel")
+                alert.addButton(withTitle: L10n.text("shell.bridge.installLine"))
+                alert.addButton(withTitle: L10n.commonCancel)
                 guard alert.runModal() == .alertFirstButtonReturn else { return }
             }
             let (result, backup) = try ShellBridgeProfilePatch.apply(profile: profile,
                 resourcePath: resource.path, uninstall: uninstall)
-            showShellBridgeSetupResult(success: true, detail: L10n.languageCode == "ru"
-                ? "\(result.action == .uninstall ? "Подключение удалено" : "Подключение установлено"). Откройте новое окно терминала. Резервная копия: \(backup?.path ?? "—")."
-                : "\(result.action == .uninstall ? "Integration removed" : "Integration installed"). Open a new terminal window. Backup: \(backup?.path ?? "—").")
+            showShellBridgeSetupResult(success: true, detail: L10n.text("shell.bridge.done",
+                L10n.text(result.action == .uninstall ? "shell.bridge.removed" : "shell.bridge.installed"),
+                backup?.path ?? "—"))
         } catch ShellBridgeProfilePatch.PatchError.conflict {
-            showShellBridgeSetupResult(success: false, detail: L10n.languageCode == "ru"
-                ? "Другой редактор изменил ~/.zshrc во время настройки. Текущий файл и приватные копии сохранены в ~/.macswitcher-profile-recovery. Проверьте их перед повтором."
-                : "Another editor changed ~/.zshrc during setup. The current file and private copies are preserved in ~/.macswitcher-profile-recovery. Review them before retrying.")
+            showShellBridgeSetupResult(success: false, detail: L10n.text("shell.bridge.conflict"))
         } catch {
-            showShellBridgeSetupResult(success: false, detail: L10n.languageCode == "ru"
-                ? "Настройка не завершена. Проверьте ~/.zshrc и приватные копии в ~/.macswitcher-profile-recovery перед повтором."
-                : "Setup did not finish. Review ~/.zshrc and private copies in ~/.macswitcher-profile-recovery before retrying.")
+            showShellBridgeSetupResult(success: false, detail: L10n.text("shell.bridge.failed"))
         }
     }
 
@@ -366,19 +353,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             discovery.capability(pid: $0.processIdentifier) != nil
         }
         guard hosts.count == 1, let host = hosts.first else {
-            showShellBridgeSetupResult(success: false, detail: L10n.languageCode == "ru"
-                ? "Откройте один совместимый терминал и повторите запрос доступа."
-                : "Open one compatible terminal and request access again.")
+            showShellBridgeSetupResult(success: false, detail: L10n.text("shell.consent.noHost"))
             return
         }
         let alert = NSAlert()
-        alert.messageText = L10n.languageCode == "ru" ? "Разрешить определять активную вкладку?" : "Allow active-tab lookup?"
-        alert.informativeText = (host.localizedName ?? host.bundleIdentifier ?? "Terminal")
-            + (L10n.languageCode == "ru"
-                ? ": macOS может назвать разрешение «управлением приложением». MacSwitcher использует его только чтобы определить активную вкладку терминала. Команды не запускаются."
-                : ": macOS may call this permission “control the app.” MacSwitcher uses it only to identify the active terminal tab. No commands are run.")
-        alert.addButton(withTitle: L10n.languageCode == "ru" ? "Запросить доступ" : "Request access")
-        alert.addButton(withTitle: L10n.languageCode == "ru" ? "Отмена" : "Cancel")
+        alert.messageText = L10n.text("shell.consent.title")
+        alert.informativeText = L10n.text("shell.consent.body",
+            host.localizedName ?? host.bundleIdentifier ?? "Terminal")
+        alert.addButton(withTitle: L10n.text("shell.consent.request"))
+        alert.addButton(withTitle: L10n.commonCancel)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let pid = host.processIdentifier
         Task { [weak self] in
@@ -387,10 +370,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }.value
             self?.showShellBridgeSetupResult(success: result == noErr,
                 detail: result == noErr
-                    ? (L10n.languageCode == "ru" ? "Доступ к выбранной вкладке разрешён."
-                        : "Selected-tab access is allowed.")
-                    : (L10n.languageCode == "ru" ? "Доступ пока не получен; строка терминала не будет изменяться."
-                        : "Access was not granted; the terminal line will remain untouched."))
+                    ? (L10n.text("shell.consent.granted"))
+                    : (L10n.text("shell.consent.denied")))
         }
     }
 
@@ -468,9 +449,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.predictionCoordinator.invalidate()
         }, onFailure: { [weak self] in
             self?.showFeedback(title: "MacSwitcher",
-                body: L10n.languageCode == "ru"
-                    ? "Не удалось сохранить исключение. Откройте личный словарь в настройках."
-                    : "Could not save the exception. Open the personal dictionary in Settings.",
+                body: L10n.text("recovery.exception.saveFailed"),
                 kind: .saveFailure)
         })
     }
@@ -487,7 +466,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             body: CorrectionFeedbackPolicy.recoveryMessage(languageCode: L10n.languageCode,
                 hasRecovery: hasRecovery),
             kind: .unknownEdit,
-            actionTitle: hasRecovery ? (L10n.languageCode == "ru" ? "Показать исходный текст" : "Show original text") : nil,
+            actionTitle: hasRecovery ? (L10n.text("recovery.showOriginal")) : nil,
             onAction: hasRecovery ? { [weak self] in self?.openRecoveryOriginals() } : nil)
     }
 
@@ -498,17 +477,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let body: String
         switch reason {
         case .unsaved:
-            body = L10n.languageCode == "ru"
-                ? "Память исходных текстов заполнена. Сохраните их локально через меню MacSwitcher, чтобы продолжить в других полях. Поля с неподтверждённой правкой останутся заблокированы."
-                : "Original-text memory is full. Save originals locally from the MacSwitcher menu to continue in other fields. Fields with unconfirmed edits stay blocked."
+            body = L10n.text("recovery.memoryFull")
         case .archiveLimit:
-            body = L10n.languageCode == "ru"
-                ? "Достигнут предел сохранённых полей. Закройте затронутые поля и штатно перезапустите MacSwitcher после проверки архивов."
-                : "Saved-field limit reached. Close affected fields and restart MacSwitcher normally after checking the archives."
+            body = L10n.text("recovery.archiveLimitNotice")
         }
         showFeedback(title: "MacSwitcher", body: body,
             kind: .unknownEdit,
-            actionTitle: L10n.languageCode == "ru" ? "Открыть исходники" : "Open originals",
+            actionTitle: L10n.text("recovery.openOriginals"),
             onAction: { [weak self] in self?.openRecoveryOriginals() })
     }
 
@@ -520,24 +495,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if manual {
             let alert = NSAlert()
-            alert.messageText = L10n.languageCode == "ru" ? "Исходники не сохранены" : "Originals were not saved"
-            alert.informativeText = L10n.languageCode == "ru"
-                ? (reason == .archiveLimit
-                    ? "Папка Recovery достигла лимита. Исходники остаются в памяти. Проверьте архивы перед удалением; штатный выход отменится, если сохранить их не удастся."
-                    : "Исходники остаются в памяти. Проверьте папку Recovery и повторите сохранение через меню. Штатный выход отменится, если сохранить их не удастся.")
-                : (reason == .archiveLimit
-                    ? "The Recovery folder reached its limit. Originals remain in memory. Check archives before deleting any; normal quit will be cancelled if saving fails."
-                    : "Originals remain in memory. Check the Recovery folder and retry from the menu. Normal quit will be cancelled if saving fails.")
+            alert.messageText = L10n.text("recovery.failed.title")
+            alert.informativeText = L10n.text(reason == .archiveLimit
+                ? "recovery.failed.limit.manual" : "recovery.failed.generic.manual")
             alert.runModal()
         } else {
             let quota = reason == .archiveLimit
-            showFeedback(title: "MacSwitcher", body: L10n.languageCode == "ru"
-                ? (quota ? "Папка Recovery достигла лимита. Исходники остаются в памяти. Откройте архивы; перед удалением проверьте, что они больше не нужны."
-                    : "Не удалось сохранить исходники локально. Они остаются в памяти; повторите сохранение через меню.")
-                : (quota ? "Recovery archive limit reached. Originals remain in memory. Open archives; check that files are no longer needed before deleting any."
-                    : "Could not save originals locally. They remain in memory; retry from the menu."),
+            showFeedback(title: "MacSwitcher", body: L10n.text(quota ? "recovery.failed.limit.auto"
+                    : "recovery.failed.generic.auto"),
                 kind: .saveFailure,
-                actionTitle: L10n.languageCode == "ru" ? "Открыть Recovery" : "Open Recovery",
+                actionTitle: L10n.text("recovery.openRecovery"),
                 onAction: { [weak self] in self?.openRecoveryArchiveFolder() })
         }
     }
@@ -1540,8 +1507,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(sourceRecovery)
         refreshSourceRecoveryMenu(sourceRecovery)
 
-        let recovery = NSMenuItem(title: L10n.languageCode == "ru"
-            ? "Исходные тексты после сбоя" : "Original texts after unconfirmed edits",
+        let recovery = NSMenuItem(title: L10n.text("menu.recovery"),
             action: nil, keyEquivalent: "")
         recovery.tag = Self.recoveryCopyItemTag
         menu.addItem(recovery)
@@ -1549,8 +1515,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         conditionalSeparator.isHidden = nativeShiftApplied && inputSource.isHidden
             && sourceRecovery.isHidden && recovery.isHidden
         if !nativeShiftApplied {
-            let archives = NSMenuItem(title: L10n.languageCode == "ru"
-                ? "Папка архивов исходников" : "Original-text archive folder",
+            let archives = NSMenuItem(title: L10n.text("menu.archiveFolder"),
                 action: #selector(openRecoveryArchiveFolder), keyEquivalent: "")
             archives.target = self
             menu.addItem(archives)
@@ -1637,9 +1602,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let name = LayoutSwitcher.installedLayouts().first(where: {
             LayoutSwitcher.sourceID($0) == target
         }).map(LayoutSwitcher.sourceName) ?? target
-        item.title = L10n.languageCode == "ru"
-            ? "Текст исправлен · подтвердите раскладку \(name)"
-            : "Text changed · confirm the \(name) input source"
+        item.title = L10n.text("menu.sourceConfirm", name)
     }
 
     @objc private func selectLayout(_ sender: NSMenuItem) {
@@ -1682,18 +1645,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func runtimeHealthTooltip(_ state: RuntimeHealthState) -> String? {
-        let ru = L10n.languageCode == "ru"
         switch state {
         case .off, .connected: return nil
-        case .sleeping: return ru ? "MacSwitcher: выход из сна" : "MacSwitcher: waking up"
-        case .permissionsRequired: return ru ? "MacSwitcher: проверьте разрешения" : "MacSwitcher: check permissions"
-        case .secureInputPaused: return ru ? "MacSwitcher: защищённый ввод" : "MacSwitcher: Secure Input"
-        case .editDeferred: return ru ? "MacSwitcher: восстановление отложено" : "MacSwitcher: recovery deferred"
-        case .tapUnavailable: return ru ? "MacSwitcher: нет подключения к клавиатуре" : "MacSwitcher: keyboard connection unavailable"
-        case .shellRecovering: return ru ? "MacSwitcher: подключение терминала восстанавливается" : "MacSwitcher: terminal connection recovering"
-        case .shellNeedsUserAction: return ru ? "MacSwitcher: проверьте подключение терминала" : "MacSwitcher: check terminal connection"
-        case .unconfirmedEdit: return ru ? "MacSwitcher: есть неподтверждённая правка" : "MacSwitcher: an edit is unconfirmed"
-        case .selfCheckFailed: return ru ? "MacSwitcher: внутренняя проверка не прошла" : "MacSwitcher: internal check failed"
+        case .sleeping: return L10n.text("health.sleeping")
+        case .permissionsRequired: return L10n.text("health.permissionsRequired")
+        case .secureInputPaused: return L10n.text("health.secureInput")
+        case .editDeferred: return L10n.text("health.editDeferred")
+        case .tapUnavailable: return L10n.text("health.tapUnavailable")
+        case .shellRecovering: return L10n.text("health.shellRecovering")
+        case .shellNeedsUserAction: return L10n.text("health.shellNeedsUserAction")
+        case .unconfirmedEdit: return L10n.text("health.unconfirmedEdit")
+        case .selfCheckFailed: return L10n.text("health.selfCheckFailed")
         }
     }
 
@@ -1819,23 +1781,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         parent.isHidden = !hasRecovery
         let submenu = NSMenu()
         for (index, original) in textConverter.unconfirmedOriginals.enumerated() {
-            let title = L10n.languageCode == "ru" ? "Скопировать исходный текст \(index + 1)" : "Copy original text \(index + 1)"
+            let title = L10n.text("menu.copyOriginal", index + 1)
             let item = NSMenuItem(title: title, action: #selector(copyRecoveryOriginal(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = original
             submenu.addItem(item)
         }
         for (index, original) in textConverter.archivedOriginals.enumerated() {
-            let title = L10n.languageCode == "ru" ? "Скопировать из архива \(index + 1)" : "Copy from archive \(index + 1)"
+            let title = L10n.text("menu.copyArchive", index + 1)
             let item = NSMenuItem(title: title, action: #selector(copyArchivedRecoveryOriginal(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = original
             submenu.addItem(item)
         }
         for (index, original) in shellCoordinator.uncertainOriginals.enumerated() {
-            let title = L10n.languageCode == "ru"
-                ? "Скопировать исходную строку терминала \(index + 1)"
-                : "Copy original terminal line \(index + 1)"
+            let title = L10n.text("menu.copyTerminalLine", index + 1)
             let item = NSMenuItem(title: title, action: #selector(copyShellRecoveryOriginal(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = original
@@ -1843,9 +1803,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if textConverter.hasRAMUnconfirmedAXEdit || shellCoordinator.hasUnbackedUnknown {
             submenu.addItem(NSMenuItem.separator())
-            let save = NSMenuItem(title: L10n.languageCode == "ru"
-                ? "Сохранить исходники локально и продолжить"
-                : "Save originals locally and continue", action: #selector(saveRecoveryOriginals), keyEquivalent: "")
+            let save = NSMenuItem(title: L10n.text("menu.saveOriginals"), action: #selector(saveRecoveryOriginals), keyEquivalent: "")
             save.target = self
             submenu.addItem(save)
         }
@@ -1867,7 +1825,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } catch {
             RuntimeDiagnostics.record(.recoveryArchiveFailed)
             let alert = NSAlert()
-            alert.messageText = L10n.languageCode == "ru" ? "Не удалось прочитать архив" : "Could not read the archive"
+            alert.messageText = L10n.text("recovery.archiveReadFailed")
             alert.runModal()
         }
     }
@@ -1878,15 +1836,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             do {
                 shellCoordinator.scheduleAutomaticArchive(in: try recoveryDirectory()) { [weak self] in
                     self?.showFeedback(title: "MacSwitcher",
-                        body: L10n.languageCode == "ru"
-                            ? "Исходная строка терминала осталась в памяти; сохранение не удалось."
-                            : "The original terminal line remains in memory; saving failed.", kind: .saveFailure)
+                        body: L10n.text("shell.terminalLine.memoryFailed"), kind: .saveFailure)
                 }
             } catch {
                 showFeedback(title: "MacSwitcher",
-                    body: L10n.languageCode == "ru"
-                        ? "Исходная строка терминала осталась в памяти; сохранение не удалось."
-                        : "The original terminal line remains in memory; saving failed.", kind: .saveFailure)
+                    body: L10n.text("shell.terminalLine.memoryFailed"), kind: .saveFailure)
             }
         }
     }
@@ -1983,40 +1937,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func showRuntimeCheck() {
         let report = runtimeHealth.runManualCheck()
-        let ru = L10n.languageCode == "ru"
         let summary: String
         switch report.state {
-        case .off: summary = ru ? "Обработка выключена в настройках." : "Processing is off in settings."
-        case .sleeping: summary = ru ? "Компьютер выходит из сна." : "The Mac is waking up."
-        case .permissionsRequired: summary = ru ? "Проверьте разрешения «Универсальный доступ» и «Мониторинг ввода»." : "Check Accessibility and Input Monitoring permissions."
-        case .secureInputPaused: summary = ru ? "Защищённый ввод временно приостановил обработку." : "Secure Input has paused processing."
-        case .editDeferred: summary = ru ? "Идёт редактирование; восстановление отложено." : "An edit is in progress; recovery is deferred."
+        case .off: summary = L10n.text("check.off")
+        case .sleeping: summary = L10n.text("check.sleeping")
+        case .permissionsRequired: summary = L10n.text("check.permissionsRequired")
+        case .secureInputPaused: summary = L10n.text("check.secureInput")
+        case .editDeferred: summary = L10n.text("check.editDeferred")
         case .tapUnavailable:
-            summary = ru
-                ? (tapRecovery.isExhausted ? "MacSwitcher не получает нажатия. Проверьте разрешения и попробуйте проверку ещё раз." : "MacSwitcher пока не подключён к клавиатуре; повторяем проверку.")
-                : (tapRecovery.isExhausted ? "MacSwitcher cannot receive keys. Check permissions and run the check again." : "MacSwitcher is not connected to the keyboard yet; checking again.")
-        case .shellRecovering: summary = ru ? "Подключение терминала временно недоступно; число повторов ограничено." : "The terminal connection is temporarily unavailable; retries are limited."
-        case .shellNeedsUserAction: summary = ru ? "Проверьте подключение терминала и доступ к вкладке." : "Check the terminal connection and tab access."
-        case .unconfirmedEdit: summary = ru ? "Есть неподтверждённая замена. Проверьте исходный текст в меню восстановления." : "An edit is unconfirmed. Check the original text in the recovery menu."
-        case .connected: summary = ru ? "MacSwitcher подключён к клавиатуре." : "MacSwitcher is connected to the keyboard."
-        case .selfCheckFailed: summary = ru ? "Внутренняя проверка не прошла." : "An internal check failed."
+            summary = L10n.text(tapRecovery.isExhausted ? "check.tapExhausted" : "check.tapConnecting")
+        case .shellRecovering: summary = L10n.text("check.shellRecovering")
+        case .shellNeedsUserAction: summary = L10n.text("check.shellNeedsUserAction")
+        case .unconfirmedEdit: summary = L10n.text("check.unconfirmedEdit")
+        case .connected: summary = L10n.text("check.connected")
+        case .selfCheckFailed: summary = L10n.text("check.selfCheckFailed")
         }
         let passed = report.checks.filter { $0.passed }.count
-        var detail = ru
-            ? "\(summary)\n\nВнутренние проверки: \(passed)/\(report.checks.count). Они не проверяют ввод в других приложениях."
-            : "\(summary)\n\nInternal checks: \(passed)/\(report.checks.count). They do not test typing in other apps."
+        var detail = L10n.text("check.detail", summary, passed, report.checks.count)
         if case .listening(let sessions) = report.shell, sessions == 0 {
-            detail += ru
-                ? "\n\nТерминал: сейчас нет подключения. При необходимости проверьте настройку и откройте новое окно."
-                : "\n\nzsh: no prompt is connected now. Check setup and open a new window if needed."
+            detail += L10n.text("check.shellNone")
         }
         if report.unknownEditRetained && report.state != .unconfirmedEdit {
-            detail += ru
-                ? "\n\nЕсть неподтверждённая замена. Проверьте исходный текст в меню восстановления."
-                : "\n\nAn edit is unconfirmed. Check the original text in the recovery menu."
+            detail += "\n\n" + L10n.text("check.unconfirmedEdit")
         }
         let alert = NSAlert()
-        alert.messageText = ru ? "Проверка MacSwitcher" : "MacSwitcher check"
+        alert.messageText = L10n.text("check.title")
         alert.informativeText = detail
         alert.runModal()
     }
@@ -2128,11 +2073,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if shellCoordinator.hasInFlightEdit {
             let alert = NSAlert()
             alert.alertStyle = .warning
-            alert.messageText = L10n.languageCode == "ru"
-                ? "Подождите завершения исправления строки" : "Wait for the line edit to finish"
-            alert.informativeText = L10n.languageCode == "ru"
-                ? "Исходная строка хранится в памяти, пока результат записи не подтверждён. Повторите выход после завершения проверки."
-                : "The original line remains in memory until the edit is verified. Quit again after verification finishes."
+            alert.messageText = L10n.text("quit.wait.title")
+            alert.informativeText = L10n.text("quit.wait.body")
             alert.runModal()
             return .terminateCancel
         }
@@ -2152,12 +2094,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = L10n.languageCode == "ru" ? "Сначала сохраните исходный текст" : "Save the original text first"
-        alert.informativeText = L10n.languageCode == "ru"
-            ? "После неподтверждённой замены полные исходные тексты остались в памяти MacSwitcher. Перед выходом их можно сохранить в локальный файл в Library/Application Support/MacSwitcher/Recovery. Обычное копирование в буфер не считается сохранением."
-            : "Full originals from unconfirmed edits remain in MacSwitcher memory. Before quitting, save them to a local file in Library/Application Support/MacSwitcher/Recovery. Clipboard copying is not a saved backup."
-        alert.addButton(withTitle: L10n.languageCode == "ru" ? "Сохранить локально и выйти" : "Save locally and quit")
-        alert.addButton(withTitle: L10n.languageCode == "ru" ? "Отмена" : "Cancel")
+        alert.messageText = L10n.text("quit.save.title")
+        alert.informativeText = L10n.text("quit.save.body")
+        alert.addButton(withTitle: L10n.text("quit.save.button"))
+        alert.addButton(withTitle: L10n.commonCancel)
         guard alert.runModal() == .alertFirstButtonReturn else { return .terminateCancel }
         do {
             let directory = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
@@ -2168,7 +2108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return .terminateNow
         } catch {
             let failure = NSAlert()
-            failure.messageText = L10n.languageCode == "ru" ? "Исходники не сохранены. Выход отменён." : "Originals were not saved. Quit cancelled."
+            failure.messageText = L10n.text("quit.failed")
             failure.runModal()
             return .terminateCancel
         }
