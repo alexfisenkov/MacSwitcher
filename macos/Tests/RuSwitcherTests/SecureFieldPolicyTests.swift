@@ -52,6 +52,34 @@ final class SecureFieldPolicyTests: XCTestCase {
         XCTAssertEqual(SecureFieldPolicy.flaggedVerdict(.unknown, fieldProcessID: 501, holderProcessID: 77), .unknown)
     }
 
+    /// Review F1: the system-wide element's timeout is the whole process's AX
+    /// timeout, so the probe sets timeouts only on the elements it found.
+    func testFocusedFieldProbeNeverChangesTheSystemWideTimeout() {
+        let system = AXUIElementCreateSystemWide()
+        let app = AXUIElementCreateApplication(9_101), field = AXUIElementCreateApplication(9_102)
+        var timeouts: [(AXUIElement, Float)] = []
+        func access(holder: Int32?, appTimeout: AXError = .success) -> FocusedFieldAccess {
+            FocusedFieldAccess(systemWide: { system },
+                element: { parent, attribute in
+                    if CFEqual(parent, system) {
+                        return attribute == kAXFocusedApplicationAttribute as CFString ? app : nil
+                    }
+                    return CFEqual(parent, app) && attribute == kAXFocusedUIElementAttribute as CFString ? field : nil
+                },
+                setTimeout: { element, value in
+                    timeouts.append((element, value))
+                    return CFEqual(element, app) ? appTimeout : .success
+                },
+                processID: { CFEqual($0, field) || CFEqual($0, app) ? 501 : nil },
+                verdict: { _ in .ordinary }, holderProcessID: { holder })
+        }
+        XCTAssertEqual(SecureFieldPolicy.liveFocusedFieldVerdict(timeout: 0.02, access: access(holder: 77)), .ordinary)
+        XCTAssertTrue(timeouts.contains { CFEqual($0.0, field) && $0.1 == 0.02 }, "the found field is bounded")
+        XCTAssertEqual(SecureFieldPolicy.liveFocusedFieldVerdict(access: access(holder: 501)), .secure)
+        XCTAssertEqual(SecureFieldPolicy.liveFocusedFieldVerdict(access: access(holder: 77, appTimeout: .failure)), .unknown)
+        XCTAssertFalse(timeouts.contains { CFEqual($0.0, system) }, "the system-wide element is never touched")
+    }
+
     @MainActor
     func testFlagWithDeliveredKeysCodeIsRecordedOncePerGesture() {
         var events: [RuntimeDiagnosticEvent] = []

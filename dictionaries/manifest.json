@@ -185,6 +185,34 @@
           "bytes": 34948684
         }
       ]
+    },
+    "source_license": "CC-BY-SA-3.0",
+    "source_license_url": "https://creativecommons.org/licenses/by-sa/3.0/",
+    "relicensing": "Wikipedia dumps of 2022-08-29 and 2023-04-13 predate the June 2023 switch to CC BY-SA 4.0; their text is CC BY-SA 3.0, and section 4(b) of CC BY-SA 3.0 lets the derived word counts be distributed under CC BY-SA 4.0"
+  },
+  "trigrams": {
+    "builder": "script/build_trigrams.py",
+    "command": "python3 -I script/build_trigrams.py",
+    "transformation": "letter trigrams of ^^word$ from the trigger lists; each word adds int(log2(frequency)) + 1; trigrams with a weighted count below 2 dropped; rows sorted by trigram; at most 2 MiB per language",
+    "license": "CC-BY-SA-4.0",
+    "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+    "languages": {
+      "ru": {
+        "output": "macos/Sources/RuSwitcher/Resources/ru-trigrams.tsv",
+        "output_sha256": "5251d8463fc67426fa712b178d384e4b1f4093ad5c364aac651dc1a9bb55191b",
+        "bytes": 160085,
+        "entries": 15643,
+        "source": "macos/Sources/RuSwitcher/Resources/ru.tsv",
+        "source_sha256": "4c6bab676ece5c2014edc59bb046b11adfbf71cb2496029ed903c8fb5a51bf6b"
+      },
+      "en": {
+        "output": "macos/Sources/RuSwitcher/Resources/en-trigrams.tsv",
+        "output_sha256": "d516f91a8894882ff9d2ede81c4cb14997ec7377ae1dc1e63766951648168910",
+        "bytes": 103734,
+        "entries": 13833,
+        "source": "macos/Sources/RuSwitcher/Resources/en.tsv",
+        "source_sha256": "5af75b9ba05f6a8704a0d20ab426eb25af19eae5e86d641e41baf43dac0b5304"
+      }
     }
   }
 }

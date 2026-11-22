@@ -105,6 +105,31 @@ def validate_second_sources(manifest, failures):
         failures.append(("dictionaries/manifest.json", f"second source record invalid: {error}"))
 
 
+def validate_trigrams(manifest, failures):
+    """Bundled trigram tables derive from the CC BY-SA trigger lists: hash, size, rows,
+    the exact trigger list they were built from, and a NOTICE that names them."""
+    record = manifest.get("trigrams")
+    try:
+        if not isinstance(record, dict) or not record.get("languages"):
+            raise ValueError("missing trigram record")
+        notice = (ROOT / "dictionaries/NOTICE.md").read_text(encoding="utf-8")
+        if record["license"].replace("-", " ") not in notice.replace("-", " ") or record["command"] not in notice:
+            raise ValueError("license or rebuild command missing from NOTICE.md")
+        for language, entry in record["languages"].items():
+            data = (ROOT / entry["output"]).read_bytes()
+            if (hashlib.sha256(data).hexdigest() != entry["output_sha256"] or len(data) != entry["bytes"]
+                    or len(data.splitlines()) != entry["entries"] or len(data) > 2 * 1024 * 1024):
+                failures.append((entry["output"], f"{language} trigram table hash/size mismatch"))
+            source = manifest["languages"][language]
+            if (entry["source"] != source["output"] or entry["source_sha256"] != source["output_sha256"]
+                    or file_sha256(ROOT / entry["source"]) != entry["source_sha256"]):
+                failures.append((entry["output"], f"{language} trigram table built from another word list"))
+            if Path(entry["output"]).name not in notice:
+                failures.append(("dictionaries/NOTICE.md", f"{language} trigram table not named"))
+    except (OSError, KeyError, TypeError, ValueError, AttributeError, UnicodeError) as error:
+        failures.append(("dictionaries/manifest.json", f"trigram record invalid: {error}"))
+
+
 def main():
     paths = subprocess.check_output(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], cwd=ROOT).decode().split("\0")
     failures = []
@@ -181,6 +206,7 @@ def main():
     if manifest.get("schema") == 3:
         validate_supplemental(manifest, failures)
         validate_second_sources(manifest, failures)
+        validate_trigrams(manifest, failures)
     for path, reason in failures:
         print(f"FAIL {path}: {reason}", file=sys.stderr)
     if failures:

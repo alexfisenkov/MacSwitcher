@@ -85,6 +85,23 @@ final class PredictionDecisionTests: XCTestCase {
         XCTAssertEqual(boundary("ПРи ", "ru"), PredictionDecision.none, "shorter than four letters")
     }
 
+    /// Review F1: accepted mixed-case spellings are not «ПРивет» typos and are never rewritten.
+    func testAcceptedMixedCaseSpellingsStayAsTyped() throws {
+        let real = PredictionEngine(lexicon: try PredictionLexicon.bundled())
+        for (suffix, language) in [("VMware ", "en"), ("ВКонтакте ", "ru"), ("Открой ВКонтакте ", "ru"),
+                                   ("OAuth ", "en"), ("JUnit ", "en")] {
+            XCTAssertEqual(boundary(suffix, language, engine: real), PredictionDecision.none, suffix)
+        }
+        XCTAssertEqual(boundary("ПРивет ", "ru", engine: real).applied?.replacementSuffix, "Привет ")
+        // A capital letter glued to a likelier word (В + Контакте) is a name, not a held Shift.
+        let custom = PredictionEngine(lexicon: PredictionLexicon(wordsByLanguage: [
+            "ru": ["привет": 1_000_000, "вконтакте": 40_000, "контакте": 90_000, "вокруг": 300_000, "округ": 20_000],
+            "en": ["hello": 900_000]]))
+        XCTAssertEqual(boundary("ВКонтакте ", "ru", engine: custom), PredictionDecision.none)
+        XCTAssertEqual(boundary("ВОкруг ", "ru", engine: custom).applied?.replacementSuffix, "Вокруг ")
+        XCTAssertEqual(boundary("ПРивет ", "ru", engine: custom).applied?.replacementSuffix, "Привет ")
+    }
+
     func testSingleLetterWordFollowsItsCorrectedNeighbour() {
         let decision = engine().evaluate(suffix: "z ghbdtn", sourceLanguage: "en")
         XCTAssertEqual(decision.applied?.replacementSuffix, "я привет")

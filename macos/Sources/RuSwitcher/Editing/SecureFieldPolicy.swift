@@ -59,21 +59,48 @@ enum SecureFieldPolicy {
         return verdict(subroleStatus: status, subrole: raw)
     }
 
-    /// Event-tap probe, asked only while the flag is raised: the system-wide
-    /// focused element, its PID and subrole, each under a short AX timeout.
-    /// No text, value or selection is requested. Any failure is `.unknown`.
-    static func liveFocusedFieldVerdict(timeout: Float = 0.02) -> SecureFieldVerdict {
-        let system = AXUIElementCreateSystemWide()
-        guard AXUIElementSetMessagingTimeout(system, timeout) == .success else { return .unknown }
-        var raw: AnyObject?
-        guard AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &raw) == .success,
-              let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() else { return .unknown }
-        let element = raw as! AXUIElement
-        var pid: pid_t = 0
-        guard AXUIElementSetMessagingTimeout(element, timeout) == .success,
-              AXUIElementGetPid(element, &pid) == .success, pid > 0 else { return .unknown }
-        return effectiveVerdict(liveVerdict(of: element), fieldProcessID: pid, flagRaised: true)
+    /// Event-tap probe, asked only while the flag is raised: the focused
+    /// application (it may be a non-activating panel, so not the front app),
+    /// its focused element, PID and subrole. A timeout on the system-wide
+    /// element would change the AX timeout of the whole process, so only the
+    /// found application and field get the short one. No text, value or
+    /// selection is requested. Any failure is `.unknown`.
+    static func liveFocusedFieldVerdict(timeout: Float = 0.02,
+                                        access: FocusedFieldAccess = .live) -> SecureFieldVerdict {
+        guard let app = access.element(access.systemWide(), kAXFocusedApplicationAttribute as CFString),
+              access.setTimeout(app, timeout) == .success,
+              let element = access.element(app, kAXFocusedUIElementAttribute as CFString),
+              access.setTimeout(element, timeout) == .success,
+              let pid = access.processID(element), pid > 0 else { return .unknown }
+        return flaggedVerdict(access.verdict(element), fieldProcessID: pid,
+            holderProcessID: access.holderProcessID())
     }
+}
+
+/// The AX calls of the focused-field probe; tests replace them with doubles.
+struct FocusedFieldAccess {
+    var systemWide: () -> AXUIElement
+    var element: (AXUIElement, CFString) -> AXUIElement?
+    var setTimeout: (AXUIElement, Float) -> AXError
+    var processID: (AXUIElement) -> pid_t?
+    var verdict: (AXUIElement) -> SecureFieldVerdict
+    var holderProcessID: () -> Int32?
+
+    static var live: FocusedFieldAccess { FocusedFieldAccess(
+        systemWide: { AXUIElementCreateSystemWide() },
+        element: { parent, attribute in
+            var raw: AnyObject?
+            guard AXUIElementCopyAttributeValue(parent, attribute, &raw) == .success,
+                  let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() else { return nil }
+            return (raw as! AXUIElement)
+        },
+        setTimeout: { AXUIElementSetMessagingTimeout($0, $1) },
+        processID: { element in
+            var pid: pid_t = 0
+            return AXUIElementGetPid(element, &pid) == .success ? pid : nil
+        },
+        verdict: { SecureFieldPolicy.liveVerdict(of: $0) },
+        holderProcessID: { AutoSwitchPolicy.secureInputHolderProcessID() }) }
 }
 
 /// Memoized field answer for one edit's repeated cheap gates. A field's

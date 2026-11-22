@@ -453,7 +453,15 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
         back.frame = NSRect(x: Self.columnX, y: 409, width: 480, height: 30)
         view.addSubview(back)
         if let content = support.view {
-            content.frame = NSRect(x: Self.columnX, y: 0, width: Self.columnWidth, height: 398)
+            // A scrolling form spans the whole pane and starts its column 20 pt in, so a
+            // permanent scroll bar sits in the right margin instead of cutting the column.
+            if let scroll = content as? NSScrollView {
+                scroll.frame = NSRect(x: 0, y: 0, width: Self.paneWidth, height: 398)
+                scroll.automaticallyAdjustsContentInsets = false
+                scroll.contentInsets = NSEdgeInsets(top: 0, left: Self.columnX, bottom: 0, right: 0)
+            } else {
+                content.frame = NSRect(x: Self.columnX, y: 0, width: Self.columnWidth, height: 398)
+            }
             content.autoresizingMask = [.width, .height]
             view.addSubview(content)
         }

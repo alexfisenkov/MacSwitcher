@@ -170,6 +170,42 @@ module.main()
                 (root / "terms.tsv").write_bytes(b"invalid\n")
                 self.assertEqual(validator.main(), 1)
 
+    def test_public_validator_pins_trigram_tables_to_manifest_and_notice(self):
+        """Review F1: the bundled trigram tables are CC BY-SA derivatives with hash and size."""
+        spec = importlib.util.spec_from_file_location("check_public", ROOT / "script/check_public.py")
+        validator = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(validator)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "dictionaries").mkdir()
+            trigger, table = root / "en.tsv", root / "en-trigrams.tsv"
+            trigger.write_bytes(b"hello\t50000\n")
+            table.write_bytes(b"^^h\t16\n")
+            (root / "dictionaries/NOTICE.md").write_text(
+                "en-trigrams.tsv CC BY-SA 4.0 python3 -I script/build_trigrams.py", encoding="utf-8")
+            manifest = {"languages": {"en": {"output": "en.tsv", "output_sha256": importer.digest(trigger.read_bytes())}},
+                "trigrams": {"license": "CC-BY-SA-4.0", "command": "python3 -I script/build_trigrams.py",
+                    "languages": {"en": {"output": "en-trigrams.tsv", "output_sha256": importer.digest(table.read_bytes()),
+                        "bytes": 7, "entries": 1, "source": "en.tsv", "source_sha256": importer.digest(trigger.read_bytes())}}}}
+
+            def failures():
+                found = []
+                with patch.object(validator, "ROOT", root):
+                    validator.validate_trigrams(manifest, found)
+                return found
+
+            self.assertEqual(failures(), [])
+            table.write_bytes(b"^^h\t17\n")
+            self.assertTrue(failures(), "a changed table must not pass")
+            table.write_bytes(b"^^h\t16\n")
+            trigger.write_bytes(b"hello\t40000\n")
+            self.assertTrue(failures(), "a table built from another word list must not pass")
+            trigger.write_bytes(b"hello\t50000\n")
+            (root / "dictionaries/NOTICE.md").write_text("nothing about the tables", encoding="utf-8")
+            self.assertTrue(failures(), "NOTICE must name the derived tables")
+            del manifest["trigrams"]
+            self.assertTrue(failures(), "a missing record must not pass")
+
     def test_second_source_words_merge_case_forms_and_drop_punctuation(self):
         raw = "Hello 10\nhello 5\n! 99\nJSON 7\nbad123 50\nx not-a-number\n".encode()
         self.assertEqual(importer.second_source_words(raw, "en"), {"hello": 15, "json": 7})

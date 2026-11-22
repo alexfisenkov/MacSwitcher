@@ -141,6 +141,35 @@ final class SettingsLayoutTests: XCTestCase {
         }
     }
 
+    /// Review F1: with a permanent (legacy) scroll bar the «More» pane lost its right
+    /// edge. Every pane keeps a visible column of 560 pt and never scrolls sideways.
+    @MainActor
+    func testPermanentScrollBarNeitherClipsTheColumnNorScrollsSideways() throws {
+        let controller = SettingsWindowController()
+        let tabs = controller.makeNativeTabs(nativeShiftApplied: true, backupVerified: true)
+        let root = controller.makeSettingsContent(tabView: tabs)
+        root.frame = NSRect(x: 0, y: 0, width: 600, height: 520)
+        let settings = try XCTUnwrap(tabs.tabViewItem(at: 2).view as? NSTabView)
+        for index in 0..<settings.numberOfTabViewItems {
+            tabs.selectTabViewItem(at: 2); settings.selectTabViewItem(at: index)
+            let pane = settings.tabViewItem(at: index).view!
+            let scrolls = descendants(of: pane).compactMap { $0 as? NSScrollView }
+                .filter { !($0.documentView is NSTableView) }
+            for scroll in scrolls { scroll.scrollerStyle = .legacy; scroll.tile() }
+            root.layoutSubtreeIfNeeded()
+            for scroll in scrolls {
+                let document = try XCTUnwrap(scroll.documentView)
+                let visible = scroll.contentView.convert(scroll.contentView.bounds, to: root)
+                let column = document.subviews.map { $0.convert($0.bounds, to: root) }
+                    .reduce(NSRect.null) { $0.union($1) }
+                XCTAssertGreaterThanOrEqual(visible.width, 560, "settings-\(index): visible width")
+                XCTAssertGreaterThanOrEqual(visible.maxX + 0.5, column.maxX, "settings-\(index): right edge cut")
+                XCTAssertLessThanOrEqual(document.frame.width, scroll.contentView.bounds.width + 0.5,
+                                         "settings-\(index): sideways scrolling")
+            }
+        }
+    }
+
     @MainActor
     func testShiftKeysAreFlatPlatesNotButtons() throws {
         let tabs = SettingsWindowController().makeNativeTabs(nativeShiftApplied: true)

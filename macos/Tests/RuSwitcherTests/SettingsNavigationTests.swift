@@ -282,7 +282,7 @@ final class SettingsNavigationTests: XCTestCase {
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         func render(appearanceName: String, appearance: NSAppearance.Name,
                     index: Int, wholeLine: Bool = false, support: Bool = false,
-                    wordsSection: Int? = nil, suffix: String) throws {
+                    wordsSection: Int? = nil, legacyScrollers: Bool = false, suffix: String) throws {
             let controller = SettingsWindowController()
             let tabs = controller.makeNativeTabs(nativeShiftApplied: true, wholeLine: wholeLine,
                 backupVerified: true)
@@ -296,6 +296,13 @@ final class SettingsNavigationTests: XCTestCase {
             }
             root.frame = NSRect(x: 0, y: 0, width: 600, height: 520)
             root.appearance = try XCTUnwrap(NSAppearance(named: appearance))
+            if legacyScrollers {
+                // A permanent scroll bar («Show scroll bars: Always» or a mouse attached).
+                func scrolls(_ view: NSView) -> [NSScrollView] {
+                    [view as? NSScrollView].compactMap { $0 } + view.subviews.flatMap(scrolls)
+                }
+                for scroll in scrolls(root) { scroll.scrollerStyle = .legacy; scroll.tile() }
+            }
             root.layoutSubtreeIfNeeded()
             let bitmap = try XCTUnwrap(root.bitmapImageRepForCachingDisplay(in: root.bounds))
             root.cacheDisplay(in: root.bounds, to: bitmap)
@@ -313,6 +320,8 @@ final class SettingsNavigationTests: XCTestCase {
                 index: 0, wholeLine: true, suffix: "whole-line")
             try render(appearanceName: appearanceName, appearance: appearance,
                 index: 2, support: true, suffix: "support")
+            try render(appearanceName: appearanceName, appearance: appearance,
+                index: 2, support: true, legacyScrollers: true, suffix: "support-legacy")
             for (section, name) in [(1, "words-dictionary"), (2, "words-exceptions"), (3, "words-learning")] {
                 try render(appearanceName: appearanceName, appearance: appearance,
                     index: 1, wordsSection: section, suffix: name)

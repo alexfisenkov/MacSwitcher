@@ -30,13 +30,15 @@ extension PredictionEngine {
         case .plain: return nil
         case .twoInitialCapitals:
             rewritten = String(current.prefix(1)) + current.dropFirst().lowercased()
-            let titledCore = stripTrailingPunctuation(rewritten).core
-            if lexicon.frequency(of: titledCore, language: context.source) > 0 {
+            let typo = twoCapitalsTypo(core, language: context.source)
+            if typo == true {
                 var replacement = suffix
                 replacement.replaceSubrange(range, with: rewritten)
                 return .apply(PredictionProposal(originalSuffix: suffix, replacementSuffix: replacement,
                     targetLanguage: context.source, reason: .capsRestored))
             }
+            // A known source word that is not a clear typo is an accepted spelling.
+            if typo == false { return PredictionDecision.none }
         case .allCaps:
             guard followsCapitalWord(suffix, words, context) else { return nil }
             rewritten = current.lowercased()
@@ -60,6 +62,22 @@ extension PredictionEngine {
         case .hint(let proposal): return .hint(restore(proposal))
         case .none: return nil
         }
+    }
+
+    /// Lowercase forms at least this common are ordinary words, not brand spellings.
+    static let twoCapitalsTypoMinimumFrequency = 1_000
+
+    /// «ПРивет» is a held Shift only when the lowercase word is common and the tail is
+    /// not a likelier word of its own (В + Контакте, J + Unit). The bundled word lists are
+    /// case-folded, so protected and personal terms are the exact-case record.
+    /// true — fix the case; false — a known spelling, leave it; nil — unknown in the source
+    /// language, so the word may be typed in the other layout (GHbdtn).
+    private func twoCapitalsTypo(_ core: String, language: String) -> Bool? {
+        let whole = lexicon.frequency(of: core, language: language)
+        let tail = lexicon.frequency(of: String(core.dropFirst()), language: language)
+        if tail > 0, tail >= whole { return false }
+        guard whole > 0 else { return nil }
+        return whole >= Self.twoCapitalsTypoMinimumFrequency
     }
 
     /// A lone CAPS word may be an abbreviation (РЕЕЗ is HTTP), so it stays. Only a
