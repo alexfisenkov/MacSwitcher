@@ -61,9 +61,17 @@ final class PredictionCoordinator {
     }
     private var recentAutomaticEdit: RecentAutomaticEdit?
     private var undoHeldFocus: (focus: CombinedShiftFocus, sourceLayoutID: String)?
-    /// The last offered (never written) word for the current word. Any new
-    /// typing retires it. Showing and accepting it belong to the hint UI.
-    private(set) var latestHint: PredictionProposal?
+    /// The one visible hint: verified field, caret and revision, never written
+    /// until a double Shift accepts it. Any new typing, click or field change retires it.
+    private var pendingHint: PendingCorrectionHint?
+    private var hintExpiry: DispatchWorkItem?
+    /// A hint left alone disappears on its own; an invisible hint never applies.
+    var hintLifetime: TimeInterval = 6
+    var latestHint: PredictionProposal? { pendingHint?.proposal }
+    var onHintShown: ((PendingCorrectionHint) -> Void)?
+    var onHintDismissed: ((CorrectionHintDismissal) -> Void)?
+    /// Closed diagnostic codes of the hint, boundary and multi-word paths.
+    var eventRecorder: (RuntimeDiagnosticEvent) -> Void = RuntimeDiagnostics.record
     /// AppDelegate supplies a saved choice. Legacy call sites default to off.
     var russianPriorityProvider: () -> Bool = { false }
     /// Exact displayed source phrase and language; storage belongs to the caller.
@@ -101,6 +109,7 @@ final class PredictionCoordinator {
         self.correctionReceipts = ConfirmedCorrectionReceipts(now: receiptNow)
         if let engine {
             engineTask = Task { engine }
+            readyEngine = engine
         } else {
             engineTask = Task.detached(priority: .utility) {
                 guard let lexicon = try? PredictionLexicon.bundled() else {
@@ -113,6 +122,18 @@ final class PredictionCoordinator {
         monitor.beforePredictionText = { [weak self] processID, sourceLayoutID, text in
             self?.allowsPredictionTextDuringUndoHold(processID: processID,
                 sourceLayoutID: sourceLayoutID, text: text) ?? true
+        }
+        if readyEngine == nil {
+            let loading = engineTask
+            Task { @MainActor [weak self] in
+                let engine = await loading.value
+                self?.readyEngine = engine
+            }
+        }
+        monitor.onPredictionRevisionAdvanced = { [weak self] in
+            guard let self, let hint = self.pendingHint,
+                  hint.inputRevision != self.monitor.inputRevision else { return }
+            self.clearHint(reason: .invalidated)
         }
         monitor.onConfirmedUndoHoldSourceChanged = { [weak self] sourceID in
             guard let self, let held = self.undoHeldFocus else { return }
@@ -180,9 +201,129 @@ final class PredictionCoordinator {
         }.value
     }
 
+    /// The visible hint for exactly this field, caret and current input revision.
+    func currentHint(for focus: CombinedShiftFocus) -> PendingCorrectionHint? {
+        guard let pendingHint, pendingHint.matches(focus: focus, inputRevision: monitor.inputRevision)
+        else { return nil }
+        return pendingHint
+    }
+
+    func clearHint(reason: CorrectionHintDismissal) {
+        hintExpiry?.cancel(); hintExpiry = nil
+        guard pendingHint != nil else { return }
+        pendingHint = nil
+        onHintDismissed?(reason)
+    }
+
+    private func showHint(_ hint: PendingCorrectionHint) {
+        if pendingHint != nil { clearHint(reason: .replaced) }
+        pendingHint = hint
+        eventRecorder(.hintShown)
+        onHintShown?(hint)
+        let expiry = DispatchWorkItem { [weak self] in self?.clearHint(reason: .expired) }
+        hintExpiry = expiry
+        DispatchQueue.main.asyncAfter(deadline: .now() + hintLifetime, execute: expiry)
+    }
+
+    /// Double Shift asks here before its ordinary path. nil means no visible
+    /// hint for this gesture's field, caret, revision and layout pair: the
+    /// ordinary conversion runs. Otherwise exactly the hint is written through
+    /// the verified suffix path, or nothing at all.
+    func acceptHint(request: CombinedShiftRequest, context: CombinedShiftContext) -> CorrectionHintAcceptance? {
+        guard let focus = request.focus, request.inputRevision == monitor.inputRevision,
+              let hint = currentHint(for: focus),
+              context.sourceLayoutID == hint.sourceLayoutID,
+              context.targetLayoutID == hint.resultLayoutID else { return nil }
+        clearHint(reason: .accepted)
+        guard hint.writableAtCollapsedCaret else {
+            eventRecorder(.typoLengthChangeRefused)
+            return .refused
+        }
+        guard request.frontProcessID == focus.processID,
+              platform.frontmost().processID == focus.processID,
+              !platform.secureFlagBlocks(focus), !platform.remoteDeferred(),
+              platform.focusIsCurrent(focus),
+              !converter.hasUnconfirmedAXEdit(in: focus) else {
+            eventRecorder(.hintRefused)
+            return .refused
+        }
+        // Manual gesture: no loop guard, and the field revision alone (not the
+        // prediction generation the first Shift's source change advanced) binds it.
+        let execution = CombinedShiftExecutionContext(focus: focus, inputRevision: hint.inputRevision,
+            currentInputRevision: { [weak monitor] in monitor?.inputRevision ?? UInt64.max })
+        let outcome = write(VerifiedWrite(proposal: hint.proposal, edit: hint.edit, focus: focus,
+            processID: focus.processID, inputRevision: hint.inputRevision,
+            sourceLayoutID: hint.sourceLayoutID, resultLayoutID: hint.resultLayoutID,
+            sourceLanguage: hint.sourceLanguage), execution: execution, automatic: false)
+        switch outcome {
+        case .applied:
+            eventRecorder(.hintAccepted)
+            return .confirmed
+        case .sourceUnconfirmed:
+            return .sourceNotConfirmed(targetID: hint.resultLayoutID)
+        case .textUnconfirmed:
+            return .unknown
+        default:
+            eventRecorder(.hintRefused)
+            return .refused
+        }
+    }
+
+    // MARK: Several words in the wrong layout
+
+    private var readyEngine: PredictionEngine?
+
+    /// Synchronous in-memory evidence for the multi-word double Shift: the
+    /// typed word is unknown in its own language and common in the other one.
+    /// Before the dictionaries have loaded the answer is always no.
+    func prefersOtherLayout(original: String, converted: String, sourceLanguage: String) -> Bool {
+        guard let lexicon = readyEngine?.lexicon else { return false }
+        let source = String(sourceLanguage.lowercased().prefix(2))
+        guard source == "ru" || source == "en" else { return false }
+        let target = source == "en" ? "ru" : "en"
+        let word = PredictionLexicon.normalize(original)
+        let mapped = PredictionLexicon.normalize(converted)
+        guard word != mapped, mapped.contains(where: \.isLetter) else { return false }
+        return lexicon.frequency(of: word, language: source) == 0
+            && lexicon.frequency(of: mapped, language: target) >= Self.multiWordMinimumFrequency
+    }
+
+    static let multiWordMinimumFrequency = 500
+
+    // MARK: Enter/Tab as a word boundary
+
+    private var boundaryKeyHold: BoundaryKeyHold? { monitor.boundaryKeyHold }
+    private var boundaryEvaluation: Task<Void, Never>?
+
+    /// Main, inside the Enter/Tab callback. Only a current word with its
+    /// event-time field anchor may hold the key; everything else declines and
+    /// the key goes at once. Only a confident `apply` writes, never a hint.
+    func correctBeforeBoundaryKey(_ snapshot: PredictionSnapshot, ticket: BoundaryKeyHold.Ticket) -> Bool {
+        guard snapshot.atBoundary, anchorSessionID == snapshot.sessionID, anchorFocus != nil,
+              pendingCaretAnchor != nil, !anchorProofDeferred, isCurrent(snapshot) else { return false }
+        boundaryEvaluation?.cancel()
+        boundaryEvaluation = Task { [weak self] in
+            await self?.evaluate(snapshot, evaluationID: nil, boundaryHold: ticket)
+        }
+        return true
+    }
+
+    private func finishBoundaryHold(_ ticket: BoundaryKeyHold.Ticket, outcome: PredictionEvaluationOutcome) {
+        if outcome == .applied { eventRecorder(.boundaryKeyCorrected) }
+        onBoundaryHoldFinished?(outcome)
+        monitor.finishBoundaryHold(ticket)
+    }
+
+    /// Test observation of a held boundary key's outcome; production leaves it nil.
+    var onBoundaryHoldFinished: ((PredictionEvaluationOutcome) -> Void)?
+
     func invalidate() {
         if !monitor.predictionIsWaitingForUndoBoundary { undoHeldFocus = nil }
-        latestHint = nil
+        // The first Shift's own source change resets prediction without any
+        // input; the hint survives that only while the input revision is unchanged.
+        if let pendingHint, pendingHint.inputRevision != monitor.inputRevision {
+            clearHint(reason: .invalidated)
+        }
         debounce?.cancel(); debounce = nil
         if let pendingDebounceID {
             self.pendingDebounceID = nil
@@ -198,6 +339,8 @@ final class PredictionCoordinator {
     }
 
     func submit(_ snapshot: PredictionSnapshot) {
+        // New typed text continues past the offered word.
+        clearHint(reason: .typing)
         invalidate()
         let evaluationID: PredictionEvaluationID?
         if onEvaluationFinished != nil {
@@ -341,10 +484,13 @@ final class PredictionCoordinator {
     }
 
     private func evaluate(_ snapshot: PredictionSnapshot, evaluationID: PredictionEvaluationID?,
-                          renderAttempt: Int = 0) async {
+                          renderAttempt: Int = 0, boundaryHold: BoundaryKeyHold.Ticket? = nil) async {
         var outcome: PredictionEvaluationOutcome = .refused
         var retryScheduled = false
-        defer { if !retryScheduled, let evaluationID { reportEvaluationFinished(evaluationID, outcome) } }
+        defer {
+            if !retryScheduled, let evaluationID { reportEvaluationFinished(evaluationID, outcome) }
+            if let boundaryHold { finishBoundaryHold(boundaryHold, outcome: outcome) }
+        }
         guard isCurrent(snapshot) else { outcome = .stale; RuntimeDiagnostics.record(.autoEvaluationStale); return }
         guard let engine = await engineTask.value else { outcome = .engineUnavailable; RuntimeDiagnostics.record(.autoEngineUnavailable); return }
         guard isCurrent(snapshot) else { outcome = .stale; RuntimeDiagnostics.record(.autoEvaluationStale); return }
@@ -371,20 +517,22 @@ final class PredictionCoordinator {
         }.value
         guard isCurrent(snapshot) else { outcome = .stale; RuntimeDiagnostics.record(.autoEvaluationStale); return }
         let proposal: PredictionProposal
+        let isHint: Bool
         switch decision {
         case .none:
             outcome = .noProposal; RuntimeDiagnostics.record(.autoNoProposal); return
         case .hint(let offered):
-            // Never written here: a hint is kept only for this exact typed suffix.
-            if offered.originalSuffix == snapshot.suffix { latestHint = offered }
-            outcome = .hinted; return
+            // A boundary key never waits for a doubtful word.
+            guard boundaryHold == nil else { outcome = .noProposal; return }
+            // Verified like an edit below, then only shown: never written here.
+            proposal = offered; isHint = true
         case .apply(let applied):
-            proposal = applied
+            proposal = applied; isHint = false
         }
         // A floating search field may acquire input after this word's first
         // event. Never commit a proposal to the stale underlay anchor.
         guard !platform.searchOverlayActive() else { outcome = .stale; return }
-        RuntimeDiagnostics.record(.autoProposal)
+        if !isHint { RuntimeDiagnostics.record(.autoProposal) }
         guard proposal.originalSuffix == snapshot.suffix,
               !Self.containsDeniedChange(original: proposal.originalSuffix, replacement: proposal.replacementSuffix),
               !phraseExceptionLookup(proposal.originalSuffix, String(language.lowercased().prefix(2))) else {
@@ -410,7 +558,8 @@ final class PredictionCoordinator {
         guard let currentSelection = originalFocus.selectionRange() else {
             RuntimeDiagnostics.record(.autoCaretUnavailable)
             anchorProofDeferred = true
-            retryScheduled = retryRenderVerification(snapshot, attempt: renderAttempt, evaluationID: evaluationID)
+            retryScheduled = boundaryHold == nil
+                && retryRenderVerification(snapshot, attempt: renderAttempt, evaluationID: evaluationID)
             if !retryScheduled && renderAttempt >= 3 {
                 outcome = .renderRetryExhausted
                 retireFailedCaretAnchor(snapshot)
@@ -436,7 +585,8 @@ final class PredictionCoordinator {
         guard resolved != nil else {
             RuntimeDiagnostics.record(.autoCaretMismatch)
             anchorProofDeferred = true
-            retryScheduled = retryRenderVerification(snapshot, attempt: renderAttempt, evaluationID: evaluationID)
+            retryScheduled = boundaryHold == nil
+                && retryRenderVerification(snapshot, attempt: renderAttempt, evaluationID: evaluationID)
             if !retryScheduled && renderAttempt >= 3 {
                 outcome = .renderRetryExhausted
                 retireFailedCaretAnchor(snapshot)
@@ -445,6 +595,26 @@ final class PredictionCoordinator {
         }
         anchorProofDeferred = false
         guard isCurrent(snapshot) else { outcome = .stale; RuntimeDiagnostics.record(.autoEvaluationStale); return }
+        guard let edit = PredictionSuffixEdit(original: proposal.originalSuffix,
+            replacement: proposal.replacementSuffix) else { return }
+        let verified = VerifiedWrite(proposal: proposal, edit: edit, focus: focus,
+            processID: snapshot.processID, inputRevision: snapshot.inputRevision,
+            sourceLayoutID: snapshot.sourceLayoutID, resultLayoutID: LayoutSwitcher.sourceID(target),
+            sourceLanguage: String(language.lowercased().prefix(2)))
+        if isHint {
+            // An unknown earlier edit in this field keeps the hint hidden.
+            guard !converter.hasUnconfirmedAXEdit(in: focus) else { return }
+            let hint = PendingCorrectionHint(proposal: proposal, edit: edit, focus: focus,
+                caretUTF16Location: currentSelection.location, inputRevision: snapshot.inputRevision,
+                sessionID: snapshot.sessionID, sourceLayoutID: verified.sourceLayoutID,
+                resultLayoutID: verified.resultLayoutID, sourceLanguage: verified.sourceLanguage,
+                issuedAt: receiptNow())
+            // Never offer what double Shift cannot apply: the ordinary path stays.
+            guard hint.writableAtCollapsedCaret else { outcome = .noProposal; return }
+            showHint(hint)
+            outcome = .hinted
+            return
+        }
         // The converter must preserve an unknown edit in this exact AX field.
         // Refuse before opening another input lease or recording a source window;
         // a different field remains eligible for its own verified edit.
@@ -454,21 +624,42 @@ final class PredictionCoordinator {
             DispatchQueue.main.async { [weak self] in self?.onUnconfirmedEdit?() }
             return
         }
-        guard let edit = PredictionSuffixEdit(original: proposal.originalSuffix,
-            replacement: proposal.replacementSuffix) else { return }
         // Manual double Shift never passes through here, so it is never paused.
         guard loopGuard.allow(now: loopClock(), original: proposal.originalSuffix,
                               replacement: proposal.replacementSuffix) else {
             outcome = .suppressed; return
         }
-        let resultID = LayoutSwitcher.sourceID(target)
         let execution = CombinedShiftExecutionContext(focus: focus, inputRevision: snapshot.inputRevision,
             currentInputRevision: { [weak monitor] in
                 guard let monitor, monitor.predictionGeneration == snapshot.generation else { return UInt64.max }
                 return monitor.inputRevision
             })
-        guard let lease = platform.beginLease(snapshot.processID) else {
-            RuntimeDiagnostics.record(.nativeFenceUnavailable); return
+        outcome = write(verified, execution: execution, automatic: true, mayBeginWrite: {
+            boundaryHold.map { boundaryKeyHold?.beginWrite($0) == true } ?? true
+        })
+    }
+
+    /// The single verified write shared by automatic correction, an accepted
+    /// hint and a held boundary key. Every caller has verified field and caret.
+    private struct VerifiedWrite {
+        let proposal: PredictionProposal
+        let edit: PredictionSuffixEdit
+        let focus: CombinedShiftFocus
+        let processID: Int32
+        let inputRevision: UInt64
+        let sourceLayoutID: String
+        let resultLayoutID: String
+        let sourceLanguage: String
+    }
+
+    private func write(_ verified: VerifiedWrite, execution: CombinedShiftExecutionContext,
+                       automatic: Bool, mayBeginWrite: () -> Bool = { true }) -> PredictionEvaluationOutcome {
+        var outcome: PredictionEvaluationOutcome = .refused
+        let proposal = verified.proposal, edit = verified.edit, focus = verified.focus
+        let resultID = verified.resultLayoutID
+        guard mayBeginWrite() else { return .refused }
+        guard let lease = platform.beginLease(verified.processID) else {
+            RuntimeDiagnostics.record(.nativeFenceUnavailable); return .refused
         }
         var requestedAt: UInt64 = 0
         let securePermit = SecureFlagFieldPermit(focus: focus, flagRaised: { [platform] in
@@ -477,8 +668,8 @@ final class PredictionCoordinator {
         let sourceCommit = NativeQueuedSourceCommit(isCurrent: { [weak self] in
             guard let self else { return false }
             return self.platform.leaseIsCurrent(lease)
-                && monitor.inputRevision == snapshot.inputRevision
-                && self.platform.frontmost().processID == snapshot.processID
+                && self.monitor.inputRevision == verified.inputRevision
+                && self.platform.frontmost().processID == verified.processID
                 && securePermit.allows()
         }, request: { target in
             requestedAt = self.platform.sourceRequestedAt()
@@ -494,8 +685,8 @@ final class PredictionCoordinator {
                 // lease ends. Frontmost metadata is never read for successful edits.
                 let front = platform.frontmost()
                 let family = RuntimeDiagnostics.applicationFamily(bundleID: front.bundleID,
-                    expectedProcessID: snapshot.processID, observedProcessID: front.processID,
-                    secureInputActive: platform.secureFlagRaised() || focus.processID != snapshot.processID,
+                    expectedProcessID: verified.processID, observedProcessID: front.processID,
+                    secureInputActive: platform.secureFlagRaised() || focus.processID != verified.processID,
                     diagnosticsEnabled: true)
                 recordAutomaticUncertain(family)
             }
@@ -509,7 +700,7 @@ final class PredictionCoordinator {
                 textWasQueued = true
             }) {
                 converter.replaceVerifiedSuffix(original: edit.original,
-                    replacement: edit.replacement, sourceLayoutID: snapshot.sourceLayoutID,
+                    replacement: edit.replacement, sourceLayoutID: verified.sourceLayoutID,
                     resultLayoutID: resultID, execution: execution,
                     inputBarrierIsActive: { [weak self] in
                         self?.platform.leaseIsCurrent(lease) == true
@@ -529,11 +720,13 @@ final class PredictionCoordinator {
             } else {
                 RuntimeDiagnostics.record(.autoEditRefused)
             }
-            return
+            return outcome
         }
         RuntimeDiagnostics.record(.autoTextConfirmed)
-        loopGuard.record(original: proposal.originalSuffix,
-            replacement: proposal.replacementSuffix, now: loopClock())
+        if automatic {
+            loopGuard.record(original: proposal.originalSuffix,
+                replacement: proposal.replacementSuffix, now: loopClock())
+        }
         // Physical input is still held by this lease. Select the result source
         // only after the complete field edit is independently acknowledged.
         // Queued Unicode alone can still be dropped or delivered late.
@@ -546,11 +739,11 @@ final class PredictionCoordinator {
             monitor.requireObservedInputSource(resultID)
             let notice = wholeField.flatMap {
                 retainReceipt(proposal: proposal, edit: edit, focus: focus,
-                    sourceLanguage: String(language.lowercased().prefix(2)),
-                    sourceLayoutID: snapshot.sourceLayoutID, resultLayoutID: resultID,
+                    sourceLanguage: verified.sourceLanguage,
+                    sourceLayoutID: verified.sourceLayoutID, resultLayoutID: resultID,
                     field: $0)
             }
-            rememberAutomaticEdit(focus: focus, sourceLayoutID: snapshot.sourceLayoutID,
+            rememberAutomaticEdit(focus: focus, sourceLayoutID: verified.sourceLayoutID,
                 resultLayoutID: resultID, receiptID: notice?.id)
             let sourceOutcome = sourceCommit.outcome
             DispatchQueue.main.async { [weak self] in
@@ -558,7 +751,7 @@ final class PredictionCoordinator {
             }
             RuntimeDiagnostics.record(sourceCommit.outcome == .unconfirmed ? .autoSourceUnconfirmed : .autoSourceFailed)
             outcome = .sourceUnconfirmed
-            return
+            return outcome
         }
         RuntimeDiagnostics.record(.autoSourceConfirmed)
         monitor.recordPredictionResult(original: proposal.originalSuffix,
@@ -566,11 +759,11 @@ final class PredictionCoordinator {
         RuntimeDiagnostics.record(.autoEditPosted)
         let notice = wholeField.flatMap {
             retainReceipt(proposal: proposal, edit: edit, focus: focus,
-               sourceLanguage: String(language.lowercased().prefix(2)),
-               sourceLayoutID: snapshot.sourceLayoutID, resultLayoutID: resultID,
+               sourceLanguage: verified.sourceLanguage,
+               sourceLayoutID: verified.sourceLayoutID, resultLayoutID: resultID,
                field: $0)
         }
-        rememberAutomaticEdit(focus: focus, sourceLayoutID: snapshot.sourceLayoutID,
+        rememberAutomaticEdit(focus: focus, sourceLayoutID: verified.sourceLayoutID,
             resultLayoutID: resultID, receiptID: notice?.id)
         if let notice {
             // Present feedback only after the input fence has been released.
@@ -580,7 +773,11 @@ final class PredictionCoordinator {
                               proposal.replacementSuffix.split(whereSeparator: \.isWhitespace))
             .first(where: { $0 != $1 }).map { String($0.0) } ?? edit.original
         onApplied?(changedWord)
-        outcome = .applied
+        if automatic, let notice {
+            monitor.armImplicitUndo(id: notice.id, corrected: edit.replacement,
+                original: edit.original, processID: verified.processID)
+        }
+        return .applied
     }
 
     @discardableResult

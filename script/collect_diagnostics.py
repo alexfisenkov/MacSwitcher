@@ -32,6 +32,7 @@ DOUBLE_EVENTS = frozenset((
     "doubleNoBufferOrSelection", "doubleFailed", "doubleSucceeded",
     "soloReceived", "doubleWindowMissed", "doubleArrivalSkewRejected",
     "doubleCaretReanchored", "doubleLayoutUnconfirmed", "secureFlagWithEvents",
+    "hintShown", "hintAccepted", "multiWordConverted", "boundaryKeyCorrected",
 ))
 FAILURES = frozenset((
     "selectionSourceMismatch", "selectionStateBlocked", "selectionTimeout",
@@ -71,7 +72,7 @@ HEALTH_EVENTS = frozenset((
     "recoverySameFieldBlocked", "recoverySlotsFull", "recoveryUnitsFull",
     "recoveryArchiveLimit", "recoveryArchiveFailed", "recoveryArchiveQuota",
     "recoveryArchiveWriteFailed", "recoveryArchiveVerificationFailed",
-    "rivalKeyboardTapActive", "autoLoopGuardTripped",
+    "rivalKeyboardTapActive", "autoLoopGuardTripped", "implicitUndoObserved",
 ))
 EDIT_FAILURE_EVENTS = frozenset((
     "ackDeadline", "ackGateInvalid", "ackObservationLimit", "ackObservationUnavailable",
@@ -87,7 +88,8 @@ EDIT_FAILURE_EVENTS = frozenset((
     "unconfirmedEditBlocked", "executionFocusUnavailable", "executionFocusChanged",
     "executionWrongProcess", "executionRevisionChanged", "executionSecureInput",
     "ackLateConfirmed", "ackDeadlineSourceVisible", "ackDeadlineCaretOnly", "ackDeadlineOther",
-    "autocompleteSuggestionRefused",
+    "autocompleteSuggestionRefused", "hintRefused", "typoLengthChangeRefused",
+    "boundaryKeyTimedOut",
 ))
 EXACT_EVENTS = DOUBLE_EVENTS | HEALTH_EVENTS | EDIT_FAILURE_EVENTS | frozenset("failure." + x for x in FAILURES)
 MAX_AGE = 14 * 86400

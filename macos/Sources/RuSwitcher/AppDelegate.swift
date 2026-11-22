@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 appropriateFor: nil, create: true).appendingPathComponent("MacSwitcher/Recovery", isDirectory: true)
         })
     private lazy var predictionCoordinator = PredictionCoordinator(monitor: keyboardMonitor, converter: textConverter)
+    private lazy var correctionHintPanel = CorrectionHintPanel()
     private let settingsController = SettingsWindowController()
     private let perAppLayoutManager = PerAppLayoutManager()
     private let electronAccessibilityBridge = ElectronAccessibilityBridge()
@@ -946,6 +947,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         predictionCoordinator.onUnconfirmedEdit = { [weak self] in
             self?.showUnknownEditNotice()
         }
+        // Doubtful word: a plate at the caret; double Shift accepts it, typing removes it.
+        predictionCoordinator.onHintShown = { [weak self] hint in
+            self?.correctionHintPanel.show(hint)
+        }
+        predictionCoordinator.onHintDismissed = { [weak self] _ in
+            self?.correctionHintPanel.hide()
+        }
+        // Enter/Tab after a confidently wrong-layout word: short hold, then the key goes.
+        keyboardMonitor.onBoundaryKey = { [weak self] snapshot, ticket in
+            self?.predictionCoordinator.correctBeforeBoundaryKey(snapshot, ticket: ticket) ?? false
+        }
+        // Erased a confirmed correction and typed the original again: the same
+        // vote as a confirmed undo. Already outside the key callback here.
+        keyboardMonitor.onImplicitUndo = { [weak self] vote in
+            self?.manualLearningProvenance.invalidate()
+            self?.automaticUndoLearningProvenance.invalidate()
+            self?.enqueueAdaptive(.automaticUndoConfirmed(id: vote.id,
+                original: vote.original, replacement: vote.replacement))
+        }
         predictionCoordinator.onSourceFailure = { [weak self] target, _ in
             self?.presentSourceFailure(targetID: target)
         }
@@ -1242,13 +1262,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     secureInputActive: AutoSwitchPolicy.secureInputActive,
                     diagnosticsEnabled: RuntimeDiagnostics.enabled)
             })
+        // A visible hint for this field and revision is accepted before the
+        // ordinary path; it writes only through the verified suffix editor.
+        if let accepted = predictionCoordinator.acceptHint(request: request, context: context) {
+            presentHintAcceptance(accepted)
+            return
+        }
         let automaticUndo = predictionCoordinator.claimDoubleShiftAutomaticUndo(
             request: request, context: context, observedSourceID: platform.currentSourceID())
-        let result = CombinedShiftTransaction.run(request: request, context: context,
+        let multiWord = multiWordRequest(request, context: context, automaticUndo: automaticUndo)
+        let result = CombinedShiftTransaction.run(request: multiWord ?? request, context: context,
             execution: execution, converter: textConverter, monitor: keyboardMonitor,
             platform: platform, convertWholeLine: SettingsManager.shared.convertWholeLine,
             contextForSource: { LayoutSwitcher.combinedShiftContext(sourceLayoutID: $0) },
             selectionKnownWord: selectionKnownWord, automaticUndo: automaticUndo)
+        if multiWord != nil, case .some(.confirmed) = result.outcome {
+            RuntimeDiagnostics.record(.multiWordConverted)
+        }
         if let notice = result.failureNotice {
             // The helper released the input fence before any user-facing notice.
             switch notice {
@@ -1304,6 +1334,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     automaticUndoLearningProvenance.invalidate()
                 }
             }
+        }
+    }
+
+    private func presentHintAcceptance(_ accepted: CorrectionHintAcceptance) {
+        switch accepted {
+        case .confirmed:
+            updateStatusIcon()
+        case .refused:
+            showCombinedShiftRefusal()
+        case .unknown:
+            DispatchQueue.main.async { [weak self] in self?.showUnknownEditNotice() }
+        case .sourceNotConfirmed(let targetID):
+            DispatchQueue.main.async { [weak self] in self?.presentSourceFailure(targetID: targetID) }
+        }
+    }
+
+    /// Two or more trailing words, each confidently in the wrong layout and
+    /// together within the live-write limit, become one word-path edit.
+    private func multiWordRequest(_ request: CombinedShiftRequest, context: CombinedShiftContext,
+                                  automaticUndo: DoubleShiftAutomaticUndo) -> CombinedShiftRequest? {
+        guard case .manual = automaticUndo, !SettingsManager.shared.convertWholeLine,
+              let source = LayoutSwitcher.installedLayouts().first(where: {
+                  LayoutSwitcher.sourceID($0) == context.sourceLayoutID }),
+              let language = LayoutSwitcher.languageCode(source) else { return nil }
+        return MultiWordSpan.request(from: request, context: context) { [predictionCoordinator] keys in
+            guard let pair = DynamicKeyMapping.convertKeys(keys, context: context) else { return false }
+            return predictionCoordinator.prefersOtherLayout(original: pair.original,
+                converted: pair.converted, sourceLanguage: language)
         }
     }
 

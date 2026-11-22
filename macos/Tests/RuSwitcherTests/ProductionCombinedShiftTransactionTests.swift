@@ -2159,4 +2159,69 @@ extension ProductionCombinedShiftTransactionTests {
         XCTAssertEqual(field.queuedText, 0)
         XCTAssertEqual(events.filter { $0 == .autocompleteSuggestionRefused }.count, 1)
     }
+    // MARK: - Several words in the wrong layout (R13)
+
+    @MainActor
+    private func typeWords(_ rig: Rig, _ field: Field, _ words: [String]) throws {
+        for (index, word) in words.enumerated() {
+            if index > 0 {
+                field.type(" ")
+                rig.monitor.handleKeyDown(keyCode: KC.space, flags: [],
+                    renderedSourceLayoutID: rig.enToRu.sourceLayoutID)
+            }
+            field.type(word)
+            try rig.type(word, source: rig.enToRu.sourceLayoutID)
+        }
+    }
+
+    /// The same evidence AppDelegate uses: layout mapping plus the loaded lexicon.
+    @MainActor
+    private func multiWord(_ rig: Rig, _ request: CombinedShiftRequest) -> CombinedShiftRequest? {
+        let lexicon = PredictionLexicon(wordsByLanguage: [
+            "ru": ["привет": 1_000_000, "мир": 700_000], "en": ["hello": 900_000]
+        ])
+        let coordinator = PredictionCoordinator(monitor: rig.monitor, converter: rig.converter,
+            engine: PredictionEngine(lexicon: lexicon))
+        let context = rig.enToRu
+        return MultiWordSpan.request(from: request, context: context) { keys in
+            guard let pair = DynamicKeyMapping.convertKeys(keys, context: context) else { return false }
+            return coordinator.prefersOtherLayout(original: pair.original,
+                converted: pair.converted, sourceLanguage: "en")
+        }
+    }
+
+    @MainActor
+    func testSeveralWrongLayoutWordsAreFixedByOneDoubleShift() throws {
+        let field = Field(pid: 5160, text: "")
+        let rig = try Rig(fields: [field])
+        try typeWords(rig, field, ["hello", "ghbdtn", "vbh"])
+        let request = try rig.request(rig.enToRu)
+        let span = try XCTUnwrap(multiWord(rig, request))
+        XCTAssertEqual(span.wordKeys.count, "ghbdtn vbh".count, "The run stops at a correct word")
+        rig.sourceID = rig.enToRu.targetLayoutID
+        XCTAssertEqual(rig.run(span, direction: rig.enToRu).outcome,
+            .confirmed(resultID: rig.enToRu.targetLayoutID))
+        XCTAssertEqual(field.text, "hello привет мир")
+    }
+
+    @MainActor
+    func testRunLongerThanTheLiveLimitFixesOnlyTheLastWordAsBefore() throws {
+        let field = Field(pid: 5161, text: "")
+        let rig = try Rig(fields: [field])
+        try typeWords(rig, field, ["ghbdtn", "ghbdtn", "ghbdtn", "ghbdtn"])
+        let request = try rig.request(rig.enToRu)
+        XCTAssertNil(multiWord(rig, request), "27 units exceed the 24-unit live write")
+        rig.sourceID = rig.enToRu.targetLayoutID
+        XCTAssertEqual(rig.run(request, direction: rig.enToRu).outcome,
+            .confirmed(resultID: rig.enToRu.targetLayoutID))
+        XCTAssertEqual(field.text, "ghbdtn ghbdtn ghbdtn привет")
+    }
+
+    @MainActor
+    func testSingleWrongWordKeepsTheOrdinaryWordPath() throws {
+        let field = Field(pid: 5162, text: "")
+        let rig = try Rig(fields: [field])
+        try typeWords(rig, field, ["hello", "ghbdtn"])
+        XCTAssertNil(multiWord(rig, try rig.request(rig.enToRu)))
+    }
 }

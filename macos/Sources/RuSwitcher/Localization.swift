@@ -288,6 +288,8 @@ enum L10n {
     static var updateBeta: String { s("update.beta") }
     static var securePausedTitle: String { s("secure.paused.title") }
     static var rivalTapTitle: String { s("rival.hint.title") }
+    /// The caret hint: the offered word and the gesture that accepts it.
+    static func correctionHint(word: String) -> String { String(format: s("correction.hint"), word) }
     static func rivalTapBody(programName: String) -> String {
         programName.isEmpty ? s("rival.hint.body.unnamed")
             : String(format: s("rival.hint.body.named"), programName)
@@ -394,6 +396,7 @@ enum L10n {
             "menu.autoConvert": ("Автоисправление", "Automatic correction"),
             "menu.inputSource": ("Раскладка", "Input Source"),
             "menu.more": ("Дополнительно", "More"),
+            "correction.hint": ("%@  ·  Shift ×2 — исправить", "%@  ·  Shift ×2 to fix"),
             "rival.hint.title": ("Рядом работает другой переключатель", "Another layout switcher is running"),
             "rival.hint.body.named": ("Рядом работает другой переключатель раскладки (%@). Он может мешать MacSwitcher.", "Another layout switcher is running nearby (%@). It may interfere with MacSwitcher."),
             "rival.hint.body.unnamed": ("Рядом работает другой переключатель раскладки. Он может мешать MacSwitcher.", "Another layout switcher is running nearby. It may interfere with MacSwitcher."),

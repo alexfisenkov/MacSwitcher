@@ -1224,4 +1224,174 @@ extension ProductionPredictionCoordinatorTests {
         XCTAssertEqual(field.queuedText, 0)
         XCTAssertEqual(rig.applied, [])
     }
+
+    // MARK: - Hint at the caret (R11)
+
+    @MainActor
+    private func doubleShift(_ rig: Rig, field: Field, pair: (en: String, ru: String))
+        -> (CombinedShiftRequest, CombinedShiftContext) {
+        let context = CombinedShiftContext(sourceLayoutID: pair.en, targetLayoutID: pair.ru)
+        let request = CombinedShiftRequest(action: .convert(context), wordContext: context,
+            wordKeys: [], prevWordKeys: [], lineKeys: [], lineSourceLayoutID: nil, boundaryCount: 0,
+            reconvert: false, inputRevision: rig.monitor.inputRevision,
+            frontProcessID: field.pid, focus: field.focus())
+        // The first tap already selected the opposite source.
+        rig.sourceID = pair.ru
+        return (request, context)
+    }
+
+    @MainActor
+    func testHintIsShownWithoutWritingAndDoubleShiftAppliesExactlyIt() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2401, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        var shown: [String] = []
+        rig.coordinator.onHintShown = { shown.append($0.word) }
+        rig.deliver("ghbdtv ")
+        rig.settle(expected: .hinted)
+        XCTAssertEqual(shown, ["привет"])
+        XCTAssertEqual(field.queuedText, 0)
+        XCTAssertEqual(field.queuedSelection, 0)
+        XCTAssertEqual(rig.beginLeaseAttempts, 0)
+        XCTAssertEqual(field.text, "ghbdtv ")
+        let gesture = doubleShift(rig, field: field, pair: pair)
+        XCTAssertNotNil(rig.coordinator.currentHint(for: field.focus()))
+        let result = rig.coordinator.acceptHint(request: gesture.0, context: gesture.1)
+        XCTAssertEqual(result, .confirmed)
+        XCTAssertEqual(field.text, "привет ")
+        XCTAssertEqual(rig.sourceID, pair.ru)
+        XCTAssertNil(rig.coordinator.currentHint(for: field.focus()))
+    }
+
+    @MainActor
+    func testTypingClickOrAnotherFieldRetireTheHint() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2402, text: "")
+        let other = Field(pid: 2402, text: "", element: AXUIElementCreateSystemWide())
+        let rig = Rig(fields: [field, other], englishID: pair.en, russianID: pair.ru)
+        var dismissed: [CorrectionHintDismissal] = []
+        rig.coordinator.onHintDismissed = { dismissed.append($0) }
+        rig.deliver("ghbdtv ")
+        rig.settle(expected: .hinted)
+        // Another field never accepts it: the normal double Shift path runs.
+        XCTAssertNil(rig.coordinator.currentHint(for: other.focus()))
+        let foreign = doubleShift(rig, field: other, pair: pair)
+        XCTAssertNil(rig.coordinator.acceptHint(request: foreign.0, context: foreign.1))
+        // A click (or any key) advances the input revision and removes it.
+        rig.monitor.resetCombinedShift()
+        XCTAssertNil(rig.coordinator.currentHint(for: field.focus()))
+        XCTAssertEqual(dismissed, [.invalidated])
+        rig.sourceID = pair.en
+        rig.deliver("ghbdtv ")
+        rig.settle(expected: .hinted)
+        rig.deliver("a")
+        rig.settle()
+        XCTAssertNil(rig.coordinator.currentHint(for: field.focus()))
+        XCTAssertEqual(dismissed, [.invalidated, .typing])
+        XCTAssertEqual(field.queuedText, 0)
+    }
+
+    @MainActor
+    func testDifferentLengthHintIsNeverShownAndDoubleShiftTakesTheOrdinaryPath() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2403, text: "")
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru)
+        var events: [RuntimeDiagnosticEvent] = []
+        var shown: [String] = []
+        rig.coordinator.eventRecorder = { events.append($0) }
+        rig.coordinator.onHintShown = { shown.append($0.word) }
+        rig.deliver("ghbdn ")
+        rig.settle(expected: .noProposal)
+        XCTAssertTrue(shown.isEmpty, "An offer double Shift cannot apply is never shown")
+        XCTAssertNil(rig.coordinator.currentHint(for: field.focus()))
+        XCTAssertNil(rig.coordinator.latestHint)
+        let gesture = doubleShift(rig, field: field, pair: pair)
+        XCTAssertNil(rig.coordinator.acceptHint(request: gesture.0, context: gesture.1))
+        XCTAssertEqual(field.text, "ghbdn ")
+        XCTAssertEqual(field.queuedText, 0)
+        XCTAssertFalse(events.contains(.hintShown))
+    }
+
+    // MARK: - Enter/Tab as a boundary (owner, 22.11: short delay)
+
+    @MainActor
+    private func boundaryRig(_ field: Field, pair: (en: String, ru: String)) -> Rig {
+        let lexicon = PredictionLexicon(wordsByLanguage: [
+            "ru": ["кот": 600, "привет": 1_000_000], "en": ["hello": 900_000]
+        ])
+        let rig = Rig(fields: [field], englishID: pair.en, russianID: pair.ru, lexicon: lexicon)
+        let coordinator = rig.coordinator
+        rig.monitor.onBoundaryKey = { [weak coordinator] snapshot, ticket in
+            coordinator?.correctBeforeBoundaryKey(snapshot, ticket: ticket) ?? false
+        }
+        return rig
+    }
+
+    @MainActor
+    private func awaitHold(_ rig: Rig, _ ticket: BoundaryKeyHold.Ticket) {
+        let deadline = Date(timeIntervalSinceNow: 1)
+        while !rig.monitor.boundaryKeyHold.isFinished(ticket) && Date() < deadline {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.005))
+        }
+    }
+
+    @MainActor
+    func testEnterAfterConfidentWrongLayoutWordCorrectsItBeforeTheKeyGoes() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2410, text: "")
+        let rig = boundaryRig(field, pair: pair)
+        var finished: [PredictionEvaluationOutcome] = []
+        rig.coordinator.onBoundaryHoldFinished = { finished.append($0) }
+        rig.deliver("rjn")
+        rig.settle()
+        XCTAssertEqual(field.text, "rjn", "Three letters are never corrected inside the word")
+        rig.monitor.handleKeyDown(keyCode: KC.enter, flags: [], boundaryHoldPermitted: true)
+        let ticket = try XCTUnwrap(rig.monitor.takeBoundaryHoldTicket())
+        XCTAssertNotNil(rig.monitor.boundaryHoldTicket, "The word stays until the correction ends")
+        awaitHold(rig, ticket)
+        XCTAssertEqual(finished, [.applied])
+        XCTAssertEqual(field.text, "кот")
+        XCTAssertEqual(rig.sourceID, pair.ru)
+        XCTAssertNil(rig.monitor.boundaryHoldTicket)
+        XCTAssertTrue(rig.monitor.boundaryKeyHold.isFinished(ticket))
+    }
+
+    @MainActor
+    func testEnterAfterDoubtfulWordOrWithModifiersIsNotCorrected() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2411, text: "")
+        let rig = boundaryRig(field, pair: pair)
+        var finished: [PredictionEvaluationOutcome] = []
+        rig.coordinator.onBoundaryHoldFinished = { finished.append($0) }
+        rig.deliver("ghbdtv")
+        rig.settle()
+        rig.monitor.handleKeyDown(keyCode: KC.tab, flags: [], boundaryHoldPermitted: true)
+        if let ticket = rig.monitor.takeBoundaryHoldTicket() { awaitHold(rig, ticket) }
+        XCTAssertNotEqual(finished.last, .applied)
+        XCTAssertEqual(field.text, "ghbdtv")
+        XCTAssertEqual(field.queuedText, 0)
+        XCTAssertNil(rig.monitor.boundaryHoldTicket)
+
+        field.text = ""; field.caret = 0
+        rig.deliver("rjn")
+        rig.settle()
+        rig.monitor.handleKeyDown(keyCode: KC.enter, flags: .maskCommand, boundaryHoldPermitted: true)
+        XCTAssertNil(rig.monitor.takeBoundaryHoldTicket(), "Cmd+Enter is a shortcut, never held")
+        XCTAssertEqual(field.text, "rjn")
+    }
+
+    @MainActor
+    func testEnterWithoutPermissionOrWordResetsAtOnceAsBefore() throws {
+        let pair = try layoutIDs()
+        let field = Field(pid: 2412, text: "")
+        let rig = boundaryRig(field, pair: pair)
+        rig.deliver("rjn")
+        rig.settle()
+        rig.monitor.handleKeyDown(keyCode: KC.enter, flags: [])
+        XCTAssertNil(rig.monitor.takeBoundaryHoldTicket())
+        XCTAssertNil(rig.monitor.boundaryHoldTicket)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        XCTAssertEqual(field.text, "rjn")
+        XCTAssertEqual(rig.beginLeaseAttempts, 0)
+    }
 }
