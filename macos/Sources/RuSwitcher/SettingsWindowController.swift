@@ -156,7 +156,7 @@ final class SettingsWindowController: NSObject, NSTabViewDelegate, NSTableViewDa
             detail.frame = NSRect(x: pad, y: 7, width: 420, height: 36)
             group.contentView?.addSubview(detail)
             group.contentView?.addSubview(flatKeycap(keycap,
-                frame: NSRect(x: column - pad - 92, y: 23, width: 92, height: 28)))
+                frame: NSRect(x: column - pad - 92, y: 23, width: 92, height: 28), alignment: .right))
             view.addSubview(group)
         }
         gestureRow(y: 316, title: "Shift", subtitle: L10n.nativeSingleShift, keycap: "⇧ Shift")
@@ -1740,20 +1740,21 @@ extension SettingsWindowController {
     static let columnWidth: CGFloat = 560
     static let groupPadding: CGFloat = 16
 
-    /// A flat «⇧ Shift» plate: a label on a tinted rounded shape, not a button.
-    func flatKeycap(_ text: String, frame: NSRect) -> NSBox {
+    /// A flat «⇧ Shift» key mark: plain secondary text on no fill and no border,
+    /// like a shortcut in a menu. A filled rounded shape read as a button.
+    func flatKeycap(_ text: String, frame: NSRect, alignment: NSTextAlignment = .left) -> NSBox {
         let plate = NSBox(frame: frame)
         plate.boxType = .custom
         plate.titlePosition = .noTitle
         plate.borderWidth = 0
-        plate.fillColor = .quaternaryLabelColor
-        plate.cornerRadius = 6
+        plate.fillColor = .clear
         plate.contentViewMargins = .zero
         plate.identifier = NSUserInterfaceItemIdentifier("shift.keycap")
         let label = NSTextField(labelWithString: text)
-        label.alignment = .center
-        label.font = .systemFont(ofSize: 12, weight: .medium)
-        label.frame = NSRect(x: 4, y: (frame.height - 17) / 2, width: frame.width - 8, height: 17)
+        label.alignment = alignment
+        label.font = .systemFont(ofSize: 13, weight: .medium)
+        label.textColor = .secondaryLabelColor
+        label.frame = NSRect(x: 0, y: (frame.height - 17) / 2, width: frame.width, height: 17)
         plate.contentView?.addSubview(label)
         return plate
     }

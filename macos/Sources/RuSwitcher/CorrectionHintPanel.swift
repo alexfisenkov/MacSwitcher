@@ -13,8 +13,14 @@ final class CorrectionHintPanel {
     let panel: NSPanel
     let label: NSTextField
     private let height: CGFloat = 24
+    private let flagRaised: () -> Bool
+    private let readCaret: (PendingCorrectionHint) -> NSRect?
 
-    init() {
+    /// `flagRaised` and `readCaret` are the session flag and the caret AX
+    /// read; tests replace them, the app uses the live ones.
+    init(flagRaised: (() -> Bool)? = nil, readCaret: ((PendingCorrectionHint) -> NSRect?)? = nil) {
+        self.flagRaised = flagRaised ?? { AutoSwitchPolicy.secureInputActive }
+        self.readCaret = readCaret ?? { CorrectionHintPanel.caretRect($0) }
         panel = CorrectionHintWindow(contentRect: NSRect(x: 0, y: 0, width: 120, height: height),
                                      styleMask: [.borderless, .nonactivatingPanel],
                                      backing: .buffered, defer: true)
@@ -66,17 +72,23 @@ final class CorrectionHintPanel {
         panel.setFrameOrigin(NSPoint(x: origin.x.rounded(), y: origin.y.rounded()))
     }
 
-    func show(_ hint: PendingCorrectionHint) {
-        update(word: hint.word, near: Self.caretRect(hint))
+    /// Under the raised flag the plate obeys the auto-correction rule per field
+    /// (`secureFlagPermits`): a password field, the flag holder's field or an
+    /// unsure AX answer gets neither a caret read nor a plate. Returns whether shown.
+    @discardableResult
+    func show(_ hint: PendingCorrectionHint) -> Bool {
+        guard hint.focus.secureFlagPermits(flagRaised: flagRaised()) else { hide(); return false }
+        update(word: hint.word, near: readCaret(hint))
         panel.orderFrontRegardless()
+        return true
     }
 
     func hide() { panel.orderOut(nil) }
 
     /// Screen bounds of the caret in the hint's own field, bounded to 50 ms.
-    /// Under a raised secure flag nothing is read: the plate goes by the pointer.
-    private static func caretRect(_ hint: PendingCorrectionHint) -> NSRect? {
-        guard !AutoSwitchPolicy.secureInputActive, hint.focus.fieldBoundary == nil else { return nil }
+    /// Called only after `show` admitted the field; never reads text.
+    static func caretRect(_ hint: PendingCorrectionHint) -> NSRect? {
+        guard hint.focus.fieldBoundary == nil else { return nil }
         let element = hint.focus.element
         AXUIElementSetMessagingTimeout(element, 0.05)
         var range = CFRange(location: max(0, hint.caretUTF16Location - 1), length: 1)

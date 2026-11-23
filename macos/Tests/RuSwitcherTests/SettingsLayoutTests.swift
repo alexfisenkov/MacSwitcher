@@ -185,6 +185,33 @@ final class SettingsLayoutTests: XCTestCase {
         }
     }
 
+    /// Blind acceptance alpha.38: a grey filled rounded rect of button size reads
+    /// as a button. The key mark is a plain key label: no fill, no border, no
+    /// bezel, secondary text — on «How to use» and in the daily settings pane.
+    @MainActor
+    func testShiftKeyMarksHaveNoButtonLookInLightAndDark() throws {
+        let tabs = SettingsWindowController().makeNativeTabs(nativeShiftApplied: true)
+        let settings = try XCTUnwrap(tabs.tabViewItem(at: 2).view as? NSTabView)
+        for (pane, root) in [("guide", tabs.tabViewItem(at: 0).view!), ("settings", settings.tabViewItem(at: 0).view!)] {
+            let marks = descendants(of: root).filter { $0.identifier?.rawValue == "shift.keycap" }
+            XCTAssertEqual(marks.count, 2, pane)
+            for mark in marks {
+                XCTAssertFalse(mark is NSButton, pane)
+                let box = try XCTUnwrap(mark as? NSBox)
+                XCTAssertEqual(box.borderWidth, 0, pane)
+                for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+                    NSAppearance(named: appearance)!.performAsCurrentDrawingAppearance {
+                        XCTAssertEqual(box.fillColor.usingColorSpace(.sRGB)?.alphaComponent ?? 1, 0,
+                                       "\(pane) \(appearance.rawValue): filled plate looks like a button")
+                    }
+                }
+                let label = try XCTUnwrap(descendants(of: box).compactMap { $0 as? NSTextField }.first)
+                XCTAssertFalse(label.isBezeled || label.drawsBackground || label.isEditable, pane)
+                XCTAssertEqual(label.textColor, .secondaryLabelColor, pane)
+            }
+        }
+    }
+
     @MainActor
     func testEachWordsItemHasAnExplanationUnderIt() throws {
         let tabs = SettingsWindowController().makeNativeTabs(nativeShiftApplied: true)
