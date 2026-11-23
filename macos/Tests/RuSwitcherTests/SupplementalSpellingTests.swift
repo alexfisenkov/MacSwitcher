@@ -26,45 +26,45 @@ final class SupplementalSpellingTests: XCTestCase {
 
     func testRussianInflectionAndEnglishPluralCorrectOnlyAtWordBoundary() {
         let russian = engine(targetWords: ["промптами"])
-        XCTAssertEqual(russian.evaluate(suffix: "ghjvgnfvb ", sourceLanguage: "en", atBoundary: true)?.replacementSuffix,
+        XCTAssertEqual(russian.appliedProposal(suffix: "ghjvgnfvb ", sourceLanguage: "en", atBoundary: true)?.replacementSuffix,
                        "промптами ")
-        XCTAssertNil(russian.evaluate(suffix: "ghjvgnfvb", sourceLanguage: "en"))
-        XCTAssertNil(russian.evaluate(suffix: "ghjvgn", sourceLanguage: "en", atBoundary: true))
+        XCTAssertNil(russian.appliedProposal(suffix: "ghjvgnfvb", sourceLanguage: "en"))
+        XCTAssertNil(russian.appliedProposal(suffix: "ghjvgn", sourceLanguage: "en", atBoundary: true))
 
         let english = PredictionEngine(lexicon: PredictionLexicon(wordsByLanguage: [:],
             spellingWordsByLanguage: ["en": ["prompts"]]))
         let wrong = String("prompts".map { KeyMapping.enToRu[$0] ?? $0 })
-        XCTAssertEqual(english.evaluate(suffix: wrong + " ", sourceLanguage: "ru", atBoundary: true)?.replacementSuffix,
+        XCTAssertEqual(english.appliedProposal(suffix: wrong + " ", sourceLanguage: "ru", atBoundary: true)?.replacementSuffix,
                        "prompts ")
-        XCTAssertNil(english.evaluate(suffix: wrong, sourceLanguage: "ru"))
+        XCTAssertNil(english.appliedProposal(suffix: wrong, sourceLanguage: "ru"))
     }
 
     func testValidSourceSpellingAndCrossLanguageCollisionAreProtected() {
         let protected = engine(sourceWords: ["ghjvgnfvb"], targetWords: ["промптами"])
-        XCTAssertNil(protected.evaluate(suffix: "ghjvgnfvb ", sourceLanguage: "en", atBoundary: true))
+        XCTAssertNil(protected.appliedProposal(suffix: "ghjvgnfvb ", sourceLanguage: "en", atBoundary: true))
         let crossLanguage = PredictionEngine(lexicon: PredictionLexicon(wordsByLanguage: [:],
             spellingWordsByLanguage: ["en": ["hello"], "ru": ["hello"]]))
-        XCTAssertNil(crossLanguage.evaluate(suffix: "hello ", sourceLanguage: "en", atBoundary: true))
+        XCTAssertNil(crossLanguage.appliedProposal(suffix: "hello ", sourceLanguage: "en", atBoundary: true))
         XCTAssertEqual(protected.lexicon.frequency(of: "промптами", language: "ru"), 0)
         XCTAssertEqual(protected.lexicon.prefixEvidence(for: "пром", language: "ru"), .empty)
     }
 
     func testUnweightedTargetCannotDefeatRareSourceOrStructuredProtection() {
         let rare = engine(targetWords: ["промптами"], fullSource: ["ghjvgnfvb": 1])
-        XCTAssertNil(rare.evaluate(suffix: "ghjvgnfvb ", sourceLanguage: "en", atBoundary: true))
+        XCTAssertNil(rare.appliedProposal(suffix: "ghjvgnfvb ", sourceLanguage: "en", atBoundary: true))
         let plain = engine(targetWords: ["промптами"])
         for token in ["ghjvgnfvb123", "ghjvgnfvb_", "https://ghjvgnfvb", "@ghjvgnfvb",
                       "GHJVGNFVB", "ghjVgnfvb", "ghjvgnfvb/path"] {
-            XCTAssertNil(plain.evaluate(suffix: token + " ", sourceLanguage: "en", atBoundary: true), token)
+            XCTAssertNil(plain.appliedProposal(suffix: token + " ", sourceLanguage: "en", atBoundary: true), token)
         }
     }
 
     func testPunctuationAlternativesMustHaveOneExactSpelling() {
         let sole = engine(targetWords: ["думаю"])
-        XCTAssertEqual(sole.evaluate(suffix: "levf. ", sourceLanguage: "en", atBoundary: true)?.replacementSuffix,
+        XCTAssertEqual(sole.appliedProposal(suffix: "levf. ", sourceLanguage: "en", atBoundary: true)?.replacementSuffix,
                        "думаю ")
         let ambiguous = engine(targetWords: ["дума", "думаю"])
-        XCTAssertNil(ambiguous.evaluate(suffix: "levf. ", sourceLanguage: "en", atBoundary: true))
+        XCTAssertNil(ambiguous.appliedProposal(suffix: "levf. ", sourceLanguage: "en", atBoundary: true))
     }
 
     func testBundledModernFormsCorrectAtBoundaryAndPreserveValidSources() async throws {
@@ -83,10 +83,10 @@ final class SupplementalSpellingTests: XCTestCase {
             XCTAssertEqual(lexicon.fullFrequency(of: item.wrong, language: item.source), 0, item.correct)
             XCTAssertEqual(lexicon.hasSupplementalSpelling(item.wrong, language: item.source), false, item.correct)
             XCTAssertEqual(lexicon.hasSupplementalSpelling(item.correct, language: item.target), true, item.correct)
-            XCTAssertEqual(engine.evaluate(suffix: item.wrong + " ", sourceLanguage: item.source,
+            XCTAssertEqual(engine.appliedProposal(suffix: item.wrong + " ", sourceLanguage: item.source,
                                        atBoundary: true)?.replacementSuffix, item.correct + " ", item.correct)
-            XCTAssertNil(engine.evaluate(suffix: item.wrong, sourceLanguage: item.source), item.correct)
-            XCTAssertNil(engine.evaluate(suffix: item.correct + " ", sourceLanguage: item.target,
+            XCTAssertNil(engine.appliedProposal(suffix: item.wrong, sourceLanguage: item.source), item.correct)
+            XCTAssertNil(engine.appliedProposal(suffix: item.correct + " ", sourceLanguage: item.target,
                                      atBoundary: true), item.correct)
         }
     }

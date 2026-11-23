@@ -119,6 +119,26 @@ class CollectorTests(unittest.TestCase):
             self.assertIsNotNone(event, message)
             self.assertEqual(event["event"], message)
 
+    def test_secure_flag_and_autocomplete_codes_are_collected(self):
+        for message in ("secureFlagWithEvents", "autocompleteSuggestionRefused"):
+            event = collector.parse_line(line(message, 3))
+            self.assertIsNotNone(event, message)
+            self.assertEqual(event["event"], message)
+
+    def test_rival_tap_and_loop_guard_codes_are_collected(self):
+        for message in ("rivalKeyboardTapActive", "autoLoopGuardTripped"):
+            event = collector.parse_line(line(message, 3))
+            self.assertIsNotNone(event, message)
+            self.assertEqual(event["event"], message)
+
+    def test_hint_boundary_undo_and_multiword_codes_are_collected(self):
+        for message in ("hintShown", "hintAccepted", "hintRefused", "typoLengthChangeRefused",
+                        "boundaryKeyCorrected", "boundaryKeyTimedOut", "implicitUndoObserved",
+                        "multiWordConverted"):
+            event = collector.parse_line(line(message, 3))
+            self.assertIsNotNone(event, message)
+            self.assertEqual(event["event"], message)
+
     def test_log_query_has_no_info_level_and_wider_budget(self):
         self.assertEqual(collector.QUERY_SECONDS, 30)
         self.assertEqual(collector.RUN_SECONDS, 120)

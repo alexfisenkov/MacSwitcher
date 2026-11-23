@@ -35,3 +35,4 @@ windows/publish/
 **/adaptive-rules.json
 **/adaptive-rules.json.*
 .aispa-work/
+.aispa-work/serve.*

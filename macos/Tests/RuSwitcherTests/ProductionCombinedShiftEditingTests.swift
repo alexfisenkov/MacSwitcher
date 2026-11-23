@@ -27,6 +27,8 @@ final class ProductionCombinedShiftEditingTests: XCTestCase {
         var substringCount = 0
         var substringReadDelay: TimeInterval = 0
         var subrole: (AXError, AnyObject?) = (.attributeUnsupported, nil)
+        /// Opt-in synthetic AX caret setter; nil keeps the setter unavailable.
+        var selectionSetter: ((CFRange) -> Bool)?
         var queuedLayoutTargets: [String] = []
         /// Opt-in capture of the editor's closed diagnostic codes.
         var capturesEditorDiagnostics = false
@@ -72,7 +74,10 @@ final class ProductionCombinedShiftEditingTests: XCTestCase {
                     },
                     selectionRange: { [self] in selectedRange() },
                     text: { [self] in substring($0) },
-                    secureSubrole: { [self] in subrole }))
+                    secureSubrole: { [self] in subrole },
+                    selectRange: selectionSetter == nil ? nil : { [self] range in
+                        selectionSetter?(range) ?? false
+                    }))
         }
 
         var observation: NativeFieldObservation {
@@ -543,8 +548,8 @@ final class ProductionCombinedShiftEditingTests: XCTestCase {
 
     func testMissingLexiconEvidenceDoesNotAuthorizeAutomaticMutation() {
         let unavailable = PredictionEngine(lexicon: PredictionLexicon(wordsByLanguage: ["en": [:], "ru": [:]]))
-        XCTAssertNil(unavailable.evaluate(suffix: "ghbdtn", sourceLanguage: "en"))
-        XCTAssertNil(unavailable.evaluate(suffix: "f привет", sourceLanguage: "ru"))
+        XCTAssertNil(unavailable.appliedProposal(suffix: "ghbdtn", sourceLanguage: "en"))
+        XCTAssertNil(unavailable.appliedProposal(suffix: "f привет", sourceLanguage: "ru"))
     }
 
     @MainActor
@@ -650,23 +655,23 @@ final class ProductionCombinedShiftEditingTests: XCTestCase {
             "en": ["hello": 900_000, "press": 500_000, "f": 20_000]
         ])
         let engine = PredictionEngine(lexicon: lexicon)
-        XCTAssertEqual(engine.evaluate(suffix: "ghbdtn", sourceLanguage: "en")?.replacementSuffix, "привет")
-        XCTAssertEqual(engine.evaluate(suffix: "ghbd", sourceLanguage: "en")?.replacementSuffix, "прив")
-        XCTAssertNil(engine.evaluate(suffix: "ghb", sourceLanguage: "en"))
-        XCTAssertNil(engine.evaluate(suffix: "f", sourceLanguage: "en"))
-        XCTAssertNil(engine.evaluate(suffix: "f ", sourceLanguage: "en", atBoundary: true))
-        XCTAssertEqual(engine.evaluate(suffix: "f привет", sourceLanguage: "ru")?.replacementSuffix, "а привет")
-        XCTAssertNil(engine.evaluate(suffix: "press f привет", sourceLanguage: "ru"))
-        XCTAssertNil(engine.evaluate(suffix: "MacSwitcher", sourceLanguage: "en", atBoundary: true))
-        XCTAssertNil(engine.evaluate(suffix: "API", sourceLanguage: "en", atBoundary: true))
-        XCTAssertNil(engine.evaluate(suffix: "https://example.org", sourceLanguage: "en", atBoundary: true))
-        XCTAssertNil(engine.evaluate(suffix: "/tmp/ghbdtn", sourceLanguage: "en", atBoundary: true))
-        XCTAssertNil(engine.evaluate(suffix: "Ctrl+f", sourceLanguage: "en", atBoundary: true))
-        XCTAssertEqual(engine.evaluate(suffix: "levf.", sourceLanguage: "en", atBoundary: true)?.replacementSuffix,
+        XCTAssertEqual(engine.appliedProposal(suffix: "ghbdtn", sourceLanguage: "en")?.replacementSuffix, "привет")
+        XCTAssertEqual(engine.appliedProposal(suffix: "ghbd", sourceLanguage: "en")?.replacementSuffix, "прив")
+        XCTAssertNil(engine.appliedProposal(suffix: "ghb", sourceLanguage: "en"))
+        XCTAssertNil(engine.appliedProposal(suffix: "f", sourceLanguage: "en"))
+        XCTAssertNil(engine.appliedProposal(suffix: "f ", sourceLanguage: "en", atBoundary: true))
+        XCTAssertEqual(engine.appliedProposal(suffix: "f привет", sourceLanguage: "ru")?.replacementSuffix, "а привет")
+        XCTAssertNil(engine.appliedProposal(suffix: "press f привет", sourceLanguage: "ru"))
+        XCTAssertNil(engine.appliedProposal(suffix: "MacSwitcher", sourceLanguage: "en", atBoundary: true))
+        XCTAssertNil(engine.appliedProposal(suffix: "API", sourceLanguage: "en", atBoundary: true))
+        XCTAssertNil(engine.appliedProposal(suffix: "https://example.org", sourceLanguage: "en", atBoundary: true))
+        XCTAssertNil(engine.appliedProposal(suffix: "/tmp/ghbdtn", sourceLanguage: "en", atBoundary: true))
+        XCTAssertNil(engine.appliedProposal(suffix: "Ctrl+f", sourceLanguage: "en", atBoundary: true))
+        XCTAssertEqual(engine.appliedProposal(suffix: "levf.", sourceLanguage: "en", atBoundary: true)?.replacementSuffix,
                        "думаю")
-        XCTAssertEqual(engine.evaluate(suffix: "xnj-nj", sourceLanguage: "en", atBoundary: true)?.replacementSuffix,
+        XCTAssertEqual(engine.appliedProposal(suffix: "xnj-nj", sourceLanguage: "en", atBoundary: true)?.replacementSuffix,
                        "что-то")
-        XCTAssertEqual(engine.evaluate(suffix: "nfrjt", sourceLanguage: "en", atBoundary: true)?.replacementSuffix,
+        XCTAssertEqual(engine.appliedProposal(suffix: "nfrjt", sourceLanguage: "en", atBoundary: true)?.replacementSuffix,
                        "такое")
     }
 }

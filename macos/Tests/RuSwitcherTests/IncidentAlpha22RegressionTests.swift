@@ -23,7 +23,7 @@ final class IncidentAlpha22RegressionTests: XCTestCase {
             ("b ", "и ", ["так"]),
             ("j,sxyj ", "обычно ", ["так", "и"])
         ] {
-            let proposal = engine.evaluate(suffix: source, sourceLanguage: "en",
+            let proposal = engine.appliedProposal(suffix: source, sourceLanguage: "en",
                 atBoundary: true, precedingWords: preceding, characterMapping: mapping,
                 russianPriority: true)
             XCTAssertEqual(proposal?.replacementSuffix, expected, source)
@@ -40,7 +40,7 @@ final class IncidentAlpha22RegressionTests: XCTestCase {
             ("j,sxyj", "обычно", ["так", "и"])
         ]
         for (source, expected, preceding) in examples {
-            let proposal = engine.evaluate(suffix: source, sourceLanguage: "en",
+            let proposal = engine.appliedProposal(suffix: source, sourceLanguage: "en",
                 precedingWords: preceding, characterMapping: mapping, russianPriority: true)
             XCTAssertEqual(proposal?.replacementSuffix, expected, source)
         }
@@ -49,12 +49,13 @@ final class IncidentAlpha22RegressionTests: XCTestCase {
     func testBundledPredictionOnWholePhraseIsOnlyAnExactSuffixProposal() throws {
         let (_, mapping) = try englishToRussianContext()
         let engine = PredictionEngine(lexicon: try PredictionLexicon.bundled())
-        let proposal = engine.evaluate(suffix: "nfr b j,sxyj ", sourceLanguage: "en",
+        let proposal = engine.appliedProposal(suffix: "nfr b j,sxyj ", sourceLanguage: "en",
             atBoundary: true, characterMapping: mapping, russianPriority: true)
         // Auto editing receives a snapshot for each current word. A full phrase
         // snapshot can change only its current word unless an explicit context
-        // rule returns a larger exact suffix.
-        XCTAssertEqual(proposal?.replacementSuffix, "nfr b обычно ")
+        // rule returns a larger exact suffix. Here the one-letter rule (b → и next to
+        // a converted Russian word, alpha.38) is such a rule; nfr stays outside it.
+        XCTAssertEqual(proposal?.replacementSuffix, "nfr и обычно ")
     }
 
     @MainActor

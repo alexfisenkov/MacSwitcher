@@ -20,6 +20,9 @@ if CommandLine.arguments.contains("--benchmark-prediction") {
     }
 }
 
+let qualityStatus = PredictionBenchmark.Quality.runCommandLine(arguments: CommandLine.arguments)
+if qualityStatus >= 0 { exit(qualityStatus) }
+
 if CommandLine.arguments.contains("--self-test-resources") {
     // A packaged app must find its dictionary INSIDE the app, never through
     // SwiftPM's absolute build-directory fallback on the developer's machine.

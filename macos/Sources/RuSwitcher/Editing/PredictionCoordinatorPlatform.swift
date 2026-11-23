@@ -49,7 +49,15 @@ struct PredictionCoordinatorPlatform {
     let noteUnconfirmedSource: (String, UInt64) -> Void
     var searchOverlayActive: () -> Bool = { false }
 
-    func isSecure() -> Bool { AutoSwitchPolicy.secureInputActive || secureInputActive() }
+    func secureFlagRaised() -> Bool { AutoSwitchPolicy.secureInputActive || secureInputActive() }
+
+    /// Under the raised flag only a positively ordinary field outside the
+    /// flag holder may be anchored, read or edited; no field means refusal.
+    func secureFlagBlocks(_ focus: CombinedShiftFocus?) -> Bool {
+        guard secureFlagRaised() else { return false }
+        guard let focus else { return true }
+        return !focus.secureFlagPermits(flagRaised: true)
+    }
 
     static func live(monitor: KeyboardMonitor) -> Self {
         Self(frontmost: {

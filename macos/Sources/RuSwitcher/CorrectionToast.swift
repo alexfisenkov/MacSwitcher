@@ -44,12 +44,12 @@ final class CorrectionToast: NSObject {
         message.maximumNumberOfLines = 2
         content.addSubview(message)
 
-        let undo = NSButton(title: label("Отменить", "Undo"), target: self, action: #selector(undoPressed))
+        let undo = NSButton(title: L10n.text("toast.undo"), target: self, action: #selector(undoPressed))
         undo.bezelStyle = .rounded
         undo.controlSize = .small
         undo.frame = NSRect(x: 14, y: 8, width: 100, height: 27)
         content.addSubview(undo)
-        let never = NSButton(title: label("Больше не исправлять фразу", "Never correct this phrase"),
+        let never = NSButton(title: L10n.text("toast.never"),
                              target: self, action: #selector(neverPressed))
         never.bezelStyle = .rounded
         never.controlSize = .small
@@ -93,6 +93,4 @@ final class CorrectionToast: NSObject {
         hide()
         action?()
     }
-
-    private func label(_ ru: String, _ en: String) -> String { L10n.languageCode == "ru" ? ru : en }
 }

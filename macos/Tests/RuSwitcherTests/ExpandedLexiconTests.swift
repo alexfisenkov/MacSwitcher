@@ -8,11 +8,11 @@ final class ExpandedLexiconTests: XCTestCase {
 
     func testExactKnownBrandCorrectsWrongLayoutWithoutChangingCase() throws {
         let engine = PredictionEngine(lexicon: try bundled())
-        XCTAssertEqual(engine.evaluate(suffix: "срфепзе ", sourceLanguage: "ru", atBoundary: true)?.replacementSuffix,
+        XCTAssertEqual(engine.appliedProposal(suffix: "срфепзе ", sourceLanguage: "ru", atBoundary: true)?.replacementSuffix,
                        "chatgpt ")
-        XCTAssertEqual(engine.evaluate(suffix: "СрфеПЗЕ", sourceLanguage: "ru")?.replacementSuffix,
+        XCTAssertEqual(engine.appliedProposal(suffix: "СрфеПЗЕ", sourceLanguage: "ru")?.replacementSuffix,
                        "ChatGPT")
-        XCTAssertEqual(engine.evaluate(suffix: "СрфеПЗЕ!  ", sourceLanguage: "ru", atBoundary: true)?.replacementSuffix,
+        XCTAssertEqual(engine.appliedProposal(suffix: "СрфеПЗЕ!  ", sourceLanguage: "ru", atBoundary: true)?.replacementSuffix,
                        "ChatGPT!  ")
     }
 
@@ -23,7 +23,7 @@ final class ExpandedLexiconTests: XCTestCase {
                      "HeyGen", "Midjourney", "Runway", "Higgsfield", "Microsoft", "Apple", "Google", "Yandex"]
         for term in terms {
             let wrong = String(term.map { KeyMapping.enToRu[$0] ?? $0 })
-            XCTAssertEqual(engine.evaluate(suffix: wrong + " ", sourceLanguage: "ru", atBoundary: true)?.replacementSuffix,
+            XCTAssertEqual(engine.appliedProposal(suffix: wrong + " ", sourceLanguage: "ru", atBoundary: true)?.replacementSuffix,
                            term + " ", term)
         }
     }
@@ -31,7 +31,7 @@ final class ExpandedLexiconTests: XCTestCase {
     func testBundledFullCountsAreInclusiveAndRareTailIsExactlyQueryable() throws {
         let lexicon = try bundled()
         XCTAssertEqual(lexicon.wordCounts, ["ru": 200_000, "en": 200_000])
-        XCTAssertEqual(lexicon.fullWordCounts, ["ru": 1_178_533, "en": 1_387_382])
+        XCTAssertEqual(lexicon.fullWordCounts, ["ru": 1_193_638, "en": 1_418_148])
         XCTAssertEqual(lexicon.fullFrequency(of: "RFR", language: "en-US"), 4)
         XCTAssertEqual(lexicon.frequency(of: "rfr", language: "en"), 0)
         XCTAssertEqual(lexicon.fullFrequency(of: "electroencephalographically", language: "en"), 1)
@@ -53,12 +53,12 @@ final class ExpandedLexiconTests: XCTestCase {
         let lexicon = PredictionLexicon(wordsByLanguage: ["ru": ["как": 8_000_000, "привет": 90_000]],
             fullWordsByLanguage: ["en": ["rfr": 4, "ghbdtn": 10]])
         let engine = PredictionEngine(lexicon: lexicon)
-        XCTAssertEqual(engine.evaluate(suffix: "rfr ", sourceLanguage: "en", atBoundary: true)?.replacementSuffix, "как ")
-        XCTAssertNil(engine.evaluate(suffix: "rfr", sourceLanguage: "en"))
-        XCTAssertNil(engine.evaluate(suffix: "ghbdtn ", sourceLanguage: "en", atBoundary: true))
+        XCTAssertEqual(engine.appliedProposal(suffix: "rfr ", sourceLanguage: "en", atBoundary: true)?.replacementSuffix, "как ")
+        XCTAssertNil(engine.appliedProposal(suffix: "rfr", sourceLanguage: "en"))
+        XCTAssertNil(engine.appliedProposal(suffix: "ghbdtn ", sourceLanguage: "en", atBoundary: true))
         let strong = PredictionLexicon(wordsByLanguage: ["ru": ["привет": 1_000_000]],
             fullWordsByLanguage: ["en": ["ghbdtn": 10]])
-        XCTAssertEqual(PredictionEngine(lexicon: strong).evaluate(suffix: "ghbdtn", sourceLanguage: "en")?.replacementSuffix, "привет")
+        XCTAssertEqual(PredictionEngine(lexicon: strong).appliedProposal(suffix: "ghbdtn", sourceLanguage: "en")?.replacementSuffix, "привет")
     }
 
     func testFullTailNeverConvertsOnTargetPrefixOrUnweightedBrandAlone() {
@@ -66,14 +66,14 @@ final class ExpandedLexiconTests: XCTestCase {
             fullWordsByLanguage: ["en": ["ghbdtn": 2], "ru": ["срфепзе": 1]],
             protectedTermsByLanguage: ["en": ["ChatGPT"]])
         let engine = PredictionEngine(lexicon: lexicon)
-        XCTAssertNil(engine.evaluate(suffix: "ghbdtn", sourceLanguage: "en"))
-        XCTAssertNil(engine.evaluate(suffix: "срфепзе ", sourceLanguage: "ru", atBoundary: true))
+        XCTAssertNil(engine.appliedProposal(suffix: "ghbdtn", sourceLanguage: "en"))
+        XCTAssertNil(engine.appliedProposal(suffix: "срфепзе ", sourceLanguage: "ru", atBoundary: true))
     }
 
     func testFrequentSourceWordsStillWinOverStrongerTarget() {
         let lexicon = PredictionLexicon(wordsByLanguage: ["en": ["rfr": 60], "ru": ["как": 80_000_000]],
             fullWordsByLanguage: ["en": ["rfr": 60]])
-        XCTAssertNil(PredictionEngine(lexicon: lexicon).evaluate(suffix: "rfr ", sourceLanguage: "en", atBoundary: true))
+        XCTAssertNil(PredictionEngine(lexicon: lexicon).appliedProposal(suffix: "rfr ", sourceLanguage: "en", atBoundary: true))
     }
 
     func testCuratedIndexProtectsNamesAndOnlyMatchesCompleteTerms() {
@@ -83,18 +83,18 @@ final class ExpandedLexiconTests: XCTestCase {
         XCTAssertTrue(lexicon.isProtectedTerm("hElLo", language: "en-GB"))
         XCTAssertTrue(lexicon.isProtectedTerm("СЕРГЕЙ", language: "ru"))
         XCTAssertFalse(lexicon.isProtectedTerm("Chat", language: "en"))
-        XCTAssertNil(engine.evaluate(suffix: "hello ", sourceLanguage: "en", atBoundary: true))
-        XCTAssertNil(engine.evaluate(suffix: "срфе", sourceLanguage: "ru"))
-        XCTAssertEqual(engine.evaluate(suffix: "срфепзе", sourceLanguage: "ru")?.replacementSuffix, "chatgpt")
+        XCTAssertNil(engine.appliedProposal(suffix: "hello ", sourceLanguage: "en", atBoundary: true))
+        XCTAssertNil(engine.appliedProposal(suffix: "срфе", sourceLanguage: "ru"))
+        XCTAssertEqual(engine.appliedProposal(suffix: "срфепзе", sourceLanguage: "ru")?.replacementSuffix, "chatgpt")
     }
 
     func testTechnicalAndMixedScriptProtectionStillAppliesToKnownTargets() {
         let engine = PredictionEngine(lexicon: PredictionLexicon(wordsByLanguage: [:],
             protectedTermsByLanguage: ["en": ["ChatGPT"]]))
         for source in ["срфепзе123", "срфепзе_", "срфеgзе", "https://срфепзе", "@срфепзе", "срфепзе()", "fooBar"] {
-            XCTAssertNil(engine.evaluate(suffix: source, sourceLanguage: "ru", atBoundary: true), source)
+            XCTAssertNil(engine.appliedProposal(suffix: source, sourceLanguage: "ru", atBoundary: true), source)
         }
-        XCTAssertNil(engine.evaluate(suffix: "СрфеПЗЕ", sourceLanguage: "ru", characterMapping: [:]))
+        XCTAssertNil(engine.appliedProposal(suffix: "СрфеПЗЕ", sourceLanguage: "ru", characterMapping: [:]))
     }
 
     func testBundledPositiveRegressionCorpus() throws {
@@ -106,7 +106,7 @@ final class ExpandedLexiconTests: XCTestCase {
             ("срфепзе ", "ru", "chatgpt "), ("СрфеПЗЕ ", "ru", "ChatGPT "),
         ]
         for (input, language, output) in cases {
-            XCTAssertEqual(engine.evaluate(suffix: input, sourceLanguage: language, atBoundary: true)?.replacementSuffix, output, input)
+            XCTAssertEqual(engine.appliedProposal(suffix: input, sourceLanguage: language, atBoundary: true)?.replacementSuffix, output, input)
         }
     }
 
@@ -122,8 +122,8 @@ final class ExpandedLexiconTests: XCTestCase {
                        "Фёдор", "Телеграм", "Яндекс", "ЧатГПТ", "Клод", "Миджорни", "ОпенАИ"]
         for (language, words) in [("en", english), ("ru", russian)] {
             for word in words {
-                XCTAssertNil(engine.evaluate(suffix: word + " ", sourceLanguage: language, atBoundary: true), word)
-                XCTAssertNil(engine.evaluate(suffix: word, sourceLanguage: language), word)
+                XCTAssertNil(engine.appliedProposal(suffix: word + " ", sourceLanguage: language, atBoundary: true), word)
+                XCTAssertNil(engine.appliedProposal(suffix: word, sourceLanguage: language), word)
             }
         }
     }
@@ -183,59 +183,59 @@ final class ExpandedLexiconTests: XCTestCase {
         XCTAssertNil(lexicon.frequency(of: "hello", language: "en"))
         let engine = PredictionEngine(lexicon: PredictionLexicon(wordsByLanguage: ["ru": ["привет": 900_000]],
                                                                  fullLexicon: lexicon))
-        XCTAssertNil(engine.evaluate(suffix: "ghbdtn ", sourceLanguage: "en", atBoundary: true))
-        XCTAssertNil(engine.evaluate(suffix: "f привет", sourceLanguage: "en"))
+        XCTAssertNil(engine.appliedProposal(suffix: "ghbdtn ", sourceLanguage: "en", atBoundary: true))
+        XCTAssertNil(engine.appliedProposal(suffix: "f привет", sourceLanguage: "en"))
         XCTAssertEqual(FullFrequencyLexicon().frequency(of: "ghbdtn", language: "en"), 0)
     }
 
     func testAllCapsAcronymsRemainProtectedEvenWithKnownTargetTerm() throws {
         let engine = PredictionEngine(lexicon: try bundled())
         for (word, language) in [("ПЗЕ", "ru"), ("ФЗШ", "ru"), ("РЕЕЗ", "ru"), ("GHBDTN", "en")] {
-            XCTAssertNil(engine.evaluate(suffix: word, sourceLanguage: language, atBoundary: true), word)
+            XCTAssertNil(engine.appliedProposal(suffix: word, sourceLanguage: language, atBoundary: true), word)
         }
     }
 
     func testExplicitBoundaryOwnerForceMayOverrideAllCapsProtection() {
         let engine = PredictionEngine(lexicon: PredictionLexicon(wordsByLanguage: ["ru": ["привет": 900_000]]))
-        XCTAssertEqual(engine.evaluate(suffix: "GHBDTN ", sourceLanguage: "en", atBoundary: true,
+        XCTAssertEqual(engine.appliedProposal(suffix: "GHBDTN ", sourceLanguage: "en", atBoundary: true,
                                        alwaysConvertWords: ["привет"])?.replacementSuffix, "ПРИВЕТ ")
-        XCTAssertNil(engine.evaluate(suffix: "GHBDTN", sourceLanguage: "en", alwaysConvertWords: ["привет"]))
+        XCTAssertNil(engine.appliedProposal(suffix: "GHBDTN", sourceLanguage: "en", alwaysConvertWords: ["привет"]))
     }
 
     func testInteriorDotRequiresExactRussianEvidenceAndNoDomainContext() {
         let lexicon = PredictionLexicon(wordsByLanguage: ["ru": ["люди": 90_000, "компьютер": 6_106]],
             protectedTermsByLanguage: ["ru": ["компьютер"]])
         let engine = PredictionEngine(lexicon: lexicon)
-        XCTAssertNil(engine.evaluate(suffix: "k.lb ", sourceLanguage: "en", atBoundary: true))
-        XCTAssertEqual(engine.evaluate(suffix: "k.lb ", sourceLanguage: "en", atBoundary: true,
+        XCTAssertNil(engine.appliedProposal(suffix: "k.lb ", sourceLanguage: "en", atBoundary: true))
+        XCTAssertEqual(engine.appliedProposal(suffix: "k.lb ", sourceLanguage: "en", atBoundary: true,
                                        precedingWords: ["эти"])?.replacementSuffix, "люди ")
-        XCTAssertEqual(engine.evaluate(suffix: "rjvgm.nth ", sourceLanguage: "en", atBoundary: true)?.replacementSuffix, "компьютер ")
+        XCTAssertEqual(engine.appliedProposal(suffix: "rjvgm.nth ", sourceLanguage: "en", atBoundary: true)?.replacementSuffix, "компьютер ")
         for cue in ["сайт", "домен", "domain", "website", "url", "link"] {
-            XCTAssertNil(engine.evaluate(suffix: "k.lb ", sourceLanguage: "en", atBoundary: true, precedingWords: [cue]), cue)
-            XCTAssertNil(engine.evaluate(suffix: cue + " k.lb ", sourceLanguage: "en", atBoundary: true), cue)
+            XCTAssertNil(engine.appliedProposal(suffix: "k.lb ", sourceLanguage: "en", atBoundary: true, precedingWords: [cue]), cue)
+            XCTAssertNil(engine.appliedProposal(suffix: cue + " k.lb ", sourceLanguage: "en", atBoundary: true), cue)
         }
         for token in ["foo.com", "google.com", "github.com", "example.org", "x.com", "t.co", "ya.ru", "vk.com",
                       "user@k.lb", "https://k.lb", "http://rjvgm.nth", "www.k.lb", "k.lb/path"] {
-            XCTAssertNil(engine.evaluate(suffix: token, sourceLanguage: "en", atBoundary: true), token)
+            XCTAssertNil(engine.appliedProposal(suffix: token, sourceLanguage: "en", atBoundary: true), token)
         }
         let recognized = PredictionLexicon(wordsByLanguage: ["ru": ["люди": 90_000], "en": ["k.lb": 400]])
-        XCTAssertNil(PredictionEngine(lexicon: recognized).evaluate(suffix: "k.lb ", sourceLanguage: "en", atBoundary: true))
+        XCTAssertNil(PredictionEngine(lexicon: recognized).appliedProposal(suffix: "k.lb ", sourceLanguage: "en", atBoundary: true))
     }
 
     func testHostnameShapeAbstainsWithoutNarrowPeopleCollocation() throws {
         let engine = PredictionEngine(lexicon: try bundled())
         for suffix in ["k.lb", "k.lb ", "Открой k.lb ", "go to k.lb ", "c.lf ", "Открой c.lf "] {
-            XCTAssertNil(engine.evaluate(suffix: suffix, sourceLanguage: "en", atBoundary: true), suffix)
+            XCTAssertNil(engine.appliedProposal(suffix: suffix, sourceLanguage: "en", atBoundary: true), suffix)
         }
         for modifier in ["эти", "все", "наши", "другие", "многие", "некоторые", "добрые", "хорошие", "новые", "молодые"] {
-            XCTAssertEqual(engine.evaluate(suffix: "k.lb ", sourceLanguage: "en", atBoundary: true,
+            XCTAssertEqual(engine.appliedProposal(suffix: "k.lb ", sourceLanguage: "en", atBoundary: true,
                                            precedingWords: [modifier])?.replacementSuffix, "люди ", modifier)
         }
-        XCTAssertEqual(engine.evaluate(suffix: "эти k.lb ", sourceLanguage: "en", atBoundary: true)?.replacementSuffix, "эти люди ")
-        XCTAssertNil(engine.evaluate(suffix: "domain эти k.lb ", sourceLanguage: "en", atBoundary: true))
-        XCTAssertNil(engine.evaluate(suffix: "сайт наши k.lb ", sourceLanguage: "en", atBoundary: true))
-        XCTAssertNil(engine.evaluate(suffix: "эти c.lf ", sourceLanguage: "en", atBoundary: true))
-        XCTAssertEqual(engine.evaluate(suffix: "rjvgm.nth ", sourceLanguage: "en", atBoundary: true)?.replacementSuffix, "компьютер ")
+        XCTAssertEqual(engine.appliedProposal(suffix: "эти k.lb ", sourceLanguage: "en", atBoundary: true)?.replacementSuffix, "эти люди ")
+        XCTAssertNil(engine.appliedProposal(suffix: "domain эти k.lb ", sourceLanguage: "en", atBoundary: true))
+        XCTAssertNil(engine.appliedProposal(suffix: "сайт наши k.lb ", sourceLanguage: "en", atBoundary: true))
+        XCTAssertNil(engine.appliedProposal(suffix: "эти c.lf ", sourceLanguage: "en", atBoundary: true))
+        XCTAssertEqual(engine.appliedProposal(suffix: "rjvgm.nth ", sourceLanguage: "en", atBoundary: true)?.replacementSuffix, "компьютер ")
     }
 
     func testCommonHostnameSuffixProtectionIsIndependentOfTargetFrequency() {
@@ -245,7 +245,7 @@ final class ExpandedLexiconTests: XCTestCase {
             "люсщь": 900_000, "лющкп": 900_000, "лютуе": 900_000, "лювум": 900_000
         ]]))
         for token in ["k.com", "k.org", "k.net", "k.dev"] {
-            XCTAssertNil(engine.evaluate(suffix: token, sourceLanguage: "en", atBoundary: true), token)
+            XCTAssertNil(engine.appliedProposal(suffix: token, sourceLanguage: "en", atBoundary: true), token)
         }
     }
 

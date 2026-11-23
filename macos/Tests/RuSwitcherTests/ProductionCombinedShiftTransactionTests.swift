@@ -148,7 +148,8 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
 
         func run(_ request: CombinedShiftRequest,
                  direction: CombinedShiftContext,
-                 onDiagnostic: @escaping (CombinedShiftDiagnostic) -> Void = { _ in }) -> CombinedShiftTransaction.Result {
+                 onDiagnostic: @escaping (CombinedShiftDiagnostic) -> Void = { _ in },
+                 onEvent: @escaping (RuntimeDiagnosticEvent) -> Void = { RuntimeDiagnostics.record($0) }) -> CombinedShiftTransaction.Result {
             let execution = CombinedShiftExecutionContext(focus: request.focus!,
                 inputRevision: request.inputRevision,
                 currentInputRevision: { [unowned self] in monitor.inputRevision })
@@ -192,7 +193,7 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
                     source == enToRu.sourceLayoutID ? enToRu
                         : source == ruToEn.sourceLayoutID ? ruToEn : nil
                 }, selectionKnownWord: selectionKnownWord,
-                diagnosticsEnabled: true, onDiagnostic: onDiagnostic)
+                diagnosticsEnabled: true, onDiagnostic: onDiagnostic, onEvent: onEvent)
         }
     }
 
@@ -1248,18 +1249,18 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
             "en": ["hello": 900_000, "press": 500_000, "f": 20_000]
         ])
         let engine = PredictionEngine(lexicon: lexicon)
-        XCTAssertEqual(engine.evaluate(suffix: "ghbd", sourceLanguage: "en")?.replacementSuffix, "прив")
-        XCTAssertNil(engine.evaluate(suffix: "ghb", sourceLanguage: "en"))
-        XCTAssertNil(engine.evaluate(suffix: "f", sourceLanguage: "en"))
-        XCTAssertNil(engine.evaluate(suffix: "f ", sourceLanguage: "en", atBoundary: true))
-        XCTAssertEqual(engine.evaluate(suffix: "f привет", sourceLanguage: "ru")?.replacementSuffix,
+        XCTAssertEqual(engine.appliedProposal(suffix: "ghbd", sourceLanguage: "en")?.replacementSuffix, "прив")
+        XCTAssertNil(engine.appliedProposal(suffix: "ghb", sourceLanguage: "en"))
+        XCTAssertNil(engine.appliedProposal(suffix: "f", sourceLanguage: "en"))
+        XCTAssertNil(engine.appliedProposal(suffix: "f ", sourceLanguage: "en", atBoundary: true))
+        XCTAssertEqual(engine.appliedProposal(suffix: "f привет", sourceLanguage: "ru")?.replacementSuffix,
             "а привет")
-        XCTAssertNil(engine.evaluate(suffix: "f привет", sourceLanguage: "ru",
+        XCTAssertNil(engine.appliedProposal(suffix: "f привет", sourceLanguage: "ru",
             precedingWords: ["press"]))
-        XCTAssertNil(engine.evaluate(suffix: "hello", sourceLanguage: "en", atBoundary: true))
+        XCTAssertNil(engine.appliedProposal(suffix: "hello", sourceLanguage: "en", atBoundary: true))
         for protected in ["API", "MacSwitcher", "iPhone", "/tmp/ghbdtn", "foo.com",
                           "user@example.com", "ghbdtn_foo"] {
-            XCTAssertNil(engine.evaluate(suffix: protected, sourceLanguage: "en", atBoundary: true),
+            XCTAssertNil(engine.appliedProposal(suffix: protected, sourceLanguage: "en", atBoundary: true),
                 protected)
         }
     }
@@ -1921,7 +1922,6 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
 
     @MainActor
     func testChangedRussianTokenChoosesRussianDespiteLongUnchangedBrand() throws {
-        Dict.warmUp() // isolate result-source policy; the slow-policy test covers lease timing
         let field = Field(pid: 5114, text: "ghbdtn MacSwitcher")
         field.caret = 0
         field.selection = field.text.utf16.count
@@ -1935,7 +1935,6 @@ final class ProductionCombinedShiftTransactionTests: XCTestCase {
 
     @MainActor
     func testChangedEnglishTokenChoosesEnglishDespiteLongUnchangedRussianWord() throws {
-        Dict.warmUp()
         let field = Field(pid: 5115, text: "руддщ привет")
         field.caret = 0
         field.selection = field.text.utf16.count
@@ -2050,5 +2049,177 @@ extension ProductionCombinedShiftTransactionTests {
         _ = rig.run(request, direction: rig.enToRu)
         XCTAssertEqual(rig.editEvents.filter { $0 == .recoverySameFieldBlocked }.count, 1)
         withExtendedLifetime(clock) {}
+    }
+}
+
+// MARK: - Secure Input decided per field; inline autocomplete suggestions
+
+extension ProductionCombinedShiftTransactionTests {
+    @MainActor
+    func testRaisedFlagWithDeliveredKeysConvertsInAnOrdinaryField() throws {
+        let restore = raiseSyntheticSecureFlag(holder: 77)
+        defer { restore() }
+        let field = Field(pid: 5301, text: "ghbdtn")
+        let rig = try Rig(fields: [field])
+        rig.monitor.secureFieldProbe = { .ordinary }
+        try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+        rig.sourceID = rig.enToRu.targetLayoutID
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome,
+            .confirmed(resultID: rig.enToRu.targetLayoutID))
+        XCTAssertEqual(field.text, "привет")
+    }
+
+    @MainActor
+    func testRaisedFlagRefusesPasswordUnknownAndHolderFieldsWithoutReading() throws {
+        for gate in 0..<3 {
+            let field = Field(pid: Int32(5310 + gate), text: "ghbdtn")
+            let restore = raiseSyntheticSecureFlag(holder: gate == 2 ? field.pid : 77)
+            defer { restore() }
+            let rig = try Rig(fields: [field])
+            // Worst case: the buffer exists, as if keys had been recorded before.
+            rig.monitor.secureFieldProbe = { .ordinary }
+            try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+            rig.sourceID = rig.enToRu.targetLayoutID
+            switch gate {
+            case 0: field.subrole = (.success, kAXSecureTextFieldSubrole as NSString)
+            case 1: field.subrole = (.cannotComplete, nil)
+            default: break
+            }
+            XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome, .stopped, "\(gate)")
+            XCTAssertEqual(field.text, "ghbdtn")
+            XCTAssertEqual(field.queuedText, 0)
+            XCTAssertEqual(field.queuedSelection, 0)
+            XCTAssertEqual(field.substringCount, 0, "No text is read from the field")
+            XCTAssertEqual(rig.sourceRequests, 0)
+        }
+    }
+
+    @MainActor
+    private func suggestionRig(_ pid: Int32,
+                               setter: @escaping (Field, CFRange) -> Bool) throws -> (Rig, Field) {
+        let field = Field(pid: pid, text: "ghbdtn")
+        let rig = try Rig(fields: [field])
+        try rig.type("ghbdtn", source: rig.enToRu.sourceLayoutID)
+        rig.sourceID = rig.enToRu.targetLayoutID
+        field.text = "ghbdtnxy" // the field appended its selected suggestion
+        field.selection = 2
+        field.selectionSetter = { [unowned field] range in setter(field, range) }
+        return (rig, field)
+    }
+
+    @MainActor
+    func testInlineSuggestionIsDismissedByCaretMoveThenTheWordIsCorrected() throws {
+        var requested: [CFRange] = []
+        let (rig, field) = try suggestionRig(5320) { field, range in
+            requested.append(range)
+            guard range.length == 0 else { return false }
+            field.text = "ghbdtn" // Spotlight/Chrome drop their own suggestion
+            field.caret = range.location
+            field.selection = 0
+            return true
+        }
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu).outcome,
+            .confirmed(resultID: rig.enToRu.targetLayoutID))
+        XCTAssertEqual(field.text, "привет")
+        XCTAssertEqual(requested.map { [$0.location, $0.length] }, [[6, 0]])
+        XCTAssertEqual(field.queuedText, 1, "One word replacement; the suggestion is never converted")
+    }
+
+    @MainActor
+    func testFieldThatKeepsTheSuggestionSelectedIsRefusedWithoutWrites() throws {
+        let (rig, field) = try suggestionRig(5321) { _, _ in false }
+        var events: [RuntimeDiagnosticEvent] = []
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu,
+            onEvent: { events.append($0) }).outcome, .stopped)
+        XCTAssertEqual(field.text, "ghbdtnxy")
+        XCTAssertEqual(field.selection, 2)
+        XCTAssertEqual(field.queuedText, 0)
+        XCTAssertEqual(field.queuedSelection, 0)
+        XCTAssertEqual(events.filter { $0 == .autocompleteSuggestionRefused }.count, 1)
+        XCTAssertEqual(rig.sourceRequests, 0)
+    }
+
+    @MainActor
+    func testSuggestionKeptAsTextIsReselectedAndRefused() throws {
+        var requested: [CFRange] = []
+        let (rig, field) = try suggestionRig(5322) { field, range in
+            requested.append(range)
+            field.caret = range.location
+            field.selection = range.length
+            return true
+        }
+        var events: [RuntimeDiagnosticEvent] = []
+        XCTAssertEqual(rig.run(try rig.request(rig.enToRu), direction: rig.enToRu,
+            onEvent: { events.append($0) }).outcome, .stopped)
+        XCTAssertEqual(field.text, "ghbdtnxy")
+        XCTAssertEqual([field.caret, field.selection], [6, 2], "The suggestion is restored")
+        XCTAssertEqual(requested.map { [$0.location, $0.length] }, [[6, 0], [6, 2]])
+        XCTAssertEqual(field.queuedText, 0)
+        XCTAssertEqual(events.filter { $0 == .autocompleteSuggestionRefused }.count, 1)
+    }
+    // MARK: - Several words in the wrong layout (R13)
+
+    @MainActor
+    private func typeWords(_ rig: Rig, _ field: Field, _ words: [String]) throws {
+        for (index, word) in words.enumerated() {
+            if index > 0 {
+                field.type(" ")
+                rig.monitor.handleKeyDown(keyCode: KC.space, flags: [],
+                    renderedSourceLayoutID: rig.enToRu.sourceLayoutID)
+            }
+            field.type(word)
+            try rig.type(word, source: rig.enToRu.sourceLayoutID)
+        }
+    }
+
+    /// The same evidence AppDelegate uses: layout mapping plus the loaded lexicon.
+    @MainActor
+    private func multiWord(_ rig: Rig, _ request: CombinedShiftRequest) -> CombinedShiftRequest? {
+        let lexicon = PredictionLexicon(wordsByLanguage: [
+            "ru": ["привет": 1_000_000, "мир": 700_000], "en": ["hello": 900_000]
+        ])
+        let coordinator = PredictionCoordinator(monitor: rig.monitor, converter: rig.converter,
+            engine: PredictionEngine(lexicon: lexicon))
+        let context = rig.enToRu
+        return MultiWordSpan.request(from: request, context: context) { keys in
+            guard let pair = DynamicKeyMapping.convertKeys(keys, context: context) else { return false }
+            return coordinator.prefersOtherLayout(original: pair.original,
+                converted: pair.converted, sourceLanguage: "en")
+        }
+    }
+
+    @MainActor
+    func testSeveralWrongLayoutWordsAreFixedByOneDoubleShift() throws {
+        let field = Field(pid: 5160, text: "")
+        let rig = try Rig(fields: [field])
+        try typeWords(rig, field, ["hello", "ghbdtn", "vbh"])
+        let request = try rig.request(rig.enToRu)
+        let span = try XCTUnwrap(multiWord(rig, request))
+        XCTAssertEqual(span.wordKeys.count, "ghbdtn vbh".count, "The run stops at a correct word")
+        rig.sourceID = rig.enToRu.targetLayoutID
+        XCTAssertEqual(rig.run(span, direction: rig.enToRu).outcome,
+            .confirmed(resultID: rig.enToRu.targetLayoutID))
+        XCTAssertEqual(field.text, "hello привет мир")
+    }
+
+    @MainActor
+    func testRunLongerThanTheLiveLimitFixesOnlyTheLastWordAsBefore() throws {
+        let field = Field(pid: 5161, text: "")
+        let rig = try Rig(fields: [field])
+        try typeWords(rig, field, ["ghbdtn", "ghbdtn", "ghbdtn", "ghbdtn"])
+        let request = try rig.request(rig.enToRu)
+        XCTAssertNil(multiWord(rig, request), "27 units exceed the 24-unit live write")
+        rig.sourceID = rig.enToRu.targetLayoutID
+        XCTAssertEqual(rig.run(request, direction: rig.enToRu).outcome,
+            .confirmed(resultID: rig.enToRu.targetLayoutID))
+        XCTAssertEqual(field.text, "ghbdtn ghbdtn ghbdtn привет")
+    }
+
+    @MainActor
+    func testSingleWrongWordKeepsTheOrdinaryWordPath() throws {
+        let field = Field(pid: 5162, text: "")
+        let rig = try Rig(fields: [field])
+        try typeWords(rig, field, ["hello", "ghbdtn"])
+        XCTAssertNil(multiWord(rig, try rig.request(rig.enToRu)))
     }
 }

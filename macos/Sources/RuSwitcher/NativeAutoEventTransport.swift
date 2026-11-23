@@ -69,11 +69,12 @@ extension NativeAutoEventTransport {
         let focus = execution.focus
         AXUIElementSetMessagingTimeout(focus.element, 0.003)
         defer { AXUIElementSetMessagingTimeout(focus.element, 0.05) }
+        let securePermit = SecureFlagFieldPermit(focus: focus)
         func cheapGate() -> Bool {
             ProcessInfo.processInfo.systemUptime < deadline && inputBarrierIsActive()
                 && execution.inputRevision == execution.currentInputRevision()
                 && focus.currentTargetProcessID() == focus.processID
-                && !AutoSwitchPolicy.secureInputActive
+                && securePermit.allows()
         }
         func validateFocus() -> Bool {
             var wasUnavailable = false
@@ -218,11 +219,12 @@ extension NativeAutoEventTransport {
             RuntimeDiagnostics.record(event)
         }
 
+        let securePermit = SecureFlagFieldPermit(focus: focus)
         func cheapGate() -> Bool {
             ProcessInfo.processInfo.systemUptime < deadline && inputBarrierIsActive()
                 && execution.inputRevision == execution.currentInputRevision()
                 && focus.currentTargetProcessID() == focus.processID
-                && !AutoSwitchPolicy.secureInputActive
+                && securePermit.allows()
         }
         func prepareRead(until phaseDeadline: TimeInterval) -> Bool {
             let limit = min(deadline, phaseDeadline)
@@ -384,7 +386,7 @@ extension CombinedShiftFocus {
     /// Whole bounded raw UTF-16 read from the original AX object. Checking the
     /// raw CFString first avoids silently repairing malformed surrogate units.
     func nativeWholeFieldObservation(prepareRead: () -> Bool) -> NativeFieldObservation? {
-        guard nativeFieldHasNoSecureSubrole(prepareRead: prepareRead), !AutoSwitchPolicy.secureInputActive,
+        guard nativeFieldHasNoSecureSubrole(prepareRead: prepareRead), secureFlagPermits(),
               prepareRead() else { return nil }
         if let fieldBoundary {
             return prepareRead() ? fieldBoundary.nativeWholeObservation?() : nil

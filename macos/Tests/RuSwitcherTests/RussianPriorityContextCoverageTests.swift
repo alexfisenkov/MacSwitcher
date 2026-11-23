@@ -15,9 +15,9 @@ final class RussianPriorityContextCoverageTests: XCTestCase {
             "k.,jq": "любой", "k.,jv": "любом"
         ]
         for (wrong, expected) in examples {
-            XCTAssertNil(engine.evaluate(suffix: wrong + " ", sourceLanguage: "en",
+            XCTAssertNil(engine.appliedProposal(suffix: wrong + " ", sourceLanguage: "en",
                                          atBoundary: true, russianPriority: false), wrong)
-            XCTAssertEqual(engine.evaluate(suffix: wrong + " ", sourceLanguage: "en",
+            XCTAssertEqual(engine.appliedProposal(suffix: wrong + " ", sourceLanguage: "en",
                                            atBoundary: true, russianPriority: true)?.replacementSuffix,
                            expected + " ", wrong)
         }
@@ -32,7 +32,7 @@ final class RussianPriorityContextCoverageTests: XCTestCase {
             "url k.,bn", "foo,k.lb"
         ]
         for input in negatives {
-            XCTAssertNil(engine.evaluate(suffix: input + " ", sourceLanguage: "en",
+            XCTAssertNil(engine.appliedProposal(suffix: input + " ", sourceLanguage: "en",
                                          atBoundary: true, russianPriority: true), input)
         }
     }
@@ -44,41 +44,41 @@ final class RussianPriorityContextCoverageTests: XCTestCase {
             "dfc": "вас", "jn": "от", "yfi": "наш", "vbh": "мир", "yb": "ни", "fuf": "ага"
         ]
         for (wrong, expected) in examples {
-            XCTAssertNil(engine.evaluate(suffix: wrong + " ", sourceLanguage: "en",
+            XCTAssertNil(engine.appliedProposal(suffix: wrong + " ", sourceLanguage: "en",
                                          atBoundary: true, russianPriority: true), wrong)
-            XCTAssertEqual(engine.evaluate(suffix: wrong + " ghbdtn ", sourceLanguage: "en",
+            XCTAssertEqual(engine.appliedProposal(suffix: wrong + " ghbdtn ", sourceLanguage: "en",
                                            atBoundary: true, russianPriority: true)?.replacementSuffix,
                            expected + " привет ", wrong)
-            XCTAssertEqual(engine.evaluate(suffix: wrong + " ghbdtn ", sourceLanguage: "en",
+            XCTAssertEqual(engine.appliedProposal(suffix: wrong + " ghbdtn ", sourceLanguage: "en",
                                            atBoundary: true, russianPriority: false)?.replacementSuffix,
                            wrong + " привет ", wrong)
         }
-        XCTAssertEqual(engine.evaluate(suffix: "ns ljvf ", sourceLanguage: "en",
+        XCTAssertEqual(engine.appliedProposal(suffix: "ns ljvf ", sourceLanguage: "en",
                                        atBoundary: true, russianPriority: true)?.replacementSuffix,
                        "ты дома ")
-        XCTAssertEqual(engine.evaluate(suffix: "vs hf,jnftv ", sourceLanguage: "en",
+        XCTAssertEqual(engine.appliedProposal(suffix: "vs hf,jnftv ", sourceLanguage: "en",
                                        atBoundary: true, russianPriority: true)?.replacementSuffix,
                        "мы работаем ")
     }
 
     func testContextRepairRejectsLiteralRussianEnglishAndMappingMismatch() throws {
         let engine = try engine()
-        XCTAssertNil(engine.evaluate(suffix: "vs привет ", sourceLanguage: "en",
+        XCTAssertNil(engine.appliedProposal(suffix: "vs привет ", sourceLanguage: "en",
                                      atBoundary: true, russianPriority: true))
         for word in ["vs", "here", "keyboard", "MacSwitcher"] {
-            XCTAssertNil(engine.evaluate(suffix: word + " ", sourceLanguage: "en",
+            XCTAssertNil(engine.appliedProposal(suffix: word + " ", sourceLanguage: "en",
                                          atBoundary: true, russianPriority: true), word)
         }
         for context in ["press", "script", "hello"] {
-            XCTAssertEqual(engine.evaluate(suffix: context + " vs ghbdtn ", sourceLanguage: "en",
+            XCTAssertEqual(engine.appliedProposal(suffix: context + " vs ghbdtn ", sourceLanguage: "en",
                                            atBoundary: true, russianPriority: true)?.replacementSuffix,
                            context + " vs привет ", context)
         }
-        XCTAssertEqual(engine.evaluate(suffix: "MacSwitcher vs ghbdtn ", sourceLanguage: "en",
+        XCTAssertEqual(engine.appliedProposal(suffix: "MacSwitcher vs ghbdtn ", sourceLanguage: "en",
             atBoundary: true, russianPriority: true)?.replacementSuffix, "MacSwitcher мы привет ")
         var mismatched = KeyMapping.enToRu
         mismatched["v"] = "н"
-        XCTAssertEqual(engine.evaluate(suffix: "vs ghbdtn ", sourceLanguage: "en",
+        XCTAssertEqual(engine.appliedProposal(suffix: "vs ghbdtn ", sourceLanguage: "en",
                                        atBoundary: true, characterMapping: mismatched,
                                        russianPriority: true)?.replacementSuffix,
                        "vs привет ")
@@ -88,19 +88,19 @@ final class RussianPriorityContextCoverageTests: XCTestCase {
         let engine = try engine()
         for name in ["MacSwitcher", "ChatGPT", "Figma", "iPhone", "Apple"] {
             for (typed, expected) in [("f", "а"), ("ye", "ну"), ("yt", "не"), ("b", "и")] {
-                XCTAssertEqual(engine.evaluate(suffix: typed, sourceLanguage: "en",
+                XCTAssertEqual(engine.appliedProposal(suffix: typed, sourceLanguage: "en",
                     precedingWords: [name], russianPriority: true)?.replacementSuffix, expected,
                     "\(name) \(typed) early")
-                XCTAssertEqual(engine.evaluate(suffix: typed + " ", sourceLanguage: "en",
+                XCTAssertEqual(engine.appliedProposal(suffix: typed + " ", sourceLanguage: "en",
                     atBoundary: true, precedingWords: [name], russianPriority: true)?.replacementSuffix,
                     expected + " ", "\(name) \(typed) boundary")
-                XCTAssertEqual(engine.evaluate(suffix: name + ", " + typed, sourceLanguage: "en",
+                XCTAssertEqual(engine.appliedProposal(suffix: name + ", " + typed, sourceLanguage: "en",
                     russianPriority: true)?.replacementSuffix, name + ", " + expected,
                     "\(name) \(typed) suffix")
             }
-            XCTAssertEqual(engine.evaluate(suffix: "f yt", sourceLanguage: "en",
+            XCTAssertEqual(engine.appliedProposal(suffix: "f yt", sourceLanguage: "en",
                 precedingWords: [name], russianPriority: true)?.replacementSuffix, "а не", name)
-            XCTAssertNil(engine.evaluate(suffix: name + " ", sourceLanguage: "en",
+            XCTAssertNil(engine.appliedProposal(suffix: name + " ", sourceLanguage: "en",
                 atBoundary: true, russianPriority: true), "name itself must stay protected")
         }
     }
@@ -110,11 +110,11 @@ final class RussianPriorityContextCoverageTests: XCTestCase {
         let accepted = [["hello", "привет"], ["hello", "привет", "world"],
             ["привет", "MacSwitcher"], ["MacSwitcher", "привет"]]
         for context in accepted {
-            XCTAssertEqual(engine.evaluate(suffix: "f", sourceLanguage: "en",
+            XCTAssertEqual(engine.appliedProposal(suffix: "f", sourceLanguage: "en",
                 precedingWords: context, russianPriority: true)?.replacementSuffix, "а", context.joined(separator: " "))
         }
         for context in [["hello"], ["press"], ["привет", "hello", "world"], ["iWidget"]] {
-            XCTAssertNil(engine.evaluate(suffix: "f", sourceLanguage: "en",
+            XCTAssertNil(engine.appliedProposal(suffix: "f", sourceLanguage: "en",
                 precedingWords: context, russianPriority: true), context.joined(separator: " "))
         }
     }
@@ -122,13 +122,13 @@ final class RussianPriorityContextCoverageTests: XCTestCase {
     func testLowercaseFrequentHomographsRemainEnglishEvidence() throws {
         let engine = try engine()
         for word in ["long", "together", "red", "line", "apple"] {
-            XCTAssertNil(engine.evaluate(suffix: "f", sourceLanguage: "en",
+            XCTAssertNil(engine.appliedProposal(suffix: "f", sourceLanguage: "en",
                 precedingWords: [word], russianPriority: true), word)
         }
-        XCTAssertEqual(engine.evaluate(suffix: "f", sourceLanguage: "en",
+        XCTAssertEqual(engine.appliedProposal(suffix: "f", sourceLanguage: "en",
             precedingWords: ["использую", "apple"], russianPriority: true)?.replacementSuffix,
             "а")
-        XCTAssertEqual(engine.evaluate(suffix: "f", sourceLanguage: "en",
+        XCTAssertEqual(engine.appliedProposal(suffix: "f", sourceLanguage: "en",
             precedingWords: ["Apple"], russianPriority: true)?.replacementSuffix, "а")
     }
 
@@ -136,7 +136,7 @@ final class RussianPriorityContextCoverageTests: XCTestCase {
         let lexicon = PredictionLexicon(wordsByLanguage: ["ru": ["привет": 177_992]],
             protectedTermsByLanguage: ["en": ["ns"]])
         let engine = PredictionEngine(lexicon: lexicon)
-        XCTAssertEqual(engine.evaluate(suffix: "ns ghbdtn ", sourceLanguage: "en",
+        XCTAssertEqual(engine.appliedProposal(suffix: "ns ghbdtn ", sourceLanguage: "en",
                                        atBoundary: true, russianPriority: true)?.replacementSuffix,
                        "ns привет ")
     }

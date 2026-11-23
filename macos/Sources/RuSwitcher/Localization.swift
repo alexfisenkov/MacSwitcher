@@ -90,7 +90,7 @@ enum L10n {
 
     private static let nativeDetailCopy: [String: [String]] = [
         "en": ["Automatic correction", "Personal words and phrases", "Remembered corrections", "Startup and updates", "Keyboard languages"],
-        "ru": ["Автокоррекция", "Личные слова и фразы", "Запомненные исправления", "Запуск и обновления", "Языки клавиатуры"],
+        "ru": ["Автоисправление", "Личные слова и фразы", "Запомненные исправления", "Запуск и обновления", "Языки клавиатуры"],
         "de": ["Automatische Korrektur", "Eigene Wörter und Ausdrücke", "Gemerkte Korrekturen", "Start und Updates", "Tastatursprachen"],
         "fr": ["Correction automatique", "Mots et expressions personnels", "Corrections mémorisées", "Démarrage et mises à jour", "Langues du clavier"],
         "es": ["Corrección automática", "Palabras y frases personales", "Correcciones guardadas", "Inicio y actualizaciones", "Idiomas del teclado"],
@@ -245,10 +245,78 @@ enum L10n {
     static var onboardAutoConvertTitle: String { s("onboard.autoConvert.title") }
     static var onboardAutoConvertText: String { s("onboard.autoConvert.text") }
 
+    // MARK: - Приветствие, настройки и обучение (alpha.38: ru/en, остальные языки — задача 08)
+    static var welcomeWindowTitle: String { s("welcome.window.title") }
+    static var welcomeTitle: String { s("welcome.title") }
+    static var welcomeLead: String { s("welcome.lead") }
+    static var welcomeAccessibilityTitle: String { s("welcome.accessibility.title") }
+    static var welcomeAccessibilityText: String { s("welcome.accessibility.text") }
+    static var welcomeInputMonitoringTitle: String { s("welcome.inputMonitoring.title") }
+    static var welcomeInputMonitoringText: String { s("welcome.inputMonitoring.text") }
+    static var welcomeOpenSettings: String { s("welcome.openSettings") }
+    static var welcomeGranted: String { s("welcome.granted") }
+    static var welcomeMissing: String { s("welcome.missing") }
+    static var welcomeAutoCorrectionHint: String { s("welcome.autoCorrection.hint") }
+    static var welcomeLaunchAtLogin: String { s("welcome.launchAtLogin") }
+    static var welcomeLaunchAtLoginHint: String { s("welcome.launchAtLogin.hint") }
+    static var welcomeDone: String { s("welcome.done") }
+    static var permissionsResetBody: String { s("permissions.reset.body") }
+    static var adaptiveIntroTitle: String { s("adaptive.intro.title") }
+    static var adaptiveIntroBody: String {
+        String(format: s("adaptive.intro.body"), nativeWordsTab, nativeLearningEntry)
+    }
+    static var adaptiveIntroAction: String { s("adaptive.intro.action") }
+    static var settingsGesturesGroup: String { s("settings.gestures.group") }
+    static var settingsStartupIconGroup: String { s("settings.startupIcon.group") }
+    static var settingsIcon: String { s("settings.icon") }
+    static var settingsIconBadge: String { s("settings.icon.badge") }
+    static var settingsIconFlag: String { s("settings.icon.flag") }
+    static var settingsMoreEntry: String { s("menu.more") + "…" }
+    static var settingsCheckSection: String { s("settings.section.check") }
+    static var settingsExpertSection: String { s("settings.section.expert") }
+    static var settingsCompactMenu: String { s("settings.compactMenu") }
+    static var settingsCompactMenuHint: String { s("settings.compactMenu.hint") }
+    static var wordsDictionaryDetail: String { s("words.dictionary.detail") }
+    static var wordsNeverDetail: String { s("words.never.detail") }
+    static var wordsAlwaysDetail: String { s("words.always.detail") }
+    static var wordsAppsDetail: String { s("words.apps.detail") }
+    static var wordsLearningDetail: String { s("words.learning.detail") }
+    static func settingsIntervalValue(_ milliseconds: Int) -> String {
+        String(format: s("settings.interval.value"), milliseconds)
+    }
+
     // MARK: - Обновления
     static var updateAvailable: String { s("update.available") }
     static var updateBeta: String { s("update.beta") }
     static var securePausedTitle: String { s("secure.paused.title") }
+    static var rivalTapTitle: String { s("rival.hint.title") }
+    /// The caret hint: the offered word and the gesture that accepts it.
+    static func correctionHint(word: String) -> String { String(format: s("correction.hint"), word) }
+    static func rivalTapBody(programName: String) -> String {
+        programName.isEmpty ? s("rival.hint.body.unnamed")
+            : String(format: s("rival.hint.body.named"), programName)
+    }
+    static var shellSetupTitle: String { s("shell.setup.title") }
+    static func shellSetupExplanation(sourceLine: String) -> String { s("shell.setup.explain") + "\n\n" + sourceLine }
+    static var shellSetupConnect: String { s("shell.setup.connect") }
+    static var shellSetupCancel: String { s("shell.setup.cancel") }
+    static var shellSetupFailed: String { s("shell.setup.failed") }
+    static func shellSetupResult(_ outcome: ShellOneButtonSetup.Outcome) -> String {
+        switch outcome {
+        case .cancelled: return ""
+        case .failed: return s("shell.setup.failed")
+        case .done(let installed, let openNewTerminal, let access):
+            var parts: [String] = []
+            if installed { parts.append(s("shell.setup.done.installed")) }
+            switch access {
+            case .granted: parts.append(s("shell.setup.done.granted"))
+            case .denied: parts.append(s("shell.setup.done.denied"))
+            case .noTerminal: parts.append(s("shell.setup.done.noTerminal"))
+            }
+            if openNewTerminal { parts.append(s("shell.setup.done.newWindow")) }
+            return parts.joined(separator: " ")
+        }
+    }
     static var securePausedBody: String { s("secure.paused.body") }
     static var securePausedUnknownApp: String { s("secure.paused.unknownapp") }
     static var updateNewVersion: String { s("update.newVersion") }
@@ -314,25 +382,38 @@ enum L10n {
     /// Текущий язык интерфейса («ru», «en», …) — например, чтобы открыть сайт на том же языке.
     static var languageCode: String { currentLang }
 
-    private static func s(_ key: String) -> String {
-        // New product copy is explicit in Russian/English; inherited translations
-        // still cover the remaining UI. No vendor changelog or install promises.
-        let own: [String: (String, String)] = [
-            "settings.tab.general": ("Общие", "General"),
-            "settings.tab.exceptions": ("Автозамена", "Correction"),
-            "whatsnew.body": ("MacSwitcher: один Shift меняет раскладку, двойной исправляет слово или выделение. Добавлена ранняя локальная RU/EN-коррекция. Это альфа-версия; неоднозначные случаи требуют проверки.", "MacSwitcher: one Shift changes layout, a double Shift fixes a word or selection. Early local RU/EN correction is available. This is an alpha; ambiguous cases still need testing."),
-            "onboard.autoConvert.text": ("Включить локальную автоматическую RU/EN-коррекцию при наборе? По умолчанию она выключена. Один Shift меняет раскладку, двойной исправляет слово или выделение. Автокоррекцию можно отключить в настройках.", "Enable local automatic RU/EN correction while typing? It is off by default. One Shift changes layout; a double Shift fixes a word or selection. Automatic correction can be turned off in Settings."),
-            "settings.checkUpdates.hint": ("Новая версия устанавливается из приложения после вашего подтверждения.", "New versions are installed from the app after your confirmation."),
-            "settings.betaChannel": ("Включать альфа- и бета-выпуски", "Include alpha and beta releases"),
-            "settings.betaChannel.hint": ("Предлагать предварительные выпуски MacSwitcher. Установка — после подтверждения.", "Include MacSwitcher prereleases. Installation requires confirmation."),
-            "settings.autoConvert.hint": ("Локальная RU/EN-коррекция при наборе и на границе слова. Неоднозначный текст может остаться без изменений.", "Local RU/EN correction during typing and at word boundaries. Ambiguous text may be left unchanged."),
-            "settings.version": ("Переключение раскладки и коррекция RU/EN", "Keyboard layout switching and RU/EN correction"),
-            "menu.autoConvert": ("Автоисправление", "Automatic correction"),
-            "menu.inputSource": ("Раскладка", "Input Source"),
-            "menu.more": ("Дополнительно", "More")
-        ]
-        if let pair = own[key] { return currentLang == "ru" ? pair.0 : pair.1 }
-        return strings[currentLang]?[key] ?? strings["en"]![key] ?? key
+    private static func s(_ key: String) -> String { s(key, language: currentLang) }
+
+    /// Строка по ключу на языке `language`: сначала таблицы переводов (`Localization/Strings+*.swift`,
+    /// 16 значений в порядке `languageOrder`), затем словарь `strings`; запасной язык — английский.
+    private static func s(_ key: String, language: String) -> String {
+        if let row = translations[key], let index = languageOrder.firstIndex(of: language) ?? languageOrder.firstIndex(of: "en"),
+           row.indices.contains(index) {
+            return row[index]
+        }
+        return strings[language]?[key] ?? strings["en"]![key] ?? key
+    }
+
+    /// Порядок языков в строках таблиц переводов.
+    static let languageOrder = ["en", "ru", "de", "fr", "es", "pt", "zh", "ja", "ko", "uk", "pl", "be", "el", "bg", "hy", "ka"]
+
+    /// Все таблицы переводов, собранные вместе.
+    static let translations: [String: [String]] = {
+        var all: [String: [String]] = [:]
+        for table in [welcomeStrings, settingsStrings, shellStrings, recoveryStrings, healthStrings, dictionaryStrings] {
+            all.merge(table) { first, _ in first }
+        }
+        return all
+    }()
+
+    /// Строка интерфейса по ключу на текущем языке (или на `language`, если он задан).
+    static func text(_ key: String, language: String? = nil) -> String {
+        s(key, language: language.map { supportedLanguages.contains($0) ? $0 : "en" } ?? currentLang)
+    }
+
+    /// Строка-формат по ключу с подстановкой значений.
+    static func text(_ key: String, language: String? = nil, _ arguments: CVarArg...) -> String {
+        String(format: text(key, language: language), arguments: arguments)
     }
 
     // MARK: - Все строки
@@ -354,7 +435,6 @@ enum L10n {
             "menu.share.email": "Email",
             "share.message": "MacSwitcher — a free keyboard-layout switcher for macOS. Fix a wrong layout with a tap:",
             "whatsnew.title": "What's New in MacSwitcher",
-            "whatsnew.body": "MacSwitcher alpha: one Shift changes layout; a double Shift fixes the last word or selection. Offline RU/EN correction now starts during typing and checks short-word context. Ambiguous cases still need real-world testing.",
             "whatsnew.more": "Full release notes",
             "menu.quit": "Quit",
 
@@ -374,7 +454,6 @@ enum L10n {
             "wizard.no": "No",
 
             "settings.title": "MacSwitcher — Settings",
-            "settings.tab.general": "General",
             "settings.tab.about": "About",
             "settings.tab.advanced": "Advanced",
             "settings.autoSwitch": "Enable MacSwitcher",
@@ -382,7 +461,6 @@ enum L10n {
             "settings.triggerRightOnly": "Right key only",
             "settings.triggerDoubleTap": "Double tap",
             "settings.triggerHint": "Tap the chosen key by itself, without other keys.",
-            "menu.autoConvert": "Automatic conversion (beta)",
             "menu.keySound": "Layout sound (beta)",
             "menu.caretFlag": "Flag at cursor (beta)",
             "menu.monoIcon": "Monochrome icon",
@@ -393,11 +471,6 @@ enum L10n {
             "settings.caretFlag": "Show layout flag at the text cursor (beta)",
             "settings.caretFlag.hint": "Briefly shows the layout flag next to the text cursor after a switch. Not available in all apps.",
             "menu.remoteDesktop": "Remote Desktop mode (beta)",
-            "settings.autoConvert": "Automatic conversion (beta)",
-            "settings.autoConvert.hint": "Detects words typed in the wrong layout and converts them automatically. Off by default.",
-            "onboard.autoConvert.title": "Automatic layout conversion",
-            "onboard.autoConvert.text": "MacSwitcher can fix the keyboard layout automatically as you type. It's off by default. The manual trigger (Option) always works and undoes a fix. Enable automatic conversion now?",
-            "settings.tab.exceptions": "Auto-conversion",
             "settings.remoteDesktop.hint": "For Apple Screen Sharing: run MacSwitcher on the remote Mac too and enable this on both.",
             "settings.exceptions.apps": "Don’t auto-convert in these apps",
             "settings.exceptions.never": "Never convert these words",
@@ -410,9 +483,6 @@ enum L10n {
             "learn.notNow": "Not now",
             "settings.launchAtLogin": "Launch at login",
             "settings.checkUpdates": "Check for updates automatically",
-            "settings.checkUpdates.hint": "Connects to GitHub on launch and periodically while running to look for new versions.",
-            "settings.betaChannel": "Get beta versions (for testing)",
-            "settings.betaChannel.hint": "Beta versions may be unstable — enable only if you want to help test upcoming releases.",
             "settings.convertByText": "Convert selection by text (flip both scripts)",
             "settings.convertByText.hint": "When on, the trigger flips the entire selection between scripts (Latin ↔ Cyrillic), ignoring the active layout. Off: each word is fixed smartly and correct text is kept.",
             "settings.convertWholeLine": "Trigger converts the whole line (not just the last word)",
@@ -422,7 +492,6 @@ enum L10n {
             "settings.layout1": "Layout 1:",
             "settings.layout2": "Layout 2:",
             "settings.autoDetect": "Auto-detect",
-            "settings.version": "Lightweight alternative to PuntoSwitcher",
             "settings.donate": "Support Development ❤️",
             "settings.contact": "Contact Developer",
             "settings.debugLog": "Debug logging",
@@ -477,7 +546,6 @@ enum L10n {
             "menu.share.email": "Почта",
             "share.message": "MacSwitcher — бесплатный переключатель раскладки для macOS. Исправляет раскладку одним нажатием:",
             "whatsnew.title": "Что нового в MacSwitcher",
-            "whatsnew.body": "MacSwitcher alpha: one Shift changes layout; a double Shift fixes the last word or selection. Offline RU/EN correction now starts during typing and checks short-word context. Ambiguous cases still need real-world testing.",
             "whatsnew.more": "Подробнее на GitHub",
             "menu.quit": "Выход",
 
@@ -497,7 +565,6 @@ enum L10n {
             "wizard.no": "Нет",
 
             "settings.title": "MacSwitcher — Настройки",
-            "settings.tab.general": "Основные",
             "settings.tab.about": "О программе",
             "settings.tab.advanced": "Расширенные",
             "settings.autoSwitch": "Включить MacSwitcher",
@@ -505,7 +572,6 @@ enum L10n {
             "settings.triggerRightOnly": "Только правая клавиша",
             "settings.triggerDoubleTap": "Двойной тап",
             "settings.triggerHint": "Нажимайте выбранную клавишу отдельно, без других клавиш.",
-            "menu.autoConvert": "Автоматическая конверсия (бета)",
             "menu.keySound": "Звук раскладки (бета)",
             "menu.caretFlag": "Флаг у курсора (бета)",
             "menu.monoIcon": "Монохромная иконка",
@@ -516,11 +582,6 @@ enum L10n {
             "settings.caretFlag": "Показывать флаг раскладки у курсора (бета)",
             "settings.caretFlag.hint": "После переключения ненадолго показывает флаг раскладки рядом с курсором. Доступно не во всех приложениях.",
             "menu.remoteDesktop": "Режим удалённого рабочего стола (бета)",
-            "settings.autoConvert": "Автоматическая конверсия (бета)",
-            "settings.autoConvert.hint": "Определяет слова в неправильной раскладке и конвертирует их сама. По умолчанию выкл.",
-            "onboard.autoConvert.title": "Автоматическая конверсия раскладки",
-            "onboard.autoConvert.text": "MacSwitcher может исправлять раскладку автоматически по ходу набора. По умолчанию выключено. Ручной триггер (Option) всегда работает — им же отменяется замена. Включить автоматическую конверсию сейчас?",
-            "settings.tab.exceptions": "Автоконверсия",
             "settings.remoteDesktop.hint": "Для Apple Screen Sharing: запустите MacSwitcher и на удалённом Mac, включив этот режим на обоих.",
             "settings.exceptions.apps": "Не конвертировать в этих приложениях",
             "settings.exceptions.never": "Никогда не конвертировать эти слова",
@@ -533,9 +594,6 @@ enum L10n {
             "learn.notNow": "Не сейчас",
             "settings.launchAtLogin": "Запускать при входе",
             "settings.checkUpdates": "Автоматически проверять обновления",
-            "settings.checkUpdates.hint": "Обращается к GitHub при запуске и периодически, пока приложение работает, чтобы узнать о новой версии.",
-            "settings.betaChannel": "Получать бета-версии (для тестирования)",
-            "settings.betaChannel.hint": "Бета-версии могут быть нестабильными. Включайте, только если хотите помочь тестировать будущие релизы.",
             "settings.convertByText": "Конвертировать выделение по тексту (флип обеих раскладок)",
             "settings.convertByText.hint": "Когда включено, триггер переворачивает всё выделение между письменностями (латиница ↔ кириллица) независимо от активной раскладки. Выключено: каждое слово чинится умно, а верный текст сохраняется.",
             "settings.convertWholeLine": "Триггер конвертирует всю строку (не только последнее слово)",
@@ -545,7 +603,6 @@ enum L10n {
             "settings.layout1": "Раскладка 1:",
             "settings.layout2": "Раскладка 2:",
             "settings.autoDetect": "Автоопределение",
-            "settings.version": "Лёгкая альтернатива PuntoSwitcher",
             "settings.donate": "Поддержать разработку ❤️",
             "settings.contact": "Связаться с разработчиком",
             "settings.debugLog": "Режим отладки",
@@ -605,7 +662,6 @@ enum L10n {
             "menu.share.email": "E-Mail",
             "share.message": "MacSwitcher — ein kostenloser Tastaturlayout-Umschalter für macOS. Falsches Layout per Tastendruck korrigieren:",
             "whatsnew.title": "Neu in MacSwitcher",
-            "whatsnew.body": "MacSwitcher alpha: one Shift changes layout; a double Shift fixes the last word or selection. Offline RU/EN correction now starts during typing and checks short-word context. Ambiguous cases still need real-world testing.",
             "whatsnew.more": "Vollständige Hinweise",
             "menu.quit": "Beenden",
             "wizard.accessibility.title": "Schritt 1 von 2: Bedienungshilfen",
@@ -619,7 +675,6 @@ enum L10n {
             "wizard.yes": "Ja",
             "wizard.no": "Nein",
             "settings.title": "MacSwitcher — Einstellungen",
-            "settings.tab.general": "Allgemein",
             "settings.tab.about": "Über",
             "settings.tab.advanced": "Erweitert",
             "settings.autoSwitch": "MacSwitcher aktivieren",
@@ -627,7 +682,6 @@ enum L10n {
             "settings.triggerRightOnly": "Nur rechte Taste",
             "settings.triggerDoubleTap": "Doppeltipp",
             "settings.triggerHint": "Tippen Sie die gewählte Taste allein, ohne andere Tasten.",
-            "menu.autoConvert": "Automatische Konvertierung (Beta)",
             "menu.keySound": "Layout-Ton (Beta)",
             "menu.caretFlag": "Flagge am Cursor (Beta)",
             "menu.monoIcon": "Monochromes Symbol",
@@ -639,11 +693,6 @@ enum L10n {
             "settings.caretFlag": "Layout-Flagge am Textcursor anzeigen (Beta)",
             "settings.caretFlag.hint": "Zeigt nach dem Wechsel kurz die Layout-Flagge neben dem Textcursor. Nicht in allen Apps verfügbar.",
             "menu.remoteDesktop": "Remotedesktop-Modus (Beta)",
-            "settings.autoConvert": "Automatische Konvertierung (Beta)",
-            "settings.autoConvert.hint": "Erkennt in falscher Belegung getippte Wörter und wandelt sie automatisch um. Standardmäßig aus.",
-            "onboard.autoConvert.title": "Automatische Layout-Konvertierung",
-            "onboard.autoConvert.text": "MacSwitcher kann das Tastaturlayout automatisch beim Tippen korrigieren. Standardmäßig aus. Der manuelle Auslöser (Option) funktioniert immer und macht eine Korrektur rückgängig. Automatische Konvertierung jetzt aktivieren?",
-            "settings.tab.exceptions": "Autokonvertierung",
             "settings.remoteDesktop.hint": "Für Apple Screen Sharing: MacSwitcher auch auf dem entfernten Mac starten und dort aktivieren.",
             "settings.exceptions.apps": "In diesen Apps nicht konvertieren",
             "settings.exceptions.never": "Diese Wörter nie konvertieren",
@@ -656,9 +705,6 @@ enum L10n {
             "learn.notNow": "Jetzt nicht",
             "settings.launchAtLogin": "Beim Anmelden starten",
             "settings.checkUpdates": "Automatisch nach Updates suchen",
-            "settings.checkUpdates.hint": "Verbindet sich beim Start und regelmäßig während der Ausführung mit GitHub, um nach neuen Versionen zu suchen.",
-            "settings.betaChannel": "Beta-Versionen erhalten (zum Testen)",
-            "settings.betaChannel.hint": "Beta-Versionen können instabil sein. Nur aktivieren, wenn du beim Testen kommender Releases helfen möchtest.",
             "settings.convertByText": "Auswahl nach Text konvertieren (beide Schriften umdrehen)",
             "settings.convertByText.hint": "Wenn aktiv, dreht der Trigger die gesamte Auswahl zwischen den Schriften um (Latein ↔ Kyrillisch), unabhängig vom aktiven Layout. Aus: jedes Wort wird klug korrigiert, korrekter Text bleibt erhalten.",
             "settings.convertWholeLine": "Trigger konvertiert die ganze Zeile (nicht nur das letzte Wort)",
@@ -668,7 +714,6 @@ enum L10n {
             "settings.layout1": "Layout 1:",
             "settings.layout2": "Layout 2:",
             "settings.autoDetect": "Automatisch",
-            "settings.version": "Leichte Alternative zu PuntoSwitcher",
             "settings.donate": "Entwicklung unterstützen ❤️",
             "settings.contact": "Entwickler kontaktieren",
             "settings.debugLog": "Debug-Protokollierung",
@@ -725,7 +770,6 @@ enum L10n {
             "menu.share.email": "E-mail",
             "share.message": "MacSwitcher — un commutateur de disposition clavier gratuit pour macOS. Corrigez une mauvaise disposition d’une touche :",
             "whatsnew.title": "Nouveautés de MacSwitcher",
-            "whatsnew.body": "MacSwitcher alpha: one Shift changes layout; a double Shift fixes the last word or selection. Offline RU/EN correction now starts during typing and checks short-word context. Ambiguous cases still need real-world testing.",
             "whatsnew.more": "Notes complètes",
             "menu.quit": "Quitter",
             "wizard.accessibility.title": "Étape 1 sur 2 : Accessibilité",
@@ -739,7 +783,6 @@ enum L10n {
             "wizard.yes": "Oui",
             "wizard.no": "Non",
             "settings.title": "MacSwitcher — Préférences",
-            "settings.tab.general": "Général",
             "settings.tab.about": "À propos",
             "settings.tab.advanced": "Avancé",
             "settings.autoSwitch": "Activer MacSwitcher",
@@ -747,7 +790,6 @@ enum L10n {
             "settings.triggerRightOnly": "Touche droite uniquement",
             "settings.triggerDoubleTap": "Double appui",
             "settings.triggerHint": "Appuyez seul sur la touche choisie, sans autre touche.",
-            "menu.autoConvert": "Conversion automatique (bêta)",
             "menu.keySound": "Son de disposition (bêta)",
             "menu.caretFlag": "Drapeau au curseur (bêta)",
             "menu.monoIcon": "Icône monochrome",
@@ -759,11 +801,6 @@ enum L10n {
             "settings.caretFlag": "Afficher le drapeau de disposition au curseur (bêta)",
             "settings.caretFlag.hint": "Affiche brièvement le drapeau de disposition près du curseur après un changement. Pas disponible dans toutes les apps.",
             "menu.remoteDesktop": "Mode Bureau à distance (bêta)",
-            "settings.autoConvert": "Conversion automatique (bêta)",
-            "settings.autoConvert.hint": "Détecte les mots tapés dans la mauvaise disposition et les convertit automatiquement. Désactivé par défaut.",
-            "onboard.autoConvert.title": "Conversion automatique de la disposition",
-            "onboard.autoConvert.text": "MacSwitcher peut corriger automatiquement la disposition pendant la frappe. Désactivé par défaut. Le déclencheur manuel (Option) fonctionne toujours et annule une correction. Activer la conversion automatique maintenant ?",
-            "settings.tab.exceptions": "Conversion auto",
             "settings.remoteDesktop.hint": "Pour le partage d’écran Apple : lancez MacSwitcher sur le Mac distant et activez-le des deux côtés.",
             "settings.exceptions.apps": "Ne pas convertir dans ces apps",
             "settings.exceptions.never": "Ne jamais convertir ces mots",
@@ -776,9 +813,6 @@ enum L10n {
             "learn.notNow": "Pas maintenant",
             "settings.launchAtLogin": "Lancer au démarrage",
             "settings.checkUpdates": "Vérifier les mises à jour automatiquement",
-            "settings.checkUpdates.hint": "Se connecte à GitHub au lancement et périodiquement pendant l’exécution pour rechercher de nouvelles versions.",
-            "settings.betaChannel": "Recevoir les versions bêta (pour tester)",
-            "settings.betaChannel.hint": "Les versions bêta peuvent être instables. À activer seulement si vous voulez aider à tester les futures versions.",
             "settings.convertByText": "Convertir la sélection selon le texte (inverser les deux écritures)",
             "settings.convertByText.hint": "Activé, le déclencheur inverse toute la sélection entre les écritures (latin ↔ cyrillique), quelle que soit la disposition active. Désactivé : chaque mot est corrigé intelligemment et le texte correct est conservé.",
             "settings.convertWholeLine": "Le déclencheur convertit toute la ligne (pas seulement le dernier mot)",
@@ -788,7 +822,6 @@ enum L10n {
             "settings.layout1": "Disposition 1 :",
             "settings.layout2": "Disposition 2 :",
             "settings.autoDetect": "Détection auto",
-            "settings.version": "Alternative légère à PuntoSwitcher",
             "settings.donate": "Soutenir le développement ❤️",
             "settings.contact": "Contacter le développeur",
             "settings.debugLog": "Journal de débogage",
@@ -845,7 +878,6 @@ enum L10n {
             "menu.share.email": "Correo",
             "share.message": "MacSwitcher: un cambiador de distribución de teclado gratuito para macOS. Corrige una distribución incorrecta con una tecla:",
             "whatsnew.title": "Novedades de MacSwitcher",
-            "whatsnew.body": "MacSwitcher alpha: one Shift changes layout; a double Shift fixes the last word or selection. Offline RU/EN correction now starts during typing and checks short-word context. Ambiguous cases still need real-world testing.",
             "whatsnew.more": "Notas completas",
             "menu.quit": "Salir",
             "wizard.accessibility.title": "Paso 1 de 2: Accesibilidad",
@@ -859,7 +891,6 @@ enum L10n {
             "wizard.yes": "Sí",
             "wizard.no": "No",
             "settings.title": "MacSwitcher — Ajustes",
-            "settings.tab.general": "General",
             "settings.tab.about": "Acerca de",
             "settings.tab.advanced": "Avanzado",
             "settings.autoSwitch": "Activar MacSwitcher",
@@ -867,7 +898,6 @@ enum L10n {
             "settings.triggerRightOnly": "Solo tecla derecha",
             "settings.triggerDoubleTap": "Doble toque",
             "settings.triggerHint": "Pulsa sola la tecla elegida, sin otras teclas.",
-            "menu.autoConvert": "Conversión automática (beta)",
             "menu.keySound": "Sonido de distribución (beta)",
             "menu.caretFlag": "Bandera en el cursor (beta)",
             "menu.monoIcon": "Icono monocromo",
@@ -879,11 +909,6 @@ enum L10n {
             "settings.caretFlag": "Mostrar la bandera de distribución en el cursor (beta)",
             "settings.caretFlag.hint": "Muestra brevemente la bandera de distribución junto al cursor tras un cambio. No disponible en todas las apps.",
             "menu.remoteDesktop": "Modo Escritorio remoto (beta)",
-            "settings.autoConvert": "Conversión automática (beta)",
-            "settings.autoConvert.hint": "Detecta palabras escritas en la distribución incorrecta y las convierte automáticamente. Desactivado por defecto.",
-            "onboard.autoConvert.title": "Conversión automática de distribución",
-            "onboard.autoConvert.text": "MacSwitcher puede corregir la distribución automáticamente mientras escribes. Desactivado por defecto. El activador manual (Option) siempre funciona y deshace una corrección. ¿Activar la conversión automática ahora?",
-            "settings.tab.exceptions": "Conversión automática",
             "settings.remoteDesktop.hint": "Para Compartir pantalla de Apple: ejecute MacSwitcher en el Mac remoto y actívelo en ambos.",
             "settings.exceptions.apps": "No convertir en estas apps",
             "settings.exceptions.never": "Nunca convertir estas palabras",
@@ -896,9 +921,6 @@ enum L10n {
             "learn.notNow": "Ahora no",
             "settings.launchAtLogin": "Iniciar al arrancar",
             "settings.checkUpdates": "Buscar actualizaciones automáticamente",
-            "settings.checkUpdates.hint": "Se conecta a GitHub al iniciar y periódicamente mientras se ejecuta para buscar nuevas versiones.",
-            "settings.betaChannel": "Recibir versiones beta (para pruebas)",
-            "settings.betaChannel.hint": "Las versiones beta pueden ser inestables. Actívalo solo si quieres ayudar a probar las próximas versiones.",
             "settings.convertByText": "Convertir la selección por texto (voltear ambos alfabetos)",
             "settings.convertByText.hint": "Activado, el disparador voltea toda la selección entre alfabetos (latino ↔ cirílico), sin importar la distribución activa. Desactivado: cada palabra se corrige de forma inteligente y el texto correcto se conserva.",
             "settings.convertWholeLine": "El disparador convierte toda la línea (no solo la última palabra)",
@@ -908,7 +930,6 @@ enum L10n {
             "settings.layout1": "Disposición 1:",
             "settings.layout2": "Disposición 2:",
             "settings.autoDetect": "Detección automática",
-            "settings.version": "Alternativa ligera a PuntoSwitcher",
             "settings.donate": "Apoyar el desarrollo ❤️",
             "settings.contact": "Contactar al desarrollador",
             "settings.debugLog": "Registro de depuración",
@@ -965,13 +986,11 @@ enum L10n {
             "menu.share.email": "E-mail",
             "share.message": "MacSwitcher — um alternador de layout de teclado gratuito para macOS. Corrija o layout errado com um toque:",
             "whatsnew.title": "Novidades do MacSwitcher",
-            "whatsnew.body": "MacSwitcher alpha: one Shift changes layout; a double Shift fixes the last word or selection. Offline RU/EN correction now starts during typing and checks short-word context. Ambiguous cases still need real-world testing.",
             "whatsnew.more": "Notas completas",
             "menu.quit": "Sair",
             "wizard.openSettings": "Abrir configurações",
             "wizard.later": "Mais tarde",
             "settings.title": "MacSwitcher — Configurações",
-            "settings.tab.general": "Geral",
             "settings.tab.about": "Sobre",
             "settings.tab.advanced": "Avançado",
             "settings.autoSwitch": "Ativar MacSwitcher",
@@ -979,7 +998,6 @@ enum L10n {
             "settings.triggerRightOnly": "Apenas tecla direita",
             "settings.triggerDoubleTap": "Toque duplo",
             "settings.triggerHint": "Toque sozinho na tecla escolhida, sem outras teclas.",
-            "menu.autoConvert": "Conversão automática (beta)",
             "menu.keySound": "Som de layout (beta)",
             "menu.caretFlag": "Bandeira no cursor (beta)",
             "menu.monoIcon": "Ícone monocromático",
@@ -991,11 +1009,6 @@ enum L10n {
             "settings.caretFlag": "Mostrar a bandeira de layout no cursor (beta)",
             "settings.caretFlag.hint": "Mostra brevemente a bandeira de layout ao lado do cursor após a troca. Não disponível em todos os apps.",
             "menu.remoteDesktop": "Modo Área de trabalho remota (beta)",
-            "settings.autoConvert": "Conversão automática (beta)",
-            "settings.autoConvert.hint": "Detecta palavras digitadas no layout errado e as converte automaticamente. Desativado por padrão.",
-            "onboard.autoConvert.title": "Conversão automática de layout",
-            "onboard.autoConvert.text": "O MacSwitcher pode corrigir o layout automaticamente enquanto você digita. Desativado por padrão. O gatilho manual (Option) sempre funciona e desfaz uma correção. Ativar a conversão automática agora?",
-            "settings.tab.exceptions": "Conversão automática",
             "settings.remoteDesktop.hint": "Para o Compartilhamento de Tela da Apple: execute o MacSwitcher no Mac remoto e ative em ambos.",
             "settings.exceptions.apps": "Não converter nestes apps",
             "settings.exceptions.never": "Nunca converter estas palavras",
@@ -1008,9 +1021,6 @@ enum L10n {
             "learn.notNow": "Agora não",
             "settings.launchAtLogin": "Iniciar no login",
             "settings.checkUpdates": "Verificar atualizações automaticamente",
-            "settings.checkUpdates.hint": "Conecta-se ao GitHub na inicialização e periodicamente enquanto está em execução para procurar novas versões.",
-            "settings.betaChannel": "Receber versões beta (para testes)",
-            "settings.betaChannel.hint": "As versões beta podem ser instáveis. Ative apenas se quiser ajudar a testar as próximas versões.",
             "settings.convertByText": "Converter a seleção pelo texto (inverter os dois alfabetos)",
             "settings.convertByText.hint": "Ativado, o gatilho inverte toda a seleção entre alfabetos (latino ↔ cirílico), independentemente do layout ativo. Desativado: cada palavra é corrigida de forma inteligente e o texto correto é mantido.",
             "settings.convertWholeLine": "O gatilho converte a linha inteira (não só a última palavra)",
@@ -1042,7 +1052,6 @@ enum L10n {
             "wizard.no": "Não",
             "settings.layout1": "Layout 1:",
             "settings.layout2": "Layout 2:",
-            "settings.version": "Alternativa leve ao PuntoSwitcher",
             "settings.debugLog": "Registro de depuração",
             "settings.showLog": "Mostrar arquivo de log",
             "settings.sendLog": "Enviar log",
@@ -1085,13 +1094,11 @@ enum L10n {
             "menu.share.email": "电子邮件",
             "share.message": "MacSwitcher — 免费的 macOS 键盘布局切换工具，一键修正打错的布局：",
             "whatsnew.title": "MacSwitcher 新功能",
-            "whatsnew.body": "MacSwitcher alpha: one Shift changes layout; a double Shift fixes the last word or selection. Offline RU/EN correction now starts during typing and checks short-word context. Ambiguous cases still need real-world testing.",
             "whatsnew.more": "完整更新说明",
             "menu.quit": "退出",
             "wizard.openSettings": "打开设置",
             "wizard.later": "稍后",
             "settings.title": "MacSwitcher — 设置",
-            "settings.tab.general": "通用",
             "settings.tab.about": "关于",
             "settings.tab.advanced": "高级",
             "settings.autoSwitch": "启用 MacSwitcher",
@@ -1099,7 +1106,6 @@ enum L10n {
             "settings.triggerRightOnly": "仅右侧按键",
             "settings.triggerDoubleTap": "双击",
             "settings.triggerHint": "单独点按所选按键，不要同时按其他键。",
-            "menu.autoConvert": "自动转换（测试版）",
             "menu.keySound": "布局提示音（测试版）",
             "menu.caretFlag": "光标处显示旗标（测试版）",
             "menu.monoIcon": "单色图标",
@@ -1111,11 +1117,6 @@ enum L10n {
             "settings.caretFlag": "在文本光标处显示布局旗标（测试版）",
             "settings.caretFlag.hint": "切换后在文本光标旁短暂显示布局旗标。并非所有应用都支持。",
             "menu.remoteDesktop": "远程桌面模式（测试版）",
-            "settings.autoConvert": "自动转换（测试版）",
-            "settings.autoConvert.hint": "检测以错误布局输入的词并自动转换。默认关闭。",
-            "onboard.autoConvert.title": "自动布局转换",
-            "onboard.autoConvert.text": "MacSwitcher 可以在你输入时自动纠正键盘布局。默认关闭。手动触发键（Option）始终有效并可撤销纠正。现在启用自动转换吗？",
-            "settings.tab.exceptions": "自动转换",
             "settings.remoteDesktop.hint": "用于 Apple 屏幕共享：在远程 Mac 上也运行 MacSwitcher 并在两端启用。",
             "settings.exceptions.apps": "在这些应用中不自动转换",
             "settings.exceptions.never": "从不转换这些词",
@@ -1128,9 +1129,6 @@ enum L10n {
             "learn.notNow": "暂不",
             "settings.launchAtLogin": "登录时启动",
             "settings.checkUpdates": "自动检查更新",
-            "settings.checkUpdates.hint": "在启动时以及运行期间定期连接 GitHub 以检查新版本。",
-            "settings.betaChannel": "获取测试版（用于测试）",
-            "settings.betaChannel.hint": "测试版可能不稳定。仅当你愿意帮助测试即将发布的版本时才启用。",
             "settings.convertByText": "按文本转换所选内容（翻转两种文字）",
             "settings.convertByText.hint": "开启后，触发键会将整个所选内容在两种文字之间翻转（拉丁 ↔ 西里尔），与当前布局无关。关闭：逐词智能修正，并保留已正确的文本。",
             "settings.convertWholeLine": "触发键转换整行（而不仅是最后一个词）",
@@ -1162,7 +1160,6 @@ enum L10n {
             "wizard.no": "否",
             "settings.layout1": "布局 1：",
             "settings.layout2": "布局 2：",
-            "settings.version": "PuntoSwitcher 的轻量替代品",
             "settings.debugLog": "调试日志",
             "settings.showLog": "显示日志文件",
             "settings.sendLog": "发送日志",
@@ -1205,13 +1202,11 @@ enum L10n {
             "menu.share.email": "メール",
             "share.message": "MacSwitcher — macOS 用の無料キーボードレイアウト切替ツール。間違ったレイアウトをワンタップで修正：",
             "whatsnew.title": "MacSwitcher の新機能",
-            "whatsnew.body": "MacSwitcher alpha: one Shift changes layout; a double Shift fixes the last word or selection. Offline RU/EN correction now starts during typing and checks short-word context. Ambiguous cases still need real-world testing.",
             "whatsnew.more": "リリースノート全文",
             "menu.quit": "終了",
             "wizard.openSettings": "設定を開く",
             "wizard.later": "後で",
             "settings.title": "MacSwitcher — 設定",
-            "settings.tab.general": "一般",
             "settings.tab.about": "このアプリについて",
             "settings.tab.advanced": "詳細",
             "settings.autoSwitch": "MacSwitcher を有効にする",
@@ -1219,7 +1214,6 @@ enum L10n {
             "settings.triggerRightOnly": "右キーのみ",
             "settings.triggerDoubleTap": "ダブルタップ",
             "settings.triggerHint": "選んだキーを単独で押してください（他のキーと同時押ししない）。",
-            "menu.autoConvert": "自動変換（ベータ）",
             "menu.keySound": "レイアウト音（ベータ）",
             "menu.caretFlag": "カーソルに旗（ベータ）",
             "menu.monoIcon": "モノクロアイコン",
@@ -1231,11 +1225,6 @@ enum L10n {
             "settings.caretFlag": "テキストカーソルにレイアウトの旗を表示（ベータ）",
             "settings.caretFlag.hint": "切り替え後、テキストカーソルの隣にレイアウトの旗を短く表示します。すべてのアプリで利用できるわけではありません。",
             "menu.remoteDesktop": "リモートデスクトップモード（ベータ）",
-            "settings.autoConvert": "自動変換（ベータ）",
-            "settings.autoConvert.hint": "間違ったレイアウトで入力した単語を検出し、自動的に変換します。デフォルトはオフ。",
-            "onboard.autoConvert.title": "自動レイアウト変換",
-            "onboard.autoConvert.text": "MacSwitcher は入力中にキーボードレイアウトを自動修正できます。デフォルトはオフです。手動トリガー（Option）は常に有効で修正を取り消せます。自動変換を今すぐ有効にしますか？",
-            "settings.tab.exceptions": "自動変換",
             "settings.remoteDesktop.hint": "Apple 画面共有用：リモート Mac でも MacSwitcher を起動し、両方で有効にしてください。",
             "settings.exceptions.apps": "これらのアプリでは変換しない",
             "settings.exceptions.never": "これらの単語は変換しない",
@@ -1248,9 +1237,6 @@ enum L10n {
             "learn.notNow": "後で",
             "settings.launchAtLogin": "ログイン時に起動",
             "settings.checkUpdates": "自動的にアップデートを確認",
-            "settings.checkUpdates.hint": "起動時および実行中に定期的に GitHub に接続して新しいバージョンを確認します。",
-            "settings.betaChannel": "ベータ版を受け取る（テスト用）",
-            "settings.betaChannel.hint": "ベータ版は不安定な場合があります。今後のリリースのテストに協力したい場合のみ有効にしてください。",
             "settings.convertByText": "選択範囲をテキストに従って変換（両方の文字を反転）",
             "settings.convertByText.hint": "オンにすると、トリガーはアクティブなレイアウトに関係なく選択範囲全体を文字体系間で反転します（ラテン ↔ キリル）。オフ：各単語を賢く修正し、正しいテキストはそのまま残します。",
             "settings.convertWholeLine": "トリガーが行全体を変換（最後の単語だけでなく）",
@@ -1282,7 +1268,6 @@ enum L10n {
             "wizard.no": "いいえ",
             "settings.layout1": "レイアウト 1：",
             "settings.layout2": "レイアウト 2：",
-            "settings.version": "PuntoSwitcherの軽量な代替",
             "settings.debugLog": "デバッグログ",
             "settings.showLog": "ログファイルを表示",
             "settings.sendLog": "ログを送信",
@@ -1325,13 +1310,11 @@ enum L10n {
             "menu.share.email": "이메일",
             "share.message": "MacSwitcher — macOS용 무료 키보드 레이아웃 전환기. 잘못된 레이아웃을 한 번에 수정:",
             "whatsnew.title": "MacSwitcher의 새로운 기능",
-            "whatsnew.body": "MacSwitcher alpha: one Shift changes layout; a double Shift fixes the last word or selection. Offline RU/EN correction now starts during typing and checks short-word context. Ambiguous cases still need real-world testing.",
             "whatsnew.more": "전체 릴리스 노트",
             "menu.quit": "종료",
             "wizard.openSettings": "설정 열기",
             "wizard.later": "나중에",
             "settings.title": "MacSwitcher — 설정",
-            "settings.tab.general": "일반",
             "settings.tab.about": "정보",
             "settings.tab.advanced": "고급",
             "settings.autoSwitch": "MacSwitcher 사용",
@@ -1339,7 +1322,6 @@ enum L10n {
             "settings.triggerRightOnly": "오른쪽 키만",
             "settings.triggerDoubleTap": "두 번 탭",
             "settings.triggerHint": "선택한 키를 다른 키 없이 단독으로 누르세요.",
-            "menu.autoConvert": "자동 변환(베타)",
             "menu.keySound": "레이아웃 소리(베타)",
             "menu.caretFlag": "커서에 깃발(베타)",
             "menu.monoIcon": "단색 아이콘",
@@ -1351,11 +1333,6 @@ enum L10n {
             "settings.caretFlag": "텍스트 커서에 레이아웃 깃발 표시(베타)",
             "settings.caretFlag.hint": "전환 후 텍스트 커서 옆에 레이아웃 깃발을 잠시 표시합니다. 모든 앱에서 지원되지는 않습니다.",
             "menu.remoteDesktop": "원격 데스크톱 모드(베타)",
-            "settings.autoConvert": "자동 변환(베타)",
-            "settings.autoConvert.hint": "잘못된 레이아웃으로 입력한 단어를 감지해 자동으로 변환합니다. 기본값은 꺼짐.",
-            "onboard.autoConvert.title": "자동 레이아웃 변환",
-            "onboard.autoConvert.text": "MacSwitcher는 입력하는 동안 키보드 레이아웃을 자동으로 고칠 수 있습니다. 기본값은 꺼짐입니다. 수동 트리거(Option)는 항상 작동하며 수정을 되돌립니다. 지금 자동 변환을 켤까요?",
-            "settings.tab.exceptions": "자동 변환",
             "settings.remoteDesktop.hint": "Apple 화면 공유용: 원격 Mac에서도 MacSwitcher를 실행하고 양쪽에서 켜세요.",
             "settings.exceptions.apps": "이 앱에서는 변환 안 함",
             "settings.exceptions.never": "이 단어는 변환 안 함",
@@ -1368,9 +1345,6 @@ enum L10n {
             "learn.notNow": "나중에",
             "settings.launchAtLogin": "로그인 시 실행",
             "settings.checkUpdates": "자동으로 업데이트 확인",
-            "settings.checkUpdates.hint": "실행 시작 시와 실행 중 주기적으로 GitHub에 연결하여 새 버전을 확인합니다.",
-            "settings.betaChannel": "베타 버전 받기(테스트용)",
-            "settings.betaChannel.hint": "베타 버전은 불안정할 수 있습니다. 향후 릴리스 테스트를 돕고 싶을 때만 켜세요.",
             "settings.convertByText": "선택 영역을 텍스트 기준으로 변환(두 문자 모두 뒤집기)",
             "settings.convertByText.hint": "켜면 활성 레이아웃과 상관없이 트리거가 선택 영역 전체를 문자 체계 간에 뒤집습니다(라틴 ↔ 키릴). 끄면 각 단어를 지능적으로 고치고 이미 올바른 텍스트는 유지합니다.",
             "settings.convertWholeLine": "트리거가 줄 전체를 변환(마지막 단어만이 아니라)",
@@ -1402,7 +1376,6 @@ enum L10n {
             "wizard.no": "아니요",
             "settings.layout1": "레이아웃 1:",
             "settings.layout2": "레이아웃 2:",
-            "settings.version": "PuntoSwitcher의 가벼운 대안",
             "settings.debugLog": "디버그 로깅",
             "settings.showLog": "로그 파일 보기",
             "settings.sendLog": "로그 보내기",
@@ -1445,7 +1418,6 @@ enum L10n {
             "menu.share.email": "Пошта",
             "share.message": "MacSwitcher — безкоштовний перемикач розкладки для macOS. Виправляє неправильну розкладку одним натисканням:",
             "whatsnew.title": "Що нового в MacSwitcher",
-            "whatsnew.body": "MacSwitcher alpha: one Shift changes layout; a double Shift fixes the last word or selection. Offline RU/EN correction now starts during typing and checks short-word context. Ambiguous cases still need real-world testing.",
             "whatsnew.more": "Докладніше на GitHub",
             "menu.quit": "Вихід",
 
@@ -1463,7 +1435,6 @@ enum L10n {
             "wizard.no": "Ні",
 
             "settings.title": "MacSwitcher — Налаштування",
-            "settings.tab.general": "Загальні",
             "settings.tab.about": "Про програму",
             "settings.tab.advanced": "Додатково",
             "settings.autoSwitch": "Увімкнути MacSwitcher",
@@ -1471,7 +1442,6 @@ enum L10n {
             "settings.triggerRightOnly": "Лише права клавіша",
             "settings.triggerDoubleTap": "Подвійний тап",
             "settings.triggerHint": "Натискайте вибрану клавішу окремо, без інших клавіш.",
-            "menu.autoConvert": "Автоматична конверсія (бета)",
             "menu.keySound": "Звук розкладки (бета)",
             "menu.caretFlag": "Прапор біля курсора (бета)",
             "menu.monoIcon": "Монохромна іконка",
@@ -1483,11 +1453,6 @@ enum L10n {
             "settings.caretFlag": "Показувати прапор розкладки біля курсора (бета)",
             "settings.caretFlag.hint": "Після перемикання ненадовго показує прапор розкладки поруч із курсором. Доступно не в усіх програмах.",
             "menu.remoteDesktop": "Режим віддаленого робочого столу (бета)",
-            "settings.autoConvert": "Автоматична конверсія (бета)",
-            "settings.autoConvert.hint": "Визначає слова в неправильній розкладці та конвертує їх автоматично. Типово вимкнено.",
-            "onboard.autoConvert.title": "Автоматична конверсія розкладки",
-            "onboard.autoConvert.text": "MacSwitcher може виправляти розкладку автоматично під час набору. Типово вимкнено. Ручний тригер (Option) завжди працює і скасовує заміну. Увімкнути автоматичну конверсію зараз?",
-            "settings.tab.exceptions": "Автоконверсія",
             "settings.remoteDesktop.hint": "Для Apple Screen Sharing: запустіть MacSwitcher і на віддаленому Mac, увімкнувши на обох.",
             "settings.exceptions.apps": "Не конвертувати в цих застосунках",
             "settings.exceptions.never": "Ніколи не конвертувати ці слова",
@@ -1500,9 +1465,6 @@ enum L10n {
             "learn.notNow": "Не зараз",
             "settings.launchAtLogin": "Запускати при вході",
             "settings.checkUpdates": "Автоматично перевіряти оновлення",
-            "settings.checkUpdates.hint": "Звертається до GitHub під час запуску та періодично під час роботи, щоб дізнатися про нову версію.",
-            "settings.betaChannel": "Отримувати бета-версії (для тестування)",
-            "settings.betaChannel.hint": "Бета-версії можуть бути нестабільними. Вмикайте, лише якщо хочете допомогти тестувати майбутні випуски.",
             "settings.convertByText": "Конвертувати виділення за текстом (фліп обох абеток)",
             "settings.convertByText.hint": "Коли увімкнено, тригер перевертає все виділення між абетками (латиниця ↔ кирилиця) незалежно від активної розкладки. Вимкнено: кожне слово виправляється розумно, а правильний текст зберігається.",
             "settings.convertWholeLine": "Тригер конвертує весь рядок (не лише останнє слово)",
@@ -1512,7 +1474,6 @@ enum L10n {
             "settings.layout1": "Розкладка 1:",
             "settings.layout2": "Розкладка 2:",
             "settings.autoDetect": "Автовизначення",
-            "settings.version": "Легка альтернатива PuntoSwitcher",
             "settings.donate": "Підтримати розробку ❤️",
             "settings.contact": "Зв'язатися з розробником",
             "settings.debugLog": "Режим налагодження",
@@ -1568,7 +1529,6 @@ enum L10n {
             "menu.share.email": "Пошта",
             "share.message": "MacSwitcher — бясплатны пераключальнік раскладкі для macOS. Выпраўляе раскладку адным націскам:",
             "whatsnew.title": "Што новага ў MacSwitcher",
-            "whatsnew.body": "MacSwitcher alpha: one Shift changes layout; a double Shift fixes the last word or selection. Offline RU/EN correction now starts during typing and checks short-word context. Ambiguous cases still need real-world testing.",
             "whatsnew.more": "Падрабязней на GitHub",
             "menu.quit": "Выхад",
 
@@ -1586,7 +1546,6 @@ enum L10n {
             "wizard.no": "Не",
 
             "settings.title": "MacSwitcher — Налады",
-            "settings.tab.general": "Агульныя",
             "settings.tab.about": "Пра праграму",
             "settings.tab.advanced": "Дадаткова",
             "settings.autoSwitch": "Уключыць MacSwitcher",
@@ -1594,7 +1553,6 @@ enum L10n {
             "settings.triggerRightOnly": "Толькі правая клавіша",
             "settings.triggerDoubleTap": "Падвойны тап",
             "settings.triggerHint": "Націскайце выбраную клавішу асобна, без іншых клавіш.",
-            "menu.autoConvert": "Аўтаматычная канверсія (бета)",
             "menu.keySound": "Гук раскладкі (бета)",
             "menu.caretFlag": "Сцяг ля курсора (бета)",
             "menu.monoIcon": "Манахромная іконка",
@@ -1606,11 +1564,6 @@ enum L10n {
             "settings.caretFlag": "Паказваць сцяг раскладкі ля курсора (бета)",
             "settings.caretFlag.hint": "Пасля пераключэння ненадоўга паказвае сцяг раскладкі побач з курсорам. Даступна не ва ўсіх праграмах.",
             "menu.remoteDesktop": "Рэжым аддаленага стала (бета)",
-            "settings.autoConvert": "Аўтаматычная канверсія (бета)",
-            "settings.autoConvert.hint": "Вызначае словы ў няправільнай раскладцы і канвертуе іх аўтаматычна. Тыпова выключана.",
-            "onboard.autoConvert.title": "Аўтаматычная канверсія раскладкі",
-            "onboard.autoConvert.text": "MacSwitcher можа выпраўляць раскладку аўтаматычна падчас набору. Тыпова выключана. Ручны трыгер (Option) заўсёды працуе і скасоўвае замену. Уключыць аўтаканверсію зараз?",
-            "settings.tab.exceptions": "Аўтаканверсія",
             "settings.remoteDesktop.hint": "Для Apple Screen Sharing: запусціце MacSwitcher і на аддаленым Mac, уключыўшы на абодвух.",
             "settings.exceptions.apps": "Не канвертаваць у гэтых праграмах",
             "settings.exceptions.never": "Ніколі не канвертаваць гэтыя словы",
@@ -1623,9 +1576,6 @@ enum L10n {
             "learn.notNow": "Не зараз",
             "settings.launchAtLogin": "Запускаць пры ўваходзе",
             "settings.checkUpdates": "Аўтаматычна правяраць абнаўленні",
-            "settings.checkUpdates.hint": "Звяртаецца да GitHub пры запуску і перыядычна падчас працы, каб даведацца пра новую версію.",
-            "settings.betaChannel": "Атрымліваць бэта-версіі (для тэставання)",
-            "settings.betaChannel.hint": "Бэта-версіі могуць быць нестабільнымі. Уключайце, толькі калі хочаце дапамагчы тэставаць будучыя выпускі.",
             "settings.convertByText": "Канвертаваць вылучэнне па тэксце (фліп абедзвюх раскладак)",
             "settings.convertByText.hint": "Калі ўключана, трыгер пераварочвае ўсё вылучэнне паміж пісьменнасцямі (лацініца ↔ кірыліца) незалежна ад актыўнай раскладкі. Выключана: кожнае слова выпраўляецца разумна, а правільны тэкст захоўваецца.",
             "settings.convertWholeLine": "Трыгер канвертуе ўвесь радок (не толькі апошняе слова)",
@@ -1635,7 +1585,6 @@ enum L10n {
             "settings.layout1": "Раскладка 1:",
             "settings.layout2": "Раскладка 2:",
             "settings.autoDetect": "Аўтавызначэнне",
-            "settings.version": "Лёгкая альтэрнатыва PuntoSwitcher",
             "settings.donate": "Падтрымаць распрацоўку ❤️",
             "settings.contact": "Звязацца з распрацоўшчыкам",
             "settings.debugLog": "Рэжым адладкі",
@@ -1691,13 +1640,11 @@ enum L10n {
             "menu.share.email": "E-mail",
             "share.message": "MacSwitcher — darmowy przełącznik układu klawiatury dla macOS. Popraw zły układ jednym naciśnięciem:",
             "whatsnew.title": "Co nowego w MacSwitcher",
-            "whatsnew.body": "MacSwitcher alpha: one Shift changes layout; a double Shift fixes the last word or selection. Offline RU/EN correction now starts during typing and checks short-word context. Ambiguous cases still need real-world testing.",
             "whatsnew.more": "Pełne informacje",
             "menu.quit": "Zakończ",
             "wizard.openSettings": "Otwórz ustawienia",
             "wizard.later": "Później",
             "settings.title": "MacSwitcher — Ustawienia",
-            "settings.tab.general": "Ogólne",
             "settings.tab.about": "O programie",
             "settings.tab.advanced": "Zaawansowane",
             "settings.autoSwitch": "Włącz MacSwitcher",
@@ -1705,7 +1652,6 @@ enum L10n {
             "settings.triggerRightOnly": "Tylko prawy klawisz",
             "settings.triggerDoubleTap": "Podwójne naciśnięcie",
             "settings.triggerHint": "Naciśnij wybrany klawisz samodzielnie, bez innych klawiszy.",
-            "menu.autoConvert": "Konwersja automatyczna (beta)",
             "menu.keySound": "Dźwięk układu (beta)",
             "menu.caretFlag": "Flaga przy kursorze (beta)",
             "menu.monoIcon": "Ikona monochromatyczna",
@@ -1717,11 +1663,6 @@ enum L10n {
             "settings.caretFlag": "Pokaż flagę układu przy kursorze (beta)",
             "settings.caretFlag.hint": "Po przełączeniu na chwilę pokazuje flagę układu obok kursora. Dostępne nie we wszystkich aplikacjach.",
             "menu.remoteDesktop": "Tryb pulpitu zdalnego (beta)",
-            "settings.autoConvert": "Konwersja automatyczna (beta)",
-            "settings.autoConvert.hint": "Wykrywa słowa wpisane w złym układzie i konwertuje je automatycznie. Domyślnie wyłączone.",
-            "onboard.autoConvert.title": "Automatyczna konwersja układu",
-            "onboard.autoConvert.text": "MacSwitcher może automatycznie poprawiać układ klawiatury podczas pisania. Domyślnie wyłączone. Ręczny wyzwalacz (Option) zawsze działa i cofa poprawkę. Włączyć automatyczną konwersję teraz?",
-            "settings.tab.exceptions": "Autokonwersja",
             "settings.remoteDesktop.hint": "Dla Udostępniania ekranu Apple: uruchom MacSwitcher na zdalnym Macu i włącz po obu stronach.",
             "settings.exceptions.apps": "Nie konwertuj w tych aplikacjach",
             "settings.exceptions.never": "Nigdy nie konwertuj tych słów",
@@ -1734,9 +1675,6 @@ enum L10n {
             "learn.notNow": "Nie teraz",
             "settings.launchAtLogin": "Uruchamiaj przy logowaniu",
             "settings.checkUpdates": "Automatycznie sprawdzaj aktualizacje",
-            "settings.checkUpdates.hint": "Łączy się z GitHub przy uruchomieniu i okresowo podczas działania, aby sprawdzić nowe wersje.",
-            "settings.betaChannel": "Pobieraj wersje beta (do testów)",
-            "settings.betaChannel.hint": "Wersje beta mogą być niestabilne. Włącz tylko, jeśli chcesz pomóc w testowaniu przyszłych wydań.",
             "settings.convertByText": "Konwertuj zaznaczenie według tekstu (odwróć oba alfabety)",
             "settings.convertByText.hint": "Gdy włączone, wyzwalacz odwraca całe zaznaczenie między alfabetami (łaciński ↔ cyrylica), niezależnie od aktywnego układu. Wyłączone: każde słowo jest poprawiane inteligentnie, a poprawny tekst zostaje zachowany.",
             "settings.convertWholeLine": "Wyzwalacz konwertuje cały wiersz (nie tylko ostatnie słowo)",
@@ -1768,7 +1706,6 @@ enum L10n {
             "wizard.no": "Nie",
             "settings.layout1": "Układ 1:",
             "settings.layout2": "Układ 2:",
-            "settings.version": "Lekka alternatywa dla PuntoSwitchera",
             "settings.debugLog": "Rejestrowanie debugowania",
             "settings.showLog": "Pokaż plik dziennika",
             "settings.sendLog": "Wyślij dziennik",
@@ -1809,7 +1746,6 @@ enum L10n {
             "menu.share.email": "Email",
             "share.message": "MacSwitcher — ένας δωρεάν εναλλάκτης διάταξης πληκτρολογίου για macOS. Διόρθωσε λάθος διάταξη με ένα πάτημα:",
             "whatsnew.title": "Τι νέο υπάρχει στο MacSwitcher",
-            "whatsnew.body": "MacSwitcher alpha: one Shift changes layout; a double Shift fixes the last word or selection. Offline RU/EN correction now starts during typing and checks short-word context. Ambiguous cases still need real-world testing.",
             "whatsnew.more": "Πλήρεις σημειώσεις",
             "menu.quit": "Έξοδος",
             "wizard.permissionsReset.title": "Τα δικαιώματα επαναφέρθηκαν μετά την ενημέρωση",
@@ -1827,7 +1763,6 @@ enum L10n {
             "wizard.yes": "Ναι",
             "wizard.no": "Όχι",
             "settings.title": "MacSwitcher — Ρυθμίσεις",
-            "settings.tab.general": "Γενικά",
             "settings.tab.about": "Σχετικά",
             "settings.tab.advanced": "Για προχωρημένους",
             "settings.autoSwitch": "Ενεργοποίηση MacSwitcher",
@@ -1835,7 +1770,6 @@ enum L10n {
             "settings.triggerRightOnly": "Μόνο δεξί πλήκτρο",
             "settings.triggerDoubleTap": "Διπλό πάτημα",
             "settings.triggerHint": "Πατήστε μόνο του το επιλεγμένο πλήκτρο, χωρίς άλλα πλήκτρα.",
-            "menu.autoConvert": "Αυτόματη μετατροπή (beta)",
             "menu.keySound": "Ήχος διάταξης (beta)",
             "menu.caretFlag": "Σημαία στον δρομέα (beta)",
             "menu.monoIcon": "Μονόχρωμο εικονίδιο",
@@ -1847,11 +1781,6 @@ enum L10n {
             "settings.caretFlag": "Εμφάνιση σημαίας διάταξης στον δρομέα (beta)",
             "settings.caretFlag.hint": "Εμφανίζει σύντομα τη σημαία διάταξης δίπλα στον δρομέα μετά την αλλαγή. Δεν είναι διαθέσιμο σε όλες τις εφαρμογές.",
             "menu.remoteDesktop": "Λειτουργία απομακρυσμένης επιφάνειας (beta)",
-            "settings.autoConvert": "Αυτόματη μετατροπή (beta)",
-            "settings.autoConvert.hint": "Εντοπίζει λέξεις που γράφτηκαν σε λάθος διάταξη και τις μετατρέπει αυτόματα. Απενεργοποιημένο από προεπιλογή.",
-            "onboard.autoConvert.title": "Αυτόματη μετατροπή διάταξης",
-            "onboard.autoConvert.text": "Το MacSwitcher μπορεί να διορθώνει αυτόματα τη διάταξη καθώς πληκτρολογείτε. Απενεργοποιημένο από προεπιλογή. Η χειροκίνητη ενεργοποίηση (Option) λειτουργεί πάντα και αναιρεί μια διόρθωση. Ενεργοποίηση αυτόματης μετατροπής τώρα;",
-            "settings.tab.exceptions": "Αυτόματη μετατροπή",
             "settings.remoteDesktop.hint": "Για κοινή χρήση οθόνης Apple: εκτελέστε το MacSwitcher στο απομακρυσμένο Mac και ενεργοποιήστε το και στα δύο.",
             "settings.exceptions.apps": "Χωρίς μετατροπή σε αυτές τις εφαρμογές",
             "settings.exceptions.never": "Να μη μετατρέπονται ποτέ αυτές οι λέξεις",
@@ -1864,9 +1793,6 @@ enum L10n {
             "learn.notNow": "Όχι τώρα",
             "settings.launchAtLogin": "Εκκίνηση κατά τη σύνδεση",
             "settings.checkUpdates": "Αυτόματος έλεγχος για ενημερώσεις",
-            "settings.checkUpdates.hint": "Συνδέεται στο GitHub κατά την εκκίνηση και περιοδικά κατά τη λειτουργία για αναζήτηση νέων εκδόσεων.",
-            "settings.betaChannel": "Λήψη εκδόσεων beta (για δοκιμές)",
-            "settings.betaChannel.hint": "Οι εκδόσεις beta μπορεί να είναι ασταθείς. Ενεργοποιήστε το μόνο αν θέλετε να βοηθήσετε στη δοκιμή επόμενων εκδόσεων.",
             "settings.convertByText": "Μετατροπή επιλογής βάσει κειμένου (αναστροφή και των δύο γραφών)",
             "settings.convertByText.hint": "Όταν είναι ενεργό, ο ενεργοποιητής αναστρέφει όλη την επιλογή μεταξύ γραφών (λατινικά ↔ κυριλλικά), ανεξάρτητα από την ενεργή διάταξη. Ανενεργό: κάθε λέξη διορθώνεται έξυπνα και το σωστό κείμενο διατηρείται.",
             "settings.convertWholeLine": "Ο ενεργοποιητής μετατρέπει όλη τη γραμμή (όχι μόνο την τελευταία λέξη)",
@@ -1876,7 +1802,6 @@ enum L10n {
             "settings.layout1": "Διάταξη 1:",
             "settings.layout2": "Διάταξη 2:",
             "settings.autoDetect": "Αυτόματος εντοπισμός",
-            "settings.version": "Ελαφριά εναλλακτική του PuntoSwitcher",
             "settings.donate": "Υποστήριξη ανάπτυξης ❤️",
             "settings.contact": "Επικοινωνία με τον προγραμματιστή",
             "settings.debugLog": "Καταγραφή εντοπισμού σφαλμάτων",
@@ -1927,7 +1852,6 @@ enum L10n {
             "menu.share.email": "Имейл",
             "share.message": "MacSwitcher — безплатен превключвател на клавиатурната подредба за macOS. Поправя грешна подредба с едно натискане:",
             "whatsnew.title": "Какво е новото в MacSwitcher",
-            "whatsnew.body": "MacSwitcher alpha: one Shift changes layout; a double Shift fixes the last word or selection. Offline RU/EN correction now starts during typing and checks short-word context. Ambiguous cases still need real-world testing.",
             "whatsnew.more": "Пълни бележки",
             "menu.quit": "Изход",
             "wizard.permissionsReset.title": "Разрешенията са нулирани след актуализация",
@@ -1945,7 +1869,6 @@ enum L10n {
             "wizard.yes": "Да",
             "wizard.no": "Не",
             "settings.title": "MacSwitcher — Настройки",
-            "settings.tab.general": "Общи",
             "settings.tab.about": "Относно",
             "settings.tab.advanced": "Разширени",
             "settings.autoSwitch": "Включи MacSwitcher",
@@ -1953,7 +1876,6 @@ enum L10n {
             "settings.triggerRightOnly": "Само десният клавиш",
             "settings.triggerDoubleTap": "Двойно натискане",
             "settings.triggerHint": "Натиснете избрания клавиш самостоятелно, без други клавиши.",
-            "menu.autoConvert": "Автоматична конверсия (бета)",
             "menu.keySound": "Звук на подредбата (бета)",
             "menu.caretFlag": "Флаг при курсора (бета)",
             "menu.monoIcon": "Монохромна икона",
@@ -1965,11 +1887,6 @@ enum L10n {
             "settings.caretFlag": "Показвай флага на подредбата при курсора (бета)",
             "settings.caretFlag.hint": "След превключване за кратко показва флага на подредбата до курсора. Не е налично във всички приложения.",
             "menu.remoteDesktop": "Режим отдалечен работен плот (бета)",
-            "settings.autoConvert": "Автоматична конверсия (бета)",
-            "settings.autoConvert.hint": "Открива думи, написани с грешна подредба, и ги преобразува автоматично. Изключено по подразбиране.",
-            "onboard.autoConvert.title": "Автоматична конверсия на подредбата",
-            "onboard.autoConvert.text": "MacSwitcher може да коригира подредбата автоматично, докато пишете. Изключено по подразбиране. Ръчният спусък (Option) винаги работи и отменя корекция. Да се включи ли автоматичната конверсия сега?",
-            "settings.tab.exceptions": "Автоконверсия",
             "settings.remoteDesktop.hint": "За Apple Screen Sharing: стартирайте MacSwitcher на отдалечения Mac и включете на двата.",
             "settings.exceptions.apps": "Без конвертиране в тези приложения",
             "settings.exceptions.never": "Никога не конвертирай тези думи",
@@ -1982,9 +1899,6 @@ enum L10n {
             "learn.notNow": "Не сега",
             "settings.launchAtLogin": "Стартиране при вход",
             "settings.checkUpdates": "Автоматична проверка за актуализации",
-            "settings.checkUpdates.hint": "Свързва се с GitHub при стартиране и периодично по време на работа, за да провери за нови версии.",
-            "settings.betaChannel": "Получаване на бета версии (за тестване)",
-            "settings.betaChannel.hint": "Бета версиите може да са нестабилни. Включете само ако искате да помогнете с тестването на бъдещи версии.",
             "settings.convertByText": "Преобразуване на селекцията по текст (обръщане на двете азбуки)",
             "settings.convertByText.hint": "Когато е включено, тригерът обръща цялата селекция между азбуките (латиница ↔ кирилица) независимо от активната подредба. Изключено: всяка дума се коригира интелигентно, а правилният текст се запазва.",
             "settings.convertWholeLine": "Тригерът преобразува целия ред (не само последната дума)",
@@ -1994,7 +1908,6 @@ enum L10n {
             "settings.layout1": "Подредба 1:",
             "settings.layout2": "Подредба 2:",
             "settings.autoDetect": "Автоматично откриване",
-            "settings.version": "Лека алтернатива на PuntoSwitcher",
             "settings.donate": "Подкрепа за разработката ❤️",
             "settings.contact": "Връзка с разработчика",
             "settings.debugLog": "Регистър за отстраняване на грешки",
@@ -2045,7 +1958,6 @@ enum L10n {
             "menu.share.email": "Էլ. փոստ",
             "share.message": "MacSwitcher — անվճար ստեղնաշարի դասավորության փոխարկիչ macOS-ի համար։ Ուղղում է սխալ դասավորությունը մեկ հպումով՝",
             "whatsnew.title": "Ինչ նոր կա MacSwitcher-ում",
-            "whatsnew.body": "MacSwitcher alpha: one Shift changes layout; a double Shift fixes the last word or selection. Offline RU/EN correction now starts during typing and checks short-word context. Ambiguous cases still need real-world testing.",
             "whatsnew.more": "Ամբողջական նշումները",
             "menu.quit": "Ելք",
             "wizard.permissionsReset.title": "Թույլտվությունները զրոյացվել են թարմացումից հետո",
@@ -2063,7 +1975,6 @@ enum L10n {
             "wizard.yes": "Այո",
             "wizard.no": "Ոչ",
             "settings.title": "MacSwitcher — Կարգավորումներ",
-            "settings.tab.general": "Հիմնական",
             "settings.tab.about": "Մասին",
             "settings.tab.advanced": "Լրացուցիչ",
             "settings.autoSwitch": "Միացնել MacSwitcher",
@@ -2071,7 +1982,6 @@ enum L10n {
             "settings.triggerRightOnly": "Միայն աջ ստեղնը",
             "settings.triggerDoubleTap": "Կրկնակի հպում",
             "settings.triggerHint": "Հպեք ընտրված ստեղնն առանձին, առանց այլ ստեղների.",
-            "menu.autoConvert": "Ինքնաշխատ փոխակերպում (բետա)",
             "menu.keySound": "Դասավորության ձայն (բետա)",
             "menu.caretFlag": "Դրոշ կուրսորի մոտ (բետա)",
             "menu.monoIcon": "Միագույն պատկերակ",
@@ -2083,11 +1993,6 @@ enum L10n {
             "settings.caretFlag": "Ցուցադրել դասավորության դրոշը կուրսորի մոտ (բետա)",
             "settings.caretFlag.hint": "Փոխարկումից հետո կարճ ժամանակով ցույց է տալիս դասավորության դրոշը կուրսորի կողքին։ Հասանելի չէ բոլոր հավելվածներում։",
             "menu.remoteDesktop": "Հեռավոր աշխատասեղանի ռեժիմ (բետա)",
-            "settings.autoConvert": "Ինքնաշխատ փոխակերպում (բետա)",
-            "settings.autoConvert.hint": "Հայտնաբերում է սխալ դասավորությամբ մուտքագրված բառերը և ինքնաշխատ փոխակերպում դրանք: Լռելյայն անջատված է.",
-            "onboard.autoConvert.title": "Դասավորության ինքնաշխատ փոխակերպում",
-            "onboard.autoConvert.text": "MacSwitcher-ը կարող է ինքնաշխատ ուղղել ստեղնաշարի դասավորությունը մուտքագրելիս։ Լռելյայն անջատված է։ Ձեռքով գործարկիչը (Option) միշտ աշխատում է և չեղարկում ուղղումը։ Միացնե՞լ ինքնափոխակերպումը հիմա։",
-            "settings.tab.exceptions": "Ինքնափոխակերպում",
             "settings.remoteDesktop.hint": "Apple Screen Sharing-ի համար՝ գործարկեք MacSwitcher-ը հեռավոր Mac-ի վրա և միացրեք երկուսում։",
             "settings.exceptions.apps": "Չփոխակերպել այս հավելվածներում",
             "settings.exceptions.never": "Երբեք չփոխակերպել այս բառերը",
@@ -2100,9 +2005,6 @@ enum L10n {
             "learn.notNow": "Ոչ հիմա",
             "settings.launchAtLogin": "Գործարկել մուտքի ժամանակ",
             "settings.checkUpdates": "Ինքնաշխատ ստուգել թարմացումները",
-            "settings.checkUpdates.hint": "Միանում է GitHub-ին գործարկման ժամանակ և պարբերաբար աշխատանքի ընթացքում՝ նոր տարբերակներ ստուգելու համար։",
-            "settings.betaChannel": "Ստանալ բետա տարբերակներ (փորձարկման համար)",
-            "settings.betaChannel.hint": "Բետա տարբերակները կարող են անկայուն լինել։ Միացրեք միայն եթե ցանկանում եք օգնել փորձարկել առաջիկա թողարկումները։",
             "settings.convertByText": "Փոխարկել ընտրվածը ըստ տեքստի (շրջել երկու գրերն էլ)",
             "settings.convertByText.hint": "Միացված վիճակում գործարկիչը շրջում է ամբողջ ընտրվածը գրերի միջև (լատիներեն ↔ կիրիլիցա)՝ անկախ ակտիվ դասավորությունից։ Անջատված՝ յուրաքանչյուր բառ ուղղվում է խելացի, իսկ ճիշտ տեքստը պահպանվում է։",
             "settings.convertWholeLine": "Գործարկիչը փոխարկում է ամբողջ տողը (ոչ միայն վերջին բառը)",
@@ -2112,7 +2014,6 @@ enum L10n {
             "settings.layout1": "Դասավորություն 1:",
             "settings.layout2": "Դասավորություն 2:",
             "settings.autoDetect": "Ինքնահայտնաբերում",
-            "settings.version": "PuntoSwitcher-ի թեթև այլընտրանք",
             "settings.donate": "Աջակցել ծրագրին ❤️",
             "settings.contact": "Կապ մշակողի հետ",
             "settings.debugLog": "Վրիպազերծման մատյան",
@@ -2163,7 +2064,6 @@ enum L10n {
             "menu.share.email": "ელფოსტა",
             "share.message": "MacSwitcher — უფასო კლავიატურის განლაგების გადამრთველი macOS-ისთვის. ასწორებს არასწორ განლაგებას ერთი შეხებით:",
             "whatsnew.title": "რა არის ახალი MacSwitcher-ში",
-            "whatsnew.body": "MacSwitcher alpha: one Shift changes layout; a double Shift fixes the last word or selection. Offline RU/EN correction now starts during typing and checks short-word context. Ambiguous cases still need real-world testing.",
             "whatsnew.more": "სრული შენიშვნები",
             "menu.quit": "გასვლა",
             "wizard.permissionsReset.title": "ნებართვები განულდა განახლების შემდეგ",
@@ -2181,7 +2081,6 @@ enum L10n {
             "wizard.yes": "დიახ",
             "wizard.no": "არა",
             "settings.title": "MacSwitcher — პარამეტრები",
-            "settings.tab.general": "ზოგადი",
             "settings.tab.about": "შესახებ",
             "settings.tab.advanced": "დამატებითი",
             "settings.autoSwitch": "MacSwitcher-ის ჩართვა",
@@ -2189,7 +2088,6 @@ enum L10n {
             "settings.triggerRightOnly": "მხოლოდ მარჯვენა ღილაკი",
             "settings.triggerDoubleTap": "ორმაგი შეხება",
             "settings.triggerHint": "დააჭირეთ არჩეულ ღილაკს ცალკე, სხვა ღილაკების გარეშე.",
-            "menu.autoConvert": "ავტომატური კონვერტაცია (ბეტა)",
             "menu.keySound": "განლაგების ხმა (ბეტა)",
             "menu.caretFlag": "დროშა კურსორთან (ბეტა)",
             "menu.monoIcon": "მონოქრომული ხატულა",
@@ -2201,11 +2099,6 @@ enum L10n {
             "settings.caretFlag": "განლაგების დროშის ჩვენება ტექსტის კურსორთან (ბეტა)",
             "settings.caretFlag.hint": "გადართვის შემდეგ მოკლედ აჩვენებს განლაგების დროშას კურსორის გვერდით. ხელმისაწვდომია არა ყველა აპში.",
             "menu.remoteDesktop": "დისტანციური სამუშაო მაგიდის რეჟიმი (ბეტა)",
-            "settings.autoConvert": "ავტომატური კონვერტაცია (ბეტა)",
-            "settings.autoConvert.hint": "აღმოაჩენს არასწორი განლაგებით აკრეფილ სიტყვებს და ავტომატურად გარდაქმნის. ნაგულისხმევად გამორთულია.",
-            "onboard.autoConvert.title": "განლაგების ავტომატური კონვერტაცია",
-            "onboard.autoConvert.text": "MacSwitcher-ს შეუძლია განლაგების ავტომატური გასწორება აკრეფისას. ნაგულისხმევად გამორთულია. ხელით ჩამრთველი (Option) ყოველთვის მუშაობს და აუქმებს გასწორებას. ჩაირთოს ავტომატური კონვერტაცია ახლა?",
-            "settings.tab.exceptions": "ავტო-კონვერტაცია",
             "settings.remoteDesktop.hint": "Apple Screen Sharing-ისთვის: გაუშვით MacSwitcher დისტანციურ Mac-ზეც და ჩართეთ ორივეზე.",
             "settings.exceptions.apps": "ამ აპებში არ გადააკეთო",
             "settings.exceptions.never": "არასოდეს გადააკეთო ეს სიტყვები",
@@ -2218,9 +2111,6 @@ enum L10n {
             "learn.notNow": "ახლა არა",
             "settings.launchAtLogin": "გაშვება შესვლისას",
             "settings.checkUpdates": "განახლებების ავტომატური შემოწმება",
-            "settings.checkUpdates.hint": "უკავშირდება GitHub-ს გაშვებისას და პერიოდულად მუშაობის დროს ახალი ვერსიების შესამოწმებლად.",
-            "settings.betaChannel": "მიიღეთ ბეტა ვერსიები (ტესტირებისთვის)",
-            "settings.betaChannel.hint": "ბეტა ვერსიები შეიძლება არასტაბილური იყოს. ჩართეთ მხოლოდ თუ გსურთ დაეხმაროთ მომავალი გამოშვებების ტესტირებაში.",
             "settings.convertByText": "მონიშნულის კონვერტაცია ტექსტის მიხედვით (ორივე დამწერლობის შებრუნება)",
             "settings.convertByText.hint": "ჩართვისას ტრიგერი შებრუნებს მთელ მონიშნულს დამწერლობებს შორის (ლათინური ↔ კირილიცა) აქტიური განლაგების მიუხედავად. გამორთულია: თითოეული სიტყვა სწორდება ჭკვიანურად და სწორი ტექსტი შენარჩუნდება.",
             "settings.convertWholeLine": "ტრიგერი კონვერტავს მთელ ხაზს (არა მხოლოდ ბოლო სიტყვას)",
@@ -2230,7 +2120,6 @@ enum L10n {
             "settings.layout1": "განლაგება 1:",
             "settings.layout2": "განლაგება 2:",
             "settings.autoDetect": "ავტომატური აღმოჩენა",
-            "settings.version": "PuntoSwitcher-ის მსუბუქი ალტერნატივა",
             "settings.donate": "მხარდაჭერა ❤️",
             "settings.contact": "დეველოპერთან დაკავშირება",
             "settings.debugLog": "გამართვის ჟურნალი",

@@ -12,25 +12,14 @@ enum CorrectionFeedbackPolicy {
     }
 
     static func retryMessage(languageCode: String) -> String {
-        languageCode == "ru"
-            ? "Текст не изменён. Кликните в нужное поле, выделите фрагмент и повторите двойной Shift."
-            : "Text was not changed. Click the intended field, select the text, and press Shift twice again."
+        L10n.text("feedback.retry", language: languageCode)
     }
 
     static func recoveryMessage(languageCode: String, hasRecovery: Bool = true) -> String {
-        if !hasRecovery {
-            return languageCode == "ru"
-                ? "Результат правки не подтверждён. Проверьте поле. Если повтор в нём ничего не меняет, начните ввод в другом поле или окне."
-                : "The edit could not be confirmed. Check the field. If another attempt there changes nothing, start typing in a different field or window."
-        }
-        return languageCode == "ru"
-            ? "Результат правки не подтверждён. Откройте исходный текст кнопкой или через меню MacSwitcher, затем скопируйте его. Если повтор в том же поле ничего не меняет, начните ввод в другом поле или окне."
-            : "The edit could not be confirmed. Open the original text with the button or MacSwitcher menu, then copy it. If another attempt in the same field changes nothing, start typing in a different field or window."
+        L10n.text(hasRecovery ? "feedback.recovery.withArchive" : "feedback.recovery.noArchive", language: languageCode)
     }
 
     static func sourceMessage(languageCode: String) -> String {
-        languageCode == "ru"
-            ? "Текст исправлен. Выберите нужную раскладку в меню MacSwitcher."
-            : "Text corrected. Choose the needed keyboard layout in the MacSwitcher menu."
+        L10n.text("feedback.source", language: languageCode)
     }
 }

@@ -329,6 +329,50 @@ final class KeyboardMonitor: @unchecked Sendable {
     var onRuntimeSecureInputResumed: (@MainActor () -> Void)?
     var onRuntimeNormalKeyboardActivity: (@MainActor () -> Bool)?
     private var secureInputObservedInEvents = false
+    /// Verdict for the focused field while Secure Input is raised. The live
+    /// probe asks AX about the field itself; tests supply a synthetic verdict.
+    var secureFieldProbe: () -> SecureFieldVerdict = { SecureFieldPolicy.liveFocusedFieldVerdict() }
+    /// Front process whose character key reached the tap while the flag was raised.
+    private(set) var secureFlagDeliveryProcessID: Int32?
+    /// One probe answer shared by every check of the current tap event.
+    private var currentEventSecureVerdict: SecureFieldVerdict?
+
+    /// Flag down: the unchanged hot path, nothing is asked. Flag raised: the
+    /// focused field must be positively ordinary and outside the flag holder;
+    /// otherwise this key is neither buffered nor counted as delivery proof.
+    func secureFieldAdmitsInput(characterKey: Bool) -> Bool {
+        guard AutoSwitchPolicy.secureInputActive else {
+            secureFlagDeliveryProcessID = nil
+            return true
+        }
+        let verdict = currentEventSecureVerdict ?? secureFieldProbe()
+        guard SecureFieldPolicy.mayUse(focus: verdict, flagRaised: true) else {
+            secureFlagDeliveryProcessID = nil
+            return false
+        }
+        if characterKey {
+            secureFlagDeliveryProcessID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        }
+        return true
+    }
+
+    /// Tap boundary: asks the field once per keyboard event under the flag.
+    /// Returns whether the flag pauses this event (the pre-existing latch input).
+    fileprivate func beginSecureFlagEvent(isKeyboardEvent: Bool, isCharacterKey: Bool) -> Bool {
+        currentEventSecureVerdict = nil
+        guard AutoSwitchPolicy.secureInputActive else {
+            secureFlagDeliveryProcessID = nil
+            return false
+        }
+        guard isKeyboardEvent else { return true }
+        currentEventSecureVerdict = secureFieldProbe()
+        return !secureFieldAdmitsInput(characterKey: isCharacterKey)
+    }
+
+    fileprivate func endSecureFlagEvent() { currentEventSecureVerdict = nil }
+
+    /// The poll observed the flag down; a later raise needs fresh proof.
+    func clearSecureFlagDelivery() { secureFlagDeliveryProcessID = nil }
 
     /// Event-time guard catches Secure Input intervals shorter than the status
     /// timer when the OS still delivers at least one callback during the pause.
@@ -362,6 +406,9 @@ final class KeyboardMonitor: @unchecked Sendable {
     }
     var onPredictionInvalidated: (@MainActor () -> Void)?
     var onInputRevisionAdvanced: (() -> Void)?
+    /// The prediction coordinator retires a visible hint on any key, click or
+    /// focus change: every one of them advances the input revision.
+    var onPredictionRevisionAdvanced: (@MainActor () -> Void)?
     /// issue #10: любой ввод/клик пользователя — чтобы спрятать флаг у каретки во время печати.
     var onUserInput: (() -> Void)?
     /// issue #10: включена ли фича флага-у-каретки. Гейтит диспатч onUserInput на горячем пути,
@@ -662,8 +709,11 @@ final class KeyboardMonitor: @unchecked Sendable {
     /// performs one bounded original-field capture before deferred prediction.
     private func recordPredictionKey(keyCode: UInt16, flags: CGEventFlags, renderedText: String?,
                                      renderedSourceLayoutID: String?) {
+        // A held boundary key keeps the word until its correction finishes.
+        guard boundaryHoldTicket == nil else { return }
+        let fieldAdmitted = secureFieldAdmitsInput(characterKey: true)
         if SettingsManager.shared.automaticTextEnabled,
-           !AutoSwitchPolicy.secureInputActive,
+           fieldAdmitted,
            flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskSecondaryFn]).isEmpty,
            keyCode != KC.backspace, keyCode != KC.enter, keyCode != KC.tab,
            !(keyCode >= KC.left && keyCode <= KC.up) {
@@ -671,7 +721,7 @@ final class KeyboardMonitor: @unchecked Sendable {
             RuntimeDiagnostics.record(renderedText?.isEmpty == false ? .autoUnicodePresent : .autoUnicodeMissing)
         }
         guard SettingsManager.shared.automaticTextEnabled,
-              !AutoSwitchPolicy.secureInputActive,
+              fieldAdmitted,
               flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskSecondaryFn]).isEmpty,
               keyCode != KC.backspace, keyCode != KC.enter, keyCode != KC.tab,
               !(keyCode >= KC.left && keyCode <= KC.up),
@@ -711,6 +761,92 @@ final class KeyboardMonitor: @unchecked Sendable {
         predictionSourceLayoutID = sourceLayoutID
         RuntimeDiagnostics.record(.autoSnapshotSubmitted)
         MainActor.assumeIsolated { onPredictionInput?(snapshot) }
+    }
+
+    // MARK: - Enter/Tab boundary hold
+
+    let boundaryKeyHold = BoundaryKeyHold()
+    /// Main: the coordinator starts the boundary correction and returns true,
+    /// or declines; then the key is not held at all.
+    var onBoundaryKey: (@MainActor (PredictionSnapshot, BoundaryKeyHold.Ticket) -> Bool)?
+    private(set) var boundaryHoldTicket: BoundaryKeyHold.Ticket?
+    private var boundaryTicketForTap: BoundaryKeyHold.Ticket?
+
+    /// The current word as if this Enter/Tab were its separator. Text is not
+    /// changed or copied anywhere: the snapshot is the prediction buffer's own.
+    private func armBoundaryHold(flags: CGEventFlags) -> Bool {
+        guard let onBoundaryKey,
+              flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskSecondaryFn]).isEmpty,
+              let source = predictionSourceLayoutID,
+              let base = predictionBuffer.snapshot(sourceLayoutID: source,
+                  inputRevision: inputRevision, generation: predictionGeneration),
+              !base.atBoundary else { return false }
+        let snapshot = PredictionSnapshot(suffix: base.suffix, precedingWords: base.precedingWords,
+            sourceLayoutID: base.sourceLayoutID, processID: base.processID,
+            inputRevision: base.inputRevision, generation: base.generation, sessionID: base.sessionID,
+            cumulativeUTF16Offset: base.cumulativeUTF16Offset, eventUTF16Length: base.eventUTF16Length,
+            atBoundary: true)
+        let ticket = boundaryKeyHold.arm()
+        boundaryHoldTicket = ticket
+        guard MainActor.assumeIsolated({ onBoundaryKey(snapshot, ticket) }) else {
+            boundaryHoldTicket = nil
+            boundaryKeyHold.complete(ticket)
+            return false
+        }
+        // The coordinator may have finished synchronously.
+        guard boundaryHoldTicket == ticket else { return false }
+        boundaryTicketForTap = ticket
+        return true
+    }
+
+    /// Tap callback, still on main: the hold this event must wait for.
+    func takeBoundaryHoldTicket() -> BoundaryKeyHold.Ticket? {
+        defer { boundaryTicketForTap = nil }
+        return boundaryTicketForTap
+    }
+
+    /// Main: the boundary correction ended (any outcome). Enter/Tab is a
+    /// structural boundary, so the word state ends now; then the key may go.
+    func finishBoundaryHold(_ ticket: BoundaryKeyHold.Ticket) {
+        if boundaryHoldTicket == ticket {
+            boundaryHoldTicket = nil
+            fullReset()
+        }
+        boundaryKeyHold.complete(ticket)
+    }
+
+    // MARK: - Implicit undo (стёр и набрал заново)
+
+    private var implicitUndo = ImplicitUndoWatch()
+    /// Delivered asynchronously on main, never inside the key callback.
+    var onImplicitUndo: (@MainActor (ImplicitUndoWatch.Vote) -> Void)?
+
+    /// Called after a confirmed automatic correction; RAM-only counters.
+    func armImplicitUndo(id: UUID, corrected: String, original: String, processID: Int32) {
+        implicitUndo.arm(id: id, corrected: corrected, original: original, processID: processID)
+    }
+
+    private func noteImplicitUndo(keyCode: UInt16, flags: CGEventFlags, renderedText: String?) {
+        guard implicitUndo.isArmed else { return }
+        let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
+        let modified = !flags.intersection([.maskCommand, .maskControl, .maskAlternate,
+                                            .maskSecondaryFn]).isEmpty
+        let vote: ImplicitUndoWatch.Vote?
+        if modified {
+            implicitUndo.disarm(); vote = nil
+        } else if keyCode == KC.backspace {
+            implicitUndo.noteBackspace(processID: pid); vote = nil
+        } else if let renderedText, !renderedText.isEmpty {
+            vote = implicitUndo.noteTyped(renderedText, processID: pid)
+        } else {
+            implicitUndo.disarm(); vote = nil
+        }
+        guard let vote else { return }
+        RuntimeDiagnostics.record(.implicitUndoObserved)
+        // Learning and disk stay outside the key callback and input fence.
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated { self?.onImplicitUndo?(vote) }
+        }
     }
 
     /// Synthetic events are ignored by the tap, so explicitly adopt the verified
@@ -754,6 +890,7 @@ final class KeyboardMonitor: @unchecked Sendable {
     /// Сброс буфера при клике мышью — иначе backspace перепечатки сотрёт не то
     /// (курсор мог уехать в другое место).
     fileprivate func resetBuffersOnClick() {
+        implicitUndo.disarm()
         interruptCombinedShift()
         triggerArmed = false
         switchArmed = false
@@ -773,6 +910,7 @@ final class KeyboardMonitor: @unchecked Sendable {
         invalidatePrediction()
         inputRevision &+= 1
         onInputRevisionAdvanced?()
+        MainActor.assumeIsolated { onPredictionRevisionAdvanced?() }
     }
 
     private func clearCombinedShiftCandidate() {
@@ -884,7 +1022,7 @@ final class KeyboardMonitor: @unchecked Sendable {
 
     private func handleCombinedShift(flags: CGEventFlags, keyCode: UInt16, clock: KeyboardInputClock) {
         let otherModifiers: CGEventFlags = [.maskCommand, .maskControl, .maskAlternate, .maskSecondaryFn]
-        guard SettingsManager.shared.manualShiftEnabled, !AutoSwitchPolicy.secureInputActive,
+        guard SettingsManager.shared.manualShiftEnabled, secureFieldAdmitsInput(characterKey: false),
               flags.intersection(otherModifiers).isEmpty,
               keyCode == KC.leftShift || keyCode == KC.rightShift else {
             interruptCombinedShift()
@@ -993,7 +1131,18 @@ final class KeyboardMonitor: @unchecked Sendable {
     }
 
     func handleKeyDown(keyCode: UInt16, flags: CGEventFlags, char: Character? = nil,
-                       renderedText: String? = nil, renderedSourceLayoutID: String? = nil) {
+                       renderedText: String? = nil, renderedSourceLayoutID: String? = nil,
+                       boundaryHoldPermitted: Bool = false) {
+        // A key after a released hold: its word state ends here at the latest.
+        if let open = boundaryHoldTicket { finishBoundaryHold(open) }
+        // Under the raised flag a password/unknown field keeps nothing: no
+        // word, line or prediction buffer, and the open word is dropped.
+        guard secureFieldAdmitsInput(characterKey: true) else {
+            implicitUndo.disarm()
+            invalidateRuntimeInputContext()
+            return
+        }
+        noteImplicitUndo(keyCode: keyCode, flags: flags, renderedText: renderedText)
         interruptCombinedShift()
         // Submit after existing buffer mutation. Structural/reset branches clear it.
         defer { recordPredictionKey(keyCode: keyCode, flags: flags, renderedText: renderedText,
@@ -1049,8 +1198,11 @@ final class KeyboardMonitor: @unchecked Sendable {
             return
         }
 
-        // Enter, Tab — полный сброс
+        // Enter, Tab — полный сброс. Слово, уверенно набранное не в той раскладке,
+        // сначала исправляется: клавиша ждёт на потоке tap (`BoundaryKeyHold`).
         if keyCode == KC.enter || keyCode == KC.tab {
+            implicitUndo.disarm()
+            if boundaryHoldPermitted, armBoundaryHold(flags: flags) { return }
             fullReset()
             return
         }
@@ -1446,20 +1598,25 @@ private func processKeyboardInput(type: CGEventType, event: CGEvent, monitor: Ke
     let clock = callback.clock
     let admission = callback.admission
     let handoff = KeyboardCallbackEvent(event)
-    let forwarded: Unmanaged<CGEvent>? = DispatchQueue.main.sync {
+    let (forwarded, boundaryTicket): (Unmanaged<CGEvent>?, BoundaryKeyHold.Ticket?) = DispatchQueue.main.sync {
         let event = handoff.event
         guard monitor.inputFence === fence else {
-            return diagnosticFixture ? nil : Unmanaged.passUnretained(event)
+            return (diagnosticFixture ? nil : Unmanaged.passUnretained(event), nil)
         }
         if diagnosticFixture,
            (!monitor.nativeInputTransportAvailable || !diagnosticFixtureEventIsAdmitted(event)) {
-            return nil
+            return (nil, nil)
         }
-        let secureInput = AutoSwitchPolicy.secureInputActive
+        // A raised flag alone no longer drops the event: a key that reached the
+        // tap was not hidden by macOS. The focused field decides; a password,
+        // unknown or flag-holder field keeps the previous paused behaviour.
         let isKeyboardEvent = type == .keyDown || type == .keyUp || type == .flagsChanged
+        let secureInput = monitor.beginSecureFlagEvent(isKeyboardEvent: isKeyboardEvent,
+            isCharacterKey: type == .keyDown)
+        defer { monitor.endSecureFlagEvent() }
         let mayProcess = monitor.noteRuntimeSecureInput(secureInput,
             isKeyboardEvent: isKeyboardEvent)
-        if !mayProcess { return diagnosticFixture ? nil : Unmanaged.passUnretained(event) }
+        if !mayProcess { return (diagnosticFixture ? nil : Unmanaged.passUnretained(event), nil) }
         if admission.wasHeld { RuntimeDiagnostics.record(.nativeFenceHeldInput) }
         if admission.interrupted { RuntimeDiagnostics.record(.nativeFenceInterrupted) }
         let allowCombinedShift = monitor.allowCombinedShift(after: admission)
@@ -1481,12 +1638,24 @@ private func processKeyboardInput(type: CGEventType, event: CGEvent, monitor: Ke
             observeSource: observeSourceOnce)
         let result = keyboardEventOnMain(type: type, event: event, monitor: monitor,
             renderedSourceLayoutID: renderedSourceLayoutID, clock: clock,
-            allowCombinedShift: allowCombinedShift)
+            allowCombinedShift: allowCombinedShift, boundaryHoldPermitted: !diagnosticFixture)
         monitor.schedulePendingCombinedShiftConversion(after: fence)
-        return result
+        return (result, monitor.takeBoundaryHoldTicket())
     }
-    fence.leavePhysicalEvent(admission, wasForwarded: forwarded != nil)
-    return forwarded
+    guard let boundaryTicket, let forwarded else {
+        fence.leavePhysicalEvent(admission, wasForwarded: forwarded != nil)
+        return forwarded
+    }
+    // Enter/Tab after a word to correct: leave the fence so main can lease it,
+    // wait at most 150 ms for the decision, then pass the fence again (it holds
+    // keys during any active edit) and return this same event exactly once.
+    fence.leavePhysicalEvent(admission, wasForwarded: false)
+    let held = monitor.boundaryKeyHold.forward(forwarded, ticket: boundaryTicket,
+        fence: fence, eventTimestamp: clock.eventTimestamp)
+    if held.outcome == .timedOut {
+        DispatchQueue.main.async { RuntimeDiagnostics.record(.boundaryKeyTimedOut) }
+    }
+    return held.value
 }
 
 /// The tap thread waits synchronously for main and never touches the event during
@@ -1498,7 +1667,8 @@ private final class KeyboardCallbackEvent: @unchecked Sendable {
 
 private func keyboardEventOnMain(type: CGEventType, event: CGEvent,
                                  monitor: KeyboardMonitor, renderedSourceLayoutID: String?,
-                                 clock: KeyboardInputClock, allowCombinedShift: Bool) -> Unmanaged<CGEvent>? {
+                                 clock: KeyboardInputClock, allowCombinedShift: Bool,
+                                 boundaryHoldPermitted: Bool = false) -> Unmanaged<CGEvent>? {
 
     if type == .keyDown {
         let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
@@ -1531,7 +1701,9 @@ private func keyboardEventOnMain(type: CGEventType, event: CGEvent,
         let rendered = length > 0 && length < units.count
             ? String(decoding: units.prefix(length), as: UTF16.self) : nil
         monitor.handleKeyDown(keyCode: keyCode, flags: event.flags, char: forwardedChar,
-            renderedText: rendered, renderedSourceLayoutID: renderedSourceLayoutID)
+            renderedText: rendered, renderedSourceLayoutID: renderedSourceLayoutID,
+            boundaryHoldPermitted: boundaryHoldPermitted
+                && event.getIntegerValueField(.keyboardEventAutorepeat) == 0)
     } else if type == .flagsChanged {
         let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
         if monitor.handleFlagsChanged(flags: event.flags, keyCode: keyCode,

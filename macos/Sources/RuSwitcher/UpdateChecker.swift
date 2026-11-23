@@ -57,10 +57,8 @@ enum UpdateChecker {
         guard provider.isConfigured else {
             let alert = NSAlert()
             alert.messageText = "MacSwitcher"
-            alert.informativeText = L10n.languageCode == "ru"
-                ? "Встроенная установка обновлений пока недоступна. Откройте официальные выпуски MacSwitcher и установите новую версию вручную."
-                : "In-app updates are not configured yet. Open official MacSwitcher releases to install a new version manually."
-            alert.addButton(withTitle: L10n.languageCode == "ru" ? "Открыть выпуски" : "Open Releases")
+            alert.informativeText = L10n.text("update.manual.body")
+            alert.addButton(withTitle: L10n.text("update.openReleases"))
             alert.addButton(withTitle: L10n.updateLater)
             if alert.runModal() == .alertFirstButtonReturn,
                let url = URL(string: SettingsManager.githubURL + "/releases") {

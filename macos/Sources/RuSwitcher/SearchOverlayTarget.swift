@@ -223,18 +223,14 @@ enum SearchOverlayTarget {
 
     private static func isEditableTextField(_ focus: CombinedShiftFocus,
                                             budget: Budget) -> Bool {
-        guard !AutoSwitchPolicy.secureInputActive,
-              let (subroleStatus, subroleRaw) = read(focus.element,
+        guard let (subroleStatus, subroleRaw) = read(focus.element,
                   kAXSubroleAttribute as CFString, budget: budget) else { return false }
-        switch subroleStatus {
-        case .success:
-            guard let subrole = subroleRaw as? String,
-                  subrole != kAXSecureTextFieldSubrole else { return false }
-        case .attributeUnsupported, .noValue:
-            break
-        default:
-            return false
-        }
+        // Strict per-field answer; under the raised flag the holder's own field
+        // and an unknown holder are refused as well.
+        let verdict = SecureFieldPolicy.effectiveVerdict(
+            SecureFieldPolicy.verdict(subroleStatus: subroleStatus, subrole: subroleRaw),
+            fieldProcessID: focus.processID)
+        guard SecureFieldPolicy.mayUse(focus: verdict, flagRaised: true) else { return false }
         guard let (roleStatus, roleRaw) = read(focus.element,
                   kAXRoleAttribute as CFString, budget: budget), roleStatus == .success,
               let role = roleRaw as? String,

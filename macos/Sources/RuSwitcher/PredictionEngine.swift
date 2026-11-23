@@ -1,7 +1,7 @@
 import Foundation
 
 struct PredictionProposal: Equatable, Sendable {
-    enum Reason: Equatable, Sendable { case currentWord, contextWord }
+    enum Reason: Equatable, Sendable { case currentWord, contextWord, typo, trigram, capsRestored, shortWordContext }
     let originalSuffix: String
     let replacementSuffix: String
     let targetLanguage: String
@@ -36,20 +36,46 @@ struct PredictionEngine: Sendable {
         "center", "zone", "link", "click", "tools", "pages", "рф", "xn--p1ai"
     ]
     private static let literalPunctuation: Set<Character> = [",", ".", "!", "?", ";", ":", ")"]
+    /// Russian one-letter words that a neighbouring corrected word may also fix (я, и, в…).
+    static let shortRussianWords: Set<String> = ["я", "и", "в", "с", "к", "о", "у", "а"]
+    enum CorrectionKind { case exact, typo, trigram }
+
+    struct DecisionContext {
+        let source: String
+        let atBoundary: Bool
+        let precedingWords: [String]
+        let alwaysConvertWords: Set<String>
+        let characterMapping: [Character: Character]?
+        let russianPriority: Bool
+        let adaptiveRules: [AdaptiveRule]
+        var target: String { source == "en" ? "ru" : "en" }
+    }
 
     func evaluate(suffix: String, sourceLanguage: String, atBoundary: Bool = false,
                   precedingWords: [String] = [], alwaysConvertWords: Set<String> = [],
                   characterMapping: [Character: Character]? = nil,
                   russianPriority: Bool = false,
-                  adaptiveRules: [AdaptiveRule] = []) -> PredictionProposal? {
+                  adaptiveRules: [AdaptiveRule] = []) -> PredictionDecision {
         let source = String(sourceLanguage.lowercased().prefix(2))
         guard source == "ru" || source == "en", !suffix.isEmpty, suffix.count <= 512,
-              !suffix.contains(where: { $0.isNewline || $0 == "\t" }) else { return nil }
+              !suffix.contains(where: { $0.isNewline || $0 == "\t" }) else { return .none }
+        let context = DecisionContext(source: source, atBoundary: atBoundary, precedingWords: precedingWords,
+            alwaysConvertWords: alwaysConvertWords, characterMapping: characterMapping,
+            russianPriority: russianPriority, adaptiveRules: adaptiveRules)
+        if let restored = caseRestoredDecision(suffix: suffix, context: context) { return restored }
+        return decide(suffix: suffix, context: context)
+    }
+
+    func decide(suffix: String, context: DecisionContext) -> PredictionDecision {
+        let source = context.source, atBoundary = context.atBoundary
+        let precedingWords = context.precedingWords, alwaysConvertWords = context.alwaysConvertWords
+        let characterMapping = context.characterMapping, russianPriority = context.russianPriority
+        let adaptiveRules = context.adaptiveRules
         // Ranges retain the exact original whitespace and rendered characters.
         let words = wordRanges(in: suffix)
-        guard let currentRange = words.last else { return nil }
+        guard let currentRange = words.last else { return .none }
         let current = String(suffix[currentRange])
-        let target = source == "en" ? "ru" : "en"
+        let target = context.target
         // A known preferred word must finish before broad prefix scoring can flip it.
         // Explicit force remains higher priority.
         let foldedCurrent = PredictionLexicon.normalize(current)
@@ -60,14 +86,14 @@ struct PredictionEngine: Sendable {
             (rule.preferred == "en" ? rule.pair.en : rule.pair.ru) ==
                 (boundary ? foldedCore : foldedCurrent) &&
             !alwaysConvertWords.contains(rule.preferred == "en" ? rule.pair.ru : rule.pair.en)
-        }) { return nil }
+        }) { return .none }
         if !boundary,
            !adaptiveRules.isEmpty,
            adaptiveRules.contains(where: { rule in
                rule.confirmations == 2 &&
                (rule.preferred == "en" ? rule.pair.en : rule.pair.ru).hasPrefix(foldedCurrent) &&
                !alwaysConvertWords.contains(rule.preferred == "en" ? rule.pair.ru : rule.pair.en)
-           }) { return nil }
+           }) { return .none }
         let domainCues = (precedingWords + words.dropLast().map { String(suffix[$0]) }).suffix(3)
         let hasDomainContext = domainCues.contains { Self.domainContext.contains(contextKey($0)) }
         let hasPeopleCollocation = domainCues.last.map { Self.peopleModifiers.contains(contextKey($0)) } ?? false
@@ -85,19 +111,28 @@ struct PredictionEngine: Sendable {
                 mapping: characterMapping, lexicon: lexicon) : nil
         // A rejected backtick spelling must not fall through to the broad
         // dictionary path in code/technical context.
-        if russianPriority && exactYoWord && priority == nil { return nil }
+        if russianPriority && exactYoWord && priority == nil { return .none }
         if boundary, let learned = adaptiveProposal(current: current, suffix: suffix,
-            range: currentRange, rules: adaptiveRules) { return learned }
-        let corrected: String?
+            range: currentRange, rules: adaptiveRules) { return .apply(learned) }
+        let found: (word: String, kind: CorrectionKind)?
         do {
-            corrected = try (priority ?? correction(for: current, source: source, target: target,
+            found = try priority.map { ($0, CorrectionKind.exact) } ?? correction(for: current, source: source, target: target,
                 atBoundary: atBoundary || suffix.last?.isWhitespace == true,
                 alwaysConvertWords: alwaysConvertWords, characterMapping: characterMapping,
                 hasDomainContext: hasDomainContext, hasPeopleCollocation: hasPeopleCollocation,
                 russianPriority: russianPriority,
                 protectedEnglishContext: russianPriority && RussianPriorityPolicy.protectsEnglishContext(
-                    Array(domainCues), lexicon: lexicon)))
-        } catch { return nil }
+                    Array(domainCues), lexicon: lexicon))
+        } catch { return .none }
+        // A guessed word is only offered; it never joins the contextual rules below.
+        if let found, found.kind != .exact {
+            guard found.word != current else { return .none }
+            var replacement = suffix
+            replacement.replaceSubrange(currentRange, with: found.word)
+            return .hint(PredictionProposal(originalSuffix: suffix, replacementSuffix: replacement,
+                targetLanguage: target, reason: found.kind == .typo ? .typo : .trigram))
+        }
+        let corrected = found?.word
         let resultingWord = corrected ?? current
 
         // A closed single f stays unresolved until the following token provides strong
@@ -118,8 +153,16 @@ struct PredictionEngine: Sendable {
                 let result = String(suffix[..<previousRange.lowerBound]) + "а"
                     + String(suffix[previousRange.upperBound..<currentRange.lowerBound]) + resultingWord
                     + String(suffix[currentRange.upperBound...])
-                return PredictionProposal(originalSuffix: suffix, replacementSuffix: result,
-                                          targetLanguage: "ru", reason: .contextWord)
+                return .apply(PredictionProposal(originalSuffix: suffix, replacementSuffix: result,
+                                          targetLanguage: "ru", reason: .contextWord))
+            }
+            if let shortWord = shortWordContextReplacement(previous: previous, current: current,
+                corrected: corrected, technical: technical, context: context) {
+                let result = String(suffix[..<previousRange.lowerBound]) + shortWord
+                    + String(suffix[previousRange.upperBound..<currentRange.lowerBound]) + (corrected ?? current)
+                    + String(suffix[currentRange.upperBound...])
+                return .apply(PredictionProposal(originalSuffix: suffix, replacementSuffix: result,
+                                                 targetLanguage: "ru", reason: .shortWordContext))
             }
             if priority == "не", previous == "f", !technical,
                (!russianPriority || (!lexicon.isPersonalWord(previous, language: "en")
@@ -127,8 +170,8 @@ struct PredictionEngine: Sendable {
                 let result = String(suffix[..<previousRange.lowerBound]) + "а"
                     + String(suffix[previousRange.upperBound..<currentRange.lowerBound]) + "не"
                     + String(suffix[currentRange.upperBound...])
-                return PredictionProposal(originalSuffix: suffix, replacementSuffix: result,
-                                          targetLanguage: "ru", reason: .contextWord)
+                return .apply(PredictionProposal(originalSuffix: suffix, replacementSuffix: result,
+                                          targetLanguage: "ru", reason: .contextWord))
             }
             // An already corrected, strong Russian next word can disambiguate a
             // bounded previous collision without changing standalone English.
@@ -141,16 +184,16 @@ struct PredictionEngine: Sendable {
                 let result = String(suffix[..<previousRange.lowerBound]) + contextual
                     + String(suffix[previousRange.upperBound..<currentRange.lowerBound]) + corrected
                     + String(suffix[currentRange.upperBound...])
-                return PredictionProposal(originalSuffix: suffix, replacementSuffix: result,
-                                          targetLanguage: "ru", reason: .contextWord)
+                return .apply(PredictionProposal(originalSuffix: suffix, replacementSuffix: result,
+                                          targetLanguage: "ru", reason: .contextWord))
             }
         }
 
-        guard let corrected, corrected != current else { return nil }
+        guard let corrected, corrected != current else { return .none }
         var replacement = suffix
         replacement.replaceSubrange(currentRange, with: corrected)
-        return PredictionProposal(originalSuffix: suffix, replacementSuffix: replacement,
-                                  targetLanguage: target, reason: .currentWord)
+        return .apply(PredictionProposal(originalSuffix: suffix, replacementSuffix: replacement,
+                                  targetLanguage: target, reason: .currentWord))
     }
 
     /// The pair itself identifies the typed script when the current HKL is stale.
@@ -186,7 +229,25 @@ struct PredictionEngine: Sendable {
                             alwaysConvertWords: Set<String>, characterMapping: [Character: Character]?,
                             hasDomainContext: Bool, hasPeopleCollocation: Bool,
                             russianPriority: Bool,
-                            protectedEnglishContext: Bool) throws -> String? {
+                            protectedEnglishContext: Bool) throws -> (word: String, kind: CorrectionKind)? {
+        var guessable = false
+        if let exact = try exactCorrection(for: word, source: source, target: target, atBoundary: atBoundary,
+            alwaysConvertWords: alwaysConvertWords, characterMapping: characterMapping,
+            hasDomainContext: hasDomainContext, hasPeopleCollocation: hasPeopleCollocation,
+            russianPriority: russianPriority, protectedEnglishContext: protectedEnglishContext,
+            guessable: &guessable) {
+            return (exact, .exact)
+        }
+        // Only a finished word that no source list knows may be guessed.
+        guard guessable else { return nil }
+        return guessedCorrection(for: word, source: source, target: target, characterMapping: characterMapping)
+    }
+
+    private func exactCorrection(for word: String, source: String, target: String, atBoundary: Bool,
+                                 alwaysConvertWords: Set<String>, characterMapping: [Character: Character]?,
+                                 hasDomainContext: Bool, hasPeopleCollocation: Bool,
+                                 russianPriority: Bool, protectedEnglishContext: Bool,
+                                 guessable: inout Bool) throws -> String? {
         let stripped = stripTrailingPunctuation(word)
         guard let mapped = map(word, source: source, characterMapping: characterMapping) else { return nil }
         let candidates: [(core: String, suffix: String)] = stripped.suffix.isEmpty
@@ -301,11 +362,12 @@ struct PredictionEngine: Sendable {
                distinctMatches == Set([candidates[0].core, candidates[1].core + ";"]) {
                 return candidates[0].core
             }
+            guessable = distinctMatches.isEmpty
         }
         return nil
     }
 
-    private func strongRussianContext(_ word: String) -> Bool {
+    func strongRussianContext(_ word: String) -> Bool {
         guard !protectedToken(word) else { return false }
         let core = stripTrailingPunctuation(word).core
         guard core.count >= 3, core.allSatisfy({ Self.isCyrillic($0) || $0 == "-" }) else { return false }
@@ -314,7 +376,7 @@ struct PredictionEngine: Sendable {
         return core.count >= 4 && prefix.maximumFrequency >= 20_000 && prefix.completions > 0
     }
 
-    private func protectedToken(_ word: String, allowKnownTargetCase: Bool = false,
+    func protectedToken(_ word: String, allowKnownTargetCase: Bool = false,
                                 allowAllCaps: Bool = false, allowMappedInteriorDot: Bool = false) -> Bool {
         guard !word.isEmpty, word.count <= 96 else { return true }
         if word.contains(where: { $0.isNumber || "@_/:\\=+(){}<>#".contains($0) }) { return true }
@@ -344,12 +406,12 @@ struct PredictionEngine: Sendable {
             || Self.protectedHostnameSuffixes.contains(String(ending))
     }
 
-    private func lexicalToken(_ word: String) -> Bool {
+    func lexicalToken(_ word: String) -> Bool {
         guard word.first?.isLetter == true, word.last?.isLetter == true else { return false }
         return word.allSatisfy({ $0.isLetter || $0 == "-" }) && !word.contains("--")
     }
 
-    private func map(_ word: String, source: String, characterMapping: [Character: Character]?) -> String? {
+    func map(_ word: String, source: String, characterMapping: [Character: Character]?) -> String? {
         let mapping = characterMapping ?? (source == "en" ? KeyMapping.enToRu : KeyMapping.ruToEn)
         var output = ""
         for character in word {
@@ -364,7 +426,7 @@ struct PredictionEngine: Sendable {
         return output
     }
 
-    private func stripTrailingPunctuation(_ word: String) -> (core: String, suffix: String) {
+    func stripTrailingPunctuation(_ word: String) -> (core: String, suffix: String) {
         var boundary = word.endIndex
         while boundary > word.startIndex {
             let previous = word.index(before: boundary)
@@ -374,7 +436,7 @@ struct PredictionEngine: Sendable {
         return (String(word[..<boundary]), String(word[boundary...]))
     }
 
-    private func wordRanges(in string: String) -> [Range<String.Index>] {
+    func wordRanges(in string: String) -> [Range<String.Index>] {
         var ranges: [Range<String.Index>] = []
         var start: String.Index?
         for index in string.indices {
@@ -390,10 +452,10 @@ struct PredictionEngine: Sendable {
         value.lowercased().trimmingCharacters(in: .punctuationCharacters)
     }
 
-    private static func isLatin(_ value: Character) -> Bool {
+    static func isLatin(_ value: Character) -> Bool {
         value.unicodeScalars.allSatisfy { (0x41...0x5A).contains($0.value) || (0x61...0x7A).contains($0.value) }
     }
-    private static func isCyrillic(_ value: Character) -> Bool {
+    static func isCyrillic(_ value: Character) -> Bool {
         value.unicodeScalars.allSatisfy { (0x0400...0x04FF).contains($0.value) }
     }
 }

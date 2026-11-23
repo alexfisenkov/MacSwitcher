@@ -15,11 +15,11 @@ final class ModernColloquialLexiconTests: XCTestCase {
             ("ылшишвш", "ru", "skibidi"),
         ]
         for item in cases {
-            XCTAssertEqual(engine.evaluate(suffix: item.wrong + " ", sourceLanguage: item.source,
+            XCTAssertEqual(engine.appliedProposal(suffix: item.wrong + " ", sourceLanguage: item.source,
                                            atBoundary: true)?.replacementSuffix,
                            item.expected + " ", item.expected)
         }
-        XCTAssertEqual(engine.evaluate(suffix: "rhby; ", sourceLanguage: "en", atBoundary: true,
+        XCTAssertEqual(engine.appliedProposal(suffix: "rhby; ", sourceLanguage: "en", atBoundary: true,
                                        russianPriority: true)?.replacementSuffix, "кринж ")
         XCTAssertEqual(try bundled().hasSupplementalSpelling("кринж", language: "ru"), true)
     }
@@ -62,16 +62,16 @@ final class ModernColloquialLexiconTests: XCTestCase {
 
     func testNewBrandCorrectsWrongLayoutAndPreservesItsSpelling() throws {
         let engine = PredictionEngine(lexicon: try bundled())
-        XCTAssertEqual(engine.evaluate(suffix: "Ефитшту ", sourceLanguage: "ru", atBoundary: true)?.replacementSuffix,
+        XCTAssertEqual(engine.appliedProposal(suffix: "Ефитшту ", sourceLanguage: "ru", atBoundary: true)?.replacementSuffix,
                        "Tabnine ")
-        XCTAssertNil(engine.evaluate(suffix: "Tabnine ", sourceLanguage: "en", atBoundary: true))
+        XCTAssertNil(engine.appliedProposal(suffix: "Tabnine ", sourceLanguage: "en", atBoundary: true))
     }
 
     func testModernSpellingsDoNotCorrectPrematurePrefixes() throws {
         let engine = PredictionEngine(lexicon: try bundled())
         for (prefix, language) in [("njrc", "en"), ("ytqhj", "en"), ("мшиус", "ru"), ("ылш", "ru"),
                                    ("leiy", "en")] {
-            XCTAssertNil(engine.evaluate(suffix: prefix, sourceLanguage: language), prefix)
+            XCTAssertNil(engine.appliedProposal(suffix: prefix, sourceLanguage: language), prefix)
         }
     }
 
@@ -82,8 +82,8 @@ final class ModernColloquialLexiconTests: XCTestCase {
             ("shit", "en"), ("fuck", "en"), ("bitch", "en"),
             ("сука", "ru"), ("блядь", "ru"), ("хуй", "ru"),
         ] {
-            XCTAssertNil(engine.evaluate(suffix: word + " ", sourceLanguage: language, atBoundary: true), word)
-            XCTAssertNil(engine.evaluate(suffix: word, sourceLanguage: language), word)
+            XCTAssertNil(engine.appliedProposal(suffix: word + " ", sourceLanguage: language, atBoundary: true), word)
+            XCTAssertNil(engine.appliedProposal(suffix: word, sourceLanguage: language), word)
         }
     }
 
@@ -93,7 +93,7 @@ final class ModernColloquialLexiconTests: XCTestCase {
             ("-njrcbxrf", "en"), ("--njrcbxrf", "en"), ("/tmp/njrcbxrf", "en"),
             ("https://njrcbxrf", "en"), ("https://мшиусщвштп", "ru"),
         ] {
-            XCTAssertNil(engine.evaluate(suffix: token + " ", sourceLanguage: language, atBoundary: true), token)
+            XCTAssertNil(engine.appliedProposal(suffix: token + " ", sourceLanguage: language, atBoundary: true), token)
         }
     }
 }

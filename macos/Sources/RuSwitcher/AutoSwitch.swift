@@ -21,14 +21,6 @@ enum Dict {
         return langs
     }
 
-    /// Legacy warm-up helper. The native RU/EN path uses offline evidence and
-    /// does not schedule AppleSpell/XPC work on MainActor at app launch.
-    @MainActor static func warmUp() {
-        _ = languages()
-        _ = isValidWord("тест", lang: "ru")
-        _ = isValidWord("test", lang: "en")
-    }
-
     /// true — слово есть в словаре языка (орфография корректна).
     @MainActor static func isValidWord(_ word: String, lang: String) -> Bool {
         let range = checker.checkSpelling(of: word, startingAt: 0, language: lang,
@@ -37,118 +29,8 @@ enum Dict {
     }
 }
 
-enum LayoutVerdict { case switchToConverted, keep, undecided }
-
-/// Решает, набрано ли слово в неправильной раскладке. Точность важнее полноты:
-/// при любой неуверенности → .undecided (ничего не делаем). Ручной триггер остаётся.
+/// Мелкие проверки слова: иврит, КАПС, похоже на код. Решение о раскладке принимает `PredictionEngine`.
 enum LayoutDetector {
-    @MainActor
-    static func decide(typed: String, converted: String, currentLang: String, otherLang: String, capsLock: Bool) -> LayoutVerdict {
-        // always-convert — ЯВНЫЙ override: матчим по СКОНВЕРТИРОВАННОЙ (целевой) форме.
-        // В список кладётся целевое слово (напр. «жоппа»); так правильно набранное слово
-        // не даёт пинг-понг. Жёсткие гейты (secure/denied-app/never) проверены ДО decide.
-        if AutoSwitchPolicy.isAlwaysConvert(converted) { return .switchToConverted }
-
-        // --- мягкие вето (дёшево, до словаря) ---
-        // 1 буква — не трогаем никогда (неоднозначность запредельная). 2 буквы —
-        // отдельная ветка ниже через частотный список (ShortWords), т.к. на такой длине
-        // системный словарь ненадёжен; 3+ — обычный путь через NSSpellChecker.
-        guard typed.count >= 2 else { return .undecided }
-        // Обычный путь — набранное целиком буквенное. Плюс (issue #22, п.3) случай «буквы
-        // на клавишах-пунктуации»: ё/х/ъ/ж/э/б/ю в ЙЦУКЕН живут на ` [ ] ; ' , . — тогда
-        // typed содержит эти знаки, но КОНВЕРСИЯ целиком буквенная, и решает словарь ниже.
-        // Хвостовые . , ; : уже отщеплены вызывающим (#15) + walk неоднозначности, поэтому
-        // сюда доходит только начальная/срединная пунктуация («`krf»→ёлка, «rf;tncz»→
-        // кажется) — там трактовки-как-знак-препинания нет, а «дел.»/«думаю» отсеяны выше.
-        guard typed.allSatisfy({ $0.isLetter }) || converted.allSatisfy({ $0.isLetter }) else {
-            return .undecided // цифры/URL/код/почта/эмодзи
-        }
-        // Под Caps Lock весь текст в ВЕРХНЕМ регистре — это НЕ акроним и НЕ camelCase,
-        // поэтому эти два вето применяем только когда Caps Lock выключен.
-        if !capsLock {
-            if isAllCaps(typed) { return .undecided }                      // акронимы
-            if looksLikeCodeIdentifier(typed) { return .undecided }        // camelCase / смешанные алфавиты
-        }
-
-        let cur = String(currentLang.prefix(2))
-        let oth = String(otherLang.prefix(2))
-
-        // --- Кросс-скрипт пары с ивритом (3.0) ---
-        // Системный ивритский словарь macOS для детекта БЕСПОЛЕЗЕН: он принимает любой
-        // набор букв как «валидное слово» (проверено эмпирически), двусторонняя проверка
-        // на стороне иврита невозможна. Поэтому конвертим ТОЛЬКО при положительном
-        // сигнале второй (не-ивритской) стороны — её собственным словарём:
-        //   • набрано в иврит-раскладке, а конверсия — валидное слово второй раскладки
-        //     → задумана она, конвертим;
-        //   • набрано во второй раскладке и это её валидное слово → keep (не трогаем);
-        //   • всё остальное (имена, бренды, опечатки, «задуман иврит») → .undecided:
-        //     направление «в иврит» без словаря честно не решаемо — точность важнее
-        //     полноты. Ручной триггер конвертирует любые пары всегда.
-        // Второй словарь берём по ЯЗЫКУ ПАРЫ (ru/de/fr/…), не хардкодим en — иначе
-        // пара русский+иврит конвертила бы каждое валидное русское слово в иврит
-        // (ревью-находка июльского аудита).
-        if isHebrew(cur) || isHebrew(oth) {
-            guard typed.count >= 3 else { return .undecided }              // короткий частотный сигнал для иврита не строим
-            let hebrewIsCurrent = isHebrew(cur)
-            let sideLang = hebrewIsCurrent ? oth : cur
-            guard !isHebrew(sideLang), Dict.isAvailable(sideLang) else { return .undecided }
-            if hebrewIsCurrent {
-                // NSSpellChecker токенизирует («привет!» для него валиден), а часть ивритских
-                // букв живёт на пунктуационных клавишах — EN-образ КОРРЕКТНОГО иврита может
-                // получиться «слово + пунктуация» и ложно пройти словарь (ревью-находка,
-                // тот же класс, что «думаю vs дума.» в 2.7.0). Словарю отдаём только
-                // целиком буквенный образ; иначе .undecided — ручной триггер работает.
-                guard converted.allSatisfy({ $0.isLetter }) else { return .undecided }
-                return Dict.isValidWord(converted.lowercased(), lang: sideLang)
-                    ? .switchToConverted : .undecided
-            }
-            return Dict.isValidWord(typed.lowercased(), lang: sideLang) ? .keep : .undecided
-        }
-
-        // --- Короткие (2-буквенные) слова: позитивный частотный сигнал (3.1, issue #22) ---
-        // NSSpellChecker на длине 2 принимает почти любой набор букв за «слово», поэтому
-        // обычная двусторонняя проверка тут ненадёжна (ради этого и стоял гейт count>=3).
-        // Вместо словаря — компактный список ЧАСТЫХ коротких слов (ShortWords), строго как
-        // позитивный сигнал: конвертим 2 буквы ТОЛЬКО если конверсия — частое слово целевого
-        // языка, а набранное — не частое слово текущего (симметрия как у иврит-ветки).
-        // Коллизий «частое↔частое» нет (аудит образов раскладки). Пары с языком без списка
-        // сюда не попадают → 2-буквенные, как и раньше, не трогаются.
-        if typed.count == 2 {
-            guard let othShort = ShortWords.common(oth) else { return .undecided }
-            if let curShort = ShortWords.common(cur), curShort.contains(typed.lowercased()) {
-                return .keep   // уже частое слово в текущей раскладке — не трогаем
-            }
-            return othShort.contains(converted.lowercased()) ? .switchToConverted : .undecided
-        }
-
-        // Словарь — без учёта регистра (Caps Lock не должен мешать определению слова).
-        guard Dict.isAvailable(oth) else { return .undecided }
-        guard Dict.isValidWord(converted.lowercased(), lang: oth) else { return .keep }
-        if Dict.isAvailable(cur), Dict.isValidWord(typed.lowercased(), lang: cur) {
-            return .keep
-        }
-        return .switchToConverted
-    }
-
-    /// issue #15: отщепляет прилипшую к концу слова пунктуацию ("ghbdtn," → ядро 6 + ",").
-    /// Ядро детектится и конвертится как обычно, хвост возвращается в поле ЛИТЕРАЛОМ —
-    /// конвертировать его по кейкодам нельзя: клавиша ',' в EN — это 'б' в RU, а
-    /// запятая RU (Shift+6) в EN — '^'. Набор консервативный: цифры, дефис, @/#
-    /// НЕ отщепляем — для URL/кода/почты вето детектора отрабатывает по делу.
-    /// Кавычки ' и " исключены сознательно: смарт-пунктуация приложений подменяет их
-    /// типографскими, а на dead-key раскладках (U.S. International) апостроф — dead key;
-    /// оба случая ломают счёт/литеральность. «…»/«»/– недостижимы из буфера (Option-слой).
-    /// ВАЖНО: '.', ',', ';', ':' в EN — клавиши букв ю/б/ж/Ж в ЙЦУКЕН, поэтому вызывающий
-    /// ОБЯЗАН проверить полную конверсию по словарю (неоднозначность «думаю» vs «дума.»).
-    /// Также ` [ ] — клавиши ё/х/ъ: отщепляем их с хвоста, чтобы тот же walk неоднозначности
-    /// сработал симметрично (issue #22-скептик: иначе «ружьё»/«цех» шли бы мимо проверки).
-    static func splitTrailingPunctuation(_ s: String) -> (coreLength: Int, suffix: String) {
-        let punct: Set<Character> = [",", ".", "!", "?", ";", ":", ")", "`", "[", "]"]
-        var core = s[...]
-        while let last = core.last, punct.contains(last) { core = core.dropLast() }
-        return (core.count, String(s.dropFirst(core.count)))
-    }
-
     /// Язык — иврит (BCP-47 `he` или устаревший `iw`). 3.0: гейт кросс-скрипт-детекта.
     static func isHebrew(_ lang: String) -> Bool {
         let two = lang.lowercased().prefix(2)
@@ -177,14 +59,36 @@ enum LayoutDetector {
 
 /// Политика безопасности авто-конвертации.
 enum AutoSwitchPolicy {
-    /// Активен ли защищённый ввод (поле пароля, Secure Keyboard Entry в терминале) —
-    /// тогда авто-конвертацию НЕ делаем (приватность; пароль не трогаем).
-    static var secureInputActive: Bool { IsSecureEventInputEnabled() }
+    /// Общий флаг сессии «защищённый ввод». Сам по себе он не решает, можно ли
+    /// трогать поле: решение принимает `SecureFieldPolicy` по конкретному полю.
+    /// Шов для тестов; в приложении — всегда `IsSecureEventInputEnabled()`.
+    nonisolated(unsafe) static var secureInputProbe: () -> Bool = { IsSecureEventInputEnabled() }
+    /// PID держателя флага (IORegistry). Шов для тестов.
+    nonisolated(unsafe) static var secureInputHolderProbe: () -> Int32? = { liveSecureInputHolderProcessID() }
+
+    static var secureInputActive: Bool { secureInputProbe() }
+
+    static func secureInputHolderProcessID() -> Int32? { secureInputHolderProbe() }
+
+    /// Читаем PID из IORegistry (то же, что `ioreg`: IOConsoleUsers → kCGSSessionSecureInputPID).
+    static func liveSecureInputHolderProcessID() -> Int32? {
+        let entry = IORegistryEntryFromPath(kIOMainPortDefault, "IOService:/IOResources")
+        guard entry != 0 else { return nil }
+        defer { IOObjectRelease(entry) }
+        guard let sessions = IORegistryEntryCreateCFProperty(
+            entry, "IOConsoleUsers" as CFString, kCFAllocatorDefault, 0
+        )?.takeRetainedValue() as? [[String: Any]] else { return nil }
+        for s in sessions {
+            guard let raw = s["kCGSSessionSecureInputPID"] as? Int, raw > 0,
+                  let pid = Int32(exactly: raw) else { continue }
+            return pid
+        }
+        return nil
+    }
 
     /// Имя приложения, удерживающего защищённый ввод (Word, Terminal, менеджер
     /// паролей, loginwindow при системном запросе пароля и т.п.), или nil если
-    /// определить не удалось. Читаем PID из IORegistry (то же, что `ioreg`:
-    /// IOConsoleUsers → kCGSSessionSecureInputPID) и резолвим в человекочитаемое имя.
+    /// определить не удалось. Только для подсказки пользователю, не для журнала.
     static func secureInputHolderName() -> String? {
         let entry = IORegistryEntryFromPath(kIOMainPortDefault, "IOService:/IOResources")
         guard entry != 0 else { return nil }
@@ -220,6 +124,7 @@ enum AutoSwitchPolicy {
     static let terminalApps: Set<String> = [
         "com.apple.Terminal", "com.googlecode.iterm2", "net.kovidgoyal.kitty",
         "io.alacritty", "com.github.wez.wezterm", "dev.warp.Warp-Stable", "co.zeit.hyper",
+        "com.mitchellh.ghostty",
     ]
     static func isTerminalApp(_ bundleID: String?) -> Bool {
         guard let id = bundleID else { return false }

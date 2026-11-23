@@ -6,21 +6,21 @@
   "license": "CC-BY-SA-4.0",
   "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
   "max_trigger_entries_per_language": 200000,
-  "transformation": "NFC/lowercase/alphabet and length 1...40 filter/max frequency duplicates; top 200k frequency descending then lexical for triggers; all filtered words sorted into read-only exact SQLite",
+  "transformation": "NFC/lowercase/alphabet and length 1...40 filter/max frequency duplicates; merged with the second source (see second_sources); top 200k by merged frequency descending then lexical for triggers, short subtitle forms of the old trigger set kept; all filtered words sorted into read-only exact SQLite",
   "sqlite_builder_version": "3.50.4",
   "languages": {
     "ru": {
       "source_url": "https://raw.githubusercontent.com/hermitdave/FrequencyWords/525f9b560de45753a5ea01069454e72e9aa541c6/content/2018/ru/ru_full.txt",
       "source_sha256": "32dfd94138aea2667ec455dcc8512029e39bd4b8ea70b09410d569b69d511a30",
       "output": "macos/Sources/RuSwitcher/Resources/ru.tsv",
-      "output_sha256": "0900f2f5a9be8843e4c10a3e34fdff4f45e13b9687ad9e8f80923f8bed2220b8",
+      "output_sha256": "4c6bab676ece5c2014edc59bb046b11adfbf71cb2496029ed903c8fb5a51bf6b",
       "entries": 200000,
-      "bytes": 4129260,
+      "bytes": 4215461,
       "full": {
         "output": "macos/Sources/RuSwitcher/Resources/ru-full.sqlite",
-        "output_sha256": "88d92a509d7448bfe12fcd70bb66a3ff76571231601378c9c42274c944bdd51f",
-        "entries": 1178533,
-        "bytes": 29569024,
+        "output_sha256": "8245d22de7271afa06a63ee2960415cdd3e3cecc27a84fb76be99d527629df87",
+        "entries": 1193638,
+        "bytes": 29990912,
         "schema": 1,
         "storage": "SQLite frequencies(word TEXT PRIMARY KEY, frequency INTEGER) WITHOUT ROWID; metadata; user_version=1"
       }
@@ -29,14 +29,14 @@
       "source_url": "https://raw.githubusercontent.com/hermitdave/FrequencyWords/525f9b560de45753a5ea01069454e72e9aa541c6/content/2018/en/en_full.txt",
       "source_sha256": "7fea67ab954e2c01df6c608c9826e594cf36f8823b3243554f88245fb75dc506",
       "output": "macos/Sources/RuSwitcher/Resources/en.tsv",
-      "output_sha256": "f77203659ef53f56abad265dca021a0308b26f5800ef67d33403c84aefbbf2f7",
+      "output_sha256": "5af75b9ba05f6a8704a0d20ab426eb25af19eae5e86d641e41baf43dac0b5304",
       "entries": 200000,
-      "bytes": 2375131,
+      "bytes": 2407862,
       "full": {
         "output": "macos/Sources/RuSwitcher/Resources/en-full.sqlite",
-        "output_sha256": "1b00dd21575f8206b888941d87fe0942ca86a9e5180b69100caa33c3c8272596",
-        "entries": 1387382,
-        "bytes": 21594112,
+        "output_sha256": "4b896288c61afd8b012e4d3cc6fdb82e1b5d59f5ab182f7f4c0014a12efd5ec6",
+        "entries": 1418148,
+        "bytes": 22085632,
         "schema": 1,
         "storage": "SQLite frequencies(word TEXT PRIMARY KEY, frequency INTEGER) WITHOUT ROWID; metadata; user_version=1"
       }
@@ -135,9 +135,9 @@
         "source_accepted_rows": 5137804,
         "source_unique_entries": 3063822,
         "modern_new_entries": 291,
-        "overlap_with_frequency": 491570,
-        "new_unique_against_frequency": 2572543,
-        "union_with_frequency": 3751076
+        "overlap_with_frequency": 502290,
+        "new_unique_against_frequency": 2561823,
+        "union_with_frequency": 3755461
       },
       "en": {
         "output": "macos/Sources/RuSwitcher/Resources/en-spellings.sqlite",
@@ -149,9 +149,69 @@
         "source_accepted_rows": 676543,
         "source_unique_entries": 170997,
         "modern_new_entries": 78,
-        "overlap_with_frequency": 111030,
-        "new_unique_against_frequency": 60045,
-        "union_with_frequency": 1447427
+        "overlap_with_frequency": 118270,
+        "new_unique_against_frequency": 52805,
+        "union_with_frequency": 1470953
+      }
+    }
+  },
+  "second_sources": {
+    "name": "wikipedia-word-frequency",
+    "url": "https://github.com/IlyaSemenov/wikipedia-word-frequency",
+    "commit": "d11c4fab211156e96ab5943850dd6f98604707fb",
+    "code_license": "MIT",
+    "license": "CC-BY-SA-4.0",
+    "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+    "merge": "word frequency = max(subtitle count, round(0.2 * subtitle total / second total * second count)); second-source words seen fewer than 200 times, shorter than 4 letters, or listed as curated modern spellings are skipped",
+    "weight": 0.2,
+    "min_count": 200,
+    "min_length": 4,
+    "sources": {
+      "ru": [
+        {
+          "name": "ruwiki-2022-08-29",
+          "kind": "Wikipedia dump 2022-08-29",
+          "sha256": "48c94b85f17afcb1b1cb432601337579a7188b445c42b9324d52c91dc863cf5a",
+          "url": "https://raw.githubusercontent.com/IlyaSemenov/wikipedia-word-frequency/d11c4fab211156e96ab5943850dd6f98604707fb/results/ruwiki-2022-08-29.txt",
+          "bytes": 43202603
+        }
+      ],
+      "en": [
+        {
+          "name": "enwiki-2023-04-13",
+          "kind": "Wikipedia dump 2023-04-13",
+          "sha256": "e2071140a49a6c40c732bd68c36836ef13c0978233fb3d5e1b2a3c2d34faef59",
+          "url": "https://raw.githubusercontent.com/IlyaSemenov/wikipedia-word-frequency/d11c4fab211156e96ab5943850dd6f98604707fb/results/enwiki-2023-04-13.txt",
+          "bytes": 34948684
+        }
+      ]
+    },
+    "source_license": "CC-BY-SA-3.0",
+    "source_license_url": "https://creativecommons.org/licenses/by-sa/3.0/",
+    "relicensing": "Wikipedia dumps of 2022-08-29 and 2023-04-13 predate the June 2023 switch to CC BY-SA 4.0; their text is CC BY-SA 3.0, and section 4(b) of CC BY-SA 3.0 lets the derived word counts be distributed under CC BY-SA 4.0"
+  },
+  "trigrams": {
+    "builder": "script/build_trigrams.py",
+    "command": "python3 -I script/build_trigrams.py",
+    "transformation": "letter trigrams of ^^word$ from the trigger lists; each word adds int(log2(frequency)) + 1; trigrams with a weighted count below 2 dropped; rows sorted by trigram; at most 2 MiB per language",
+    "license": "CC-BY-SA-4.0",
+    "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+    "languages": {
+      "ru": {
+        "output": "macos/Sources/RuSwitcher/Resources/ru-trigrams.tsv",
+        "output_sha256": "5251d8463fc67426fa712b178d384e4b1f4093ad5c364aac651dc1a9bb55191b",
+        "bytes": 160085,
+        "entries": 15643,
+        "source": "macos/Sources/RuSwitcher/Resources/ru.tsv",
+        "source_sha256": "4c6bab676ece5c2014edc59bb046b11adfbf71cb2496029ed903c8fb5a51bf6b"
+      },
+      "en": {
+        "output": "macos/Sources/RuSwitcher/Resources/en-trigrams.tsv",
+        "output_sha256": "d516f91a8894882ff9d2ede81c4cb14997ec7377ae1dc1e63766951648168910",
+        "bytes": 103734,
+        "entries": 13833,
+        "source": "macos/Sources/RuSwitcher/Resources/en.tsv",
+        "source_sha256": "5af75b9ba05f6a8704a0d20ab426eb25af19eae5e86d641e41baf43dac0b5304"
       }
     }
   }

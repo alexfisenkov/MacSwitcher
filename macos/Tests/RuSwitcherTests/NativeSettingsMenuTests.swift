@@ -8,7 +8,8 @@ final class NativeSettingsMenuTests: XCTestCase {
         let previousPolicy = NSApplication.shared.activationPolicy()
         NSApplication.shared.setActivationPolicy(.prohibited)
         defer { NSApplication.shared.setActivationPolicy(previousPolicy) }
-        let menu = AppDelegate().makeStatusMenu(nativeShiftApplied: true, automaticEnabled: false)
+        let menu = AppDelegate().makeStatusMenu(nativeShiftApplied: true, automaticEnabled: false,
+            compact: false)
         XCTAssertNotNil(menu.item(withTag: 742)?.submenu)
         XCTAssertNotNil(menu.item(withTag: 71004))
         XCTAssertNotNil(menu.item(withTag: 71003))
@@ -24,6 +25,25 @@ final class NativeSettingsMenuTests: XCTestCase {
             L10n.menuAutoConvert, L10n.nativeInstructionsTab, L10n.nativeWordsTab,
             L10n.menuSettings, L10n.menuQuit])
         XCTAssertEqual(visible.filter(\.isSeparatorItem).count, 1)
+    }
+
+    @MainActor
+    func testShortMenuKeepsAutomaticCorrectionSettingsAndQuitWithConditionalRows() throws {
+        let previousPolicy = NSApplication.shared.activationPolicy()
+        NSApplication.shared.setActivationPolicy(.prohibited)
+        defer { NSApplication.shared.setActivationPolicy(previousPolicy) }
+        let menu = AppDelegate().makeStatusMenu(nativeShiftApplied: true, automaticEnabled: true,
+            compact: true)
+        let visible = menu.items.filter { !$0.isHidden }
+        XCTAssertEqual(visible.filter { !$0.isSeparatorItem }.map(\.title), [
+            L10n.menuAutoConvert, L10n.menuSettings, L10n.menuQuit])
+        XCTAssertEqual(menu.items.first?.state, .on)
+        XCTAssertFalse(menu.items.contains { $0.action == NSSelectorFromString("openInstructions") })
+        XCTAssertFalse(menu.items.contains { $0.action == NSSelectorFromString("openWords") })
+        // Layout, confirmation and recovery rows stay available when there is something to show.
+        XCTAssertNotNil(menu.item(withTag: 742)?.submenu)
+        XCTAssertNotNil(menu.item(withTag: 71004))
+        XCTAssertNotNil(menu.item(withTag: 71003))
     }
 
     @MainActor

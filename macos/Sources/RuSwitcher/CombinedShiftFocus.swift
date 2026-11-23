@@ -84,31 +84,46 @@ struct CombinedShiftFocus: @unchecked Sendable {
             fieldBoundary: fieldBoundary, searchOverlay: searchOverlay, suffixSnapshot: suffixSnapshot)
     }
 
+    /// The same field after a verified caret-only move to `location`;
+    /// `fieldText` is the whole value observed after that move.
+    @MainActor
+    func collapsed(at location: Int, fieldText: String) -> CombinedShiftFocus {
+        let caret = CFRange(location: location, length: 0)
+        let snapshot = CaretSuffixSnapshot()
+        snapshot.capture(caret: caret) { (caret, fieldText) }
+        return CombinedShiftFocus(processID: processID, element: element, initialSelection: caret,
+            fieldBoundary: fieldBoundary, searchOverlay: searchOverlay, suffixSnapshot: snapshot)
+    }
+
     func setMessagingTimeout(_ timeout: Float) -> AXError {
         if fieldBoundary != nil { return .success }
         return AXUIElementSetMessagingTimeout(element, timeout)
     }
 
+    /// This exact field's subrole answer; no text, value or selection is read.
+    func secureFieldVerdict() -> SecureFieldVerdict {
+        if let fieldBoundary {
+            let (status, raw) = fieldBoundary.secureSubrole?() ?? (.attributeUnsupported, nil)
+            return SecureFieldPolicy.verdict(subroleStatus: status, subrole: raw)
+        }
+        return SecureFieldPolicy.liveVerdict(of: element)
+    }
+
+    /// While the session flag is raised, only a positively ordinary field
+    /// outside the flag holder may be used; the flag-down path asks nothing.
+    func secureFlagPermits(flagRaised: Bool = AutoSwitchPolicy.secureInputActive) -> Bool {
+        guard flagRaised else { return true }
+        return SecureFieldPolicy.mayUse(focus: SecureFieldPolicy.effectiveVerdict(secureFieldVerdict(),
+            fieldProcessID: processID, flagRaised: true), flagRaised: true)
+    }
+
     /// Reject secure fields before either selected-range or whole-value text is requested.
     /// A missing optional subrole is compatible; malformed or failed reads fail closed.
+    /// Under the raised flag the holder's own field is refused as well.
     func allowsTextRead(prepareRead: () -> Bool = { true }) -> Bool {
-        guard prepareRead(), !AutoSwitchPolicy.secureInputActive else { return false }
-        var raw: AnyObject?
-        let status: AXError
-        if let fieldBoundary {
-            (status, raw) = fieldBoundary.secureSubrole?() ?? (.attributeUnsupported, nil)
-        } else {
-            status = AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &raw)
-        }
-        switch status {
-        case .success:
-            guard let subrole = raw as? String else { return false }
-            return subrole != kAXSecureTextFieldSubrole
-        case .attributeUnsupported, .noValue:
-            return true
-        default:
-            return false
-        }
+        guard prepareRead() else { return false }
+        let verdict = SecureFieldPolicy.effectiveVerdict(secureFieldVerdict(), fieldProcessID: processID)
+        return SecureFieldPolicy.mayUse(focus: verdict, flagRaised: true) // text reads are always strict
     }
 
     static func capture(processID: Int32, timeout: Float = 0.05, includeSelection: Bool = true) -> CombinedShiftFocus? {
@@ -178,7 +193,14 @@ struct CombinedShiftFocus: @unchecked Sendable {
             && settable.boolValue
     }
 
+    /// Moves the caret/selection only; text is never set through this call.
     func select(range: CFRange) -> Bool {
+        guard allowsTextRead() else { return false }
+        if let fieldBoundary {
+            guard let selectRange = fieldBoundary.selectRange, selectRange(range),
+                  let current = selectionRange() else { return false }
+            return current.location == range.location && current.length == range.length
+        }
         var settable = DarwinBoolean(false)
         guard AXUIElementIsAttributeSettable(element, kAXSelectedTextRangeAttribute as CFString, &settable) == .success,
               settable.boolValue else { return false }
@@ -212,6 +234,7 @@ struct CombinedShiftFocus: @unchecked Sendable {
     }
 
     func selectionRange(prepareRead: () -> Bool = { true }) -> CFRange? {
+        guard secureFlagPermits() else { return nil }
         if let fieldBoundary { return prepareRead() ? fieldBoundary.selectionRange() : nil }
         var raw: AnyObject?
         guard prepareRead() else { return nil }
@@ -263,14 +286,14 @@ struct CombinedShiftExecutionContext {
 
     func validationFailure(timeout: Float = 0.05) -> CombinedShiftExecutionFailure? {
         guard inputRevision == currentInputRevision() else { return .revisionChanged }
-        guard !AutoSwitchPolicy.secureInputActive else { return .secureInput }
+        guard focus.secureFlagPermits() else { return .secureInput }
         if let boundary = focus.fieldBoundary {
             guard focus.processID > 0 else { return .wrongProcess }
             return boundary.validationFailure()
         }
         guard focus.processID > 0,
               focus.currentTargetProcessID() == focus.processID else { return .wrongProcess }
-        guard !AutoSwitchPolicy.secureInputActive else { return .secureInput }
+        guard focus.secureFlagPermits() else { return .secureInput }
         if let overlay = focus.searchOverlay {
             guard SearchOverlayTarget.isCurrent(focus, binding: overlay,
                                                 timeout: timeout) else { return .focusChanged }
@@ -285,7 +308,7 @@ struct CombinedShiftExecutionContext {
         // immediately before allowing a caller to edit.
         guard inputRevision == currentInputRevision() else { return .revisionChanged }
         guard focus.currentTargetProcessID() == focus.processID else { return .wrongProcess }
-        guard !AutoSwitchPolicy.secureInputActive else { return .secureInput }
+        guard focus.secureFlagPermits() else { return .secureInput }
         return nil
     }
 
@@ -326,6 +349,8 @@ struct CombinedShiftFieldBoundary {
         NativeParagraphBoundaryWitness.Side) -> Bool)? = nil
     var nativeWholeObservation: (() -> NativeFieldObservation?)? = nil
     var valueText: (() -> String?)? = nil
+    /// Synthetic caret/selection setter; live fields use the AX range setter.
+    var selectRange: ((CFRange) -> Bool)? = nil
 }
 
 extension CombinedShiftFocus {

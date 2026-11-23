@@ -20,6 +20,9 @@ struct RuntimeHealthSnapshot {
     let shellEditActive: Bool
     let unknownEditRetained: Bool
     let shell: Shell
+    /// Raw session flag. `secureInput` above means «the flag pauses us»: it is
+    /// false while character keys are proven to reach the tap despite the flag.
+    var secureFlagRaised: Bool = false
 
     var permissionsGranted: Bool { accessibilityGranted && inputMonitoringGranted }
     var editActive: Bool { nativeLeaseActive || shellEditActive }
@@ -86,7 +89,8 @@ final class RuntimeHealthController {
     func mayReconfigureTap() -> Bool {
         let current = observe()
         return current.monitoring && current.masterEnabled && current.permissionsGranted
-            && !current.secureInput && !current.sleeping && !current.editActive
+            && !current.secureInput && !current.secureFlagRaised
+            && !current.sleeping && !current.editActive
     }
 
     /// A protected callback can observe an interval missed by the timer.

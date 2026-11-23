@@ -706,7 +706,7 @@ final class TextConverter {
         return true
     }
 
-    private func wholeFieldObservation(focus: CombinedShiftFocus,
+    func wholeFieldObservation(focus: CombinedShiftFocus,
                                        prepareRead: () -> Bool = { true }) -> NativeFieldObservation? {
         guard focus.allowsTextRead(prepareRead: prepareRead) else { return nil }
         if let wholeFieldObservationOverride {
@@ -731,12 +731,13 @@ final class TextConverter {
         -> NativeSelectionBaseline? {
         let focus = execution.focus
         let deadline = ProcessInfo.processInfo.systemUptime + 0.180
+        let securePermit = SecureFlagFieldPermit(focus: focus)
         let mayRead = {
             ProcessInfo.processInfo.systemUptime < deadline
                 && execution.inputRevision == execution.currentInputRevision()
                 && (focus.fieldBoundary != nil
                     || focus.currentTargetProcessID() == focus.processID)
-                && !AutoSwitchPolicy.secureInputActive
+                && securePermit.allows()
                 && (focus.fieldBoundary?.readAdmission?() ?? true)
         }
         let prepareAXRead = {
@@ -1630,11 +1631,12 @@ final class TextConverter {
         }
         let focus = execution.focus
         let deadline = ProcessInfo.processInfo.systemUptime + 0.050
+        let securePermit = SecureFlagFieldPermit(focus: focus)
         let prepareRead = {
             guard ProcessInfo.processInfo.systemUptime < deadline,
                   inputBarrierIsActive(),
                   execution.inputRevision == execution.currentInputRevision(),
-                  !AutoSwitchPolicy.secureInputActive,
+                  securePermit.allows(),
                   (focus.fieldBoundary != nil
                       || focus.currentTargetProcessID() == focus.processID),
                   let timeout = NativeAXMessagingPolicy.remainingTimeout(until: deadline,
@@ -1817,10 +1819,11 @@ final class TextConverter {
                                  inputBarrierIsActive: @escaping () -> Bool) -> Bool {
         let deadline = ProcessInfo.processInfo.systemUptime + 0.180
         let focus = execution.focus
+        let securePermit = SecureFlagFieldPermit(focus: focus)
         let mayRead = {
             ProcessInfo.processInfo.systemUptime < deadline && inputBarrierIsActive()
                 && execution.inputRevision == execution.currentInputRevision()
-                && !AutoSwitchPolicy.secureInputActive
+                && securePermit.allows()
                 && (focus.fieldBoundary != nil
                     || focus.currentTargetProcessID() == focus.processID)
         }
@@ -2250,32 +2253,6 @@ final class TextConverter {
         return true
     }
 
-    /// issue #16 (авто): замена последнего слова в Spotlight без Backspace. Автоконверсия
-    /// решает по буферу верно, ломается лишь СТИРАНИЕ по счётчику (Spotlight ест Backspace
-    /// серого автодополнения). Здесь выделяем слово по ГРАНИЦЕ (Shift+Option+Left — не по
-    /// счётчику, поэтому расхождение не бьёт) и печатаем `converted` поверх выделения. Курсор
-    /// стоит после слова + `boundaryCount` пробелов; уходим за пробелы, выделяем слово,
-    /// заменяем, возвращаем курсор. Clipboard не нужен (печать поверх выделения, без Cmd+V).
-    @MainActor
-    func convertSpotlightWord(converted: String, boundaryCount: Int) -> Bool {
-        guard !isConverting, !converted.isEmpty else { return false }
-        isConverting = true
-        lastWasBuffer = false   // реконверт авто-слова в Spotlight не поддерживаем
-        rslog("spotlight auto: word-select replace (bc=\(boundaryCount))")
-        injectQueue.async { [weak self] in
-            guard let self else { return }
-            for _ in 0..<boundaryCount { self.simKey(keyCode: KC.left, flags: []) }   // за пробелы к концу слова
-            usleep(15_000)
-            self.simKey(keyCode: KC.left, flags: [.maskShift, .maskAlternate])        // выделить слово (по границе)
-            usleep(15_000)
-            self.insertText(converted)                                                // печать поверх выделения = замена
-            usleep(15_000)
-            for _ in 0..<boundaryCount { self.simKey(keyCode: KC.right, flags: []) }   // вернуть курсор за пробелы
-            Task { @MainActor in self.isConverting = false }
-        }
-        return true
-    }
-
     /// Повторная конвертация (второй триггер) — на тот движок, которым делали последнюю.
     func reconvert(context: CombinedShiftContext? = nil, execution: CombinedShiftExecutionContext? = nil,
                    inputBarrierIsActive: (() -> Bool)? = nil) -> Bool {
@@ -2294,11 +2271,12 @@ final class TextConverter {
                   origin.processID == execution.focus.processID,
                   CFEqual(origin.element, execution.focus.element) else { return false }
             let readDeadline = ProcessInfo.processInfo.systemUptime + 0.180
+            let securePermit = SecureFlagFieldPermit(focus: execution.focus)
             let mayRead = {
                 ProcessInfo.processInfo.systemUptime < readDeadline
                     && (inputBarrierIsActive?() ?? true)
                     && execution.inputRevision == execution.currentInputRevision()
-                    && !AutoSwitchPolicy.secureInputActive
+                    && securePermit.allows()
                     && (execution.focus.fieldBoundary != nil
                         || execution.focus.currentTargetProcessID() == execution.focus.processID)
             }
@@ -2395,11 +2373,12 @@ final class TextConverter {
                 var expectedBaseline: NativeFieldObservation?
                 if inputBarrierIsActive != nil {
                     let readDeadline = ProcessInfo.processInfo.systemUptime + 0.180
+                    let securePermit = SecureFlagFieldPermit(focus: execution.focus)
                     let mayRead = {
                         ProcessInfo.processInfo.systemUptime < readDeadline
                             && (inputBarrierIsActive?() ?? false)
                             && execution.inputRevision == execution.currentInputRevision()
-                            && !AutoSwitchPolicy.secureInputActive
+                            && securePermit.allows()
                             && (execution.focus.fieldBoundary != nil
                                 || execution.focus.currentTargetProcessID() == execution.focus.processID)
                     }

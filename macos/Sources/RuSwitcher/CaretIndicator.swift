@@ -130,7 +130,6 @@ final class CaretIndicator {
     private func axCaretRectAppKit() -> NSRect? {
         guard SettingsManager.shared.caretFlag else { return nil }
         guard AXIsProcessTrusted() else { return nil }
-        guard !AutoSwitchPolicy.secureInputActive else { return nil }          // не над полем пароля
         let frontID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         // denylist авто-конверсии НЕ применяем: он про «не менять текст», а флаг ничего не меняет —
         // в IDE/терминалах индикатор раскладки как раз полезен. Пароли закрыты secure-input выше.
@@ -148,6 +147,13 @@ final class CaretIndicator {
         guard AXUIElementCopyAttributeValue(axApp, kAXFocusedUIElementAttribute as CFString, &focusedRaw) == .success,
               let focused = focusedRaw else { return nil }
         let element = focused as! AXUIElement
+        // Защищённый ввод: решает само поле, а не общий флаг. Поле пароля,
+        // поле держателя флага и молчание AX — индикатора нет.
+        if AutoSwitchPolicy.secureInputActive {
+            let verdict = SecureFieldPolicy.effectiveVerdict(SecureFieldPolicy.liveVerdict(of: element),
+                fieldProcessID: app.processIdentifier, flagRaised: true)
+            guard SecureFieldPolicy.mayUse(focus: verdict, flagRaised: true) else { return nil }
+        }
         // Нативные Cocoa → range-путь; веб/Electron → text-marker (приватные AX-атрибуты).
         guard let topLeft = axCaretRectTopLeft(of: element) ?? axCaretRectViaTextMarker(of: element) else { return nil }
 
